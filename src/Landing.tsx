@@ -3,16 +3,13 @@ import {
   ArrowRight,
   ArrowUpRight,
   Download,
-  MessageCircle,
   Monitor,
   Smartphone,
   Check,
   Users,
   Leaf,
   Sparkles,
-  Github,
   ChevronRight,
-  LoaderCircle,
 } from 'lucide-react';
 import { API_BASE } from './api';
 type Release = {

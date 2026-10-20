@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, RefreshCw, Check, ExternalLink } from 'lucide-react';
+import { Download, RefreshCw, ExternalLink } from 'lucide-react';
 import { API_BASE } from './api';
 export type UpdateStatus = {
   phase: string;
