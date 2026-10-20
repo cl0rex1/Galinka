@@ -4,7 +4,7 @@ ARG BUILD_SHA=0.2.0
 ARG VITE_API_BASE=/api
 ENV BUILD_SHA=$BUILD_SHA VITE_API_BASE=$VITE_API_BASE
 COPY package*.json ./
-RUN npm ci
+RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
