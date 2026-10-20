@@ -36,6 +36,40 @@ try {
   migrate.release();
 }
 const app = express();
+const packageInfo = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+const buildInfo = {
+  version: packageInfo.version,
+  build: process.env.BUILD_SHA || packageInfo.version,
+};
+// The public API lives under /messenger; /api remains the internal health/dev route.
+app.use((req, _res, next) => {
+  if (
+    req.url === '/messenger' ||
+    req.url.startsWith('/messenger/') ||
+    req.url.startsWith('/messenger?')
+  )
+    req.url = '/api' + req.url.slice('/messenger'.length);
+  next();
+});
+app.use('/api', (req, res, next) => {
+  const requestOrigin = req.headers.origin;
+  if (requestOrigin === origin || (!production && requestOrigin === 'http://127.0.0.1:5173')) {
+    res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(
+      requestOrigin === origin || (!production && requestOrigin === 'http://127.0.0.1:5173')
+        ? 204
+        : 403,
+    );
+    return;
+  }
+  next();
+});
 app.disable('x-powered-by');
 if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 app.use(
@@ -47,7 +81,10 @@ app.use(
         'style-src': ["'self'", "'unsafe-inline'"],
         'font-src': ["'self'"],
         'img-src': ["'self'", 'blob:', 'data:'],
-        'connect-src': ["'self'"],
+        'connect-src': [
+          "'self'",
+          ...(process.env.PUBLIC_API_ORIGIN ? [new URL(process.env.PUBLIC_API_ORIGIN).origin] : []),
+        ],
         'object-src': ["'none'"],
         'upgrade-insecure-requests': production && origin.startsWith('https:') ? [] : null,
       },
@@ -174,6 +211,40 @@ async function session(res: Response, id: string) {
 app.get('/api/health', async (_req, res) => {
   await pool.query('SELECT 1');
   res.json({ ok: true });
+});
+app.get('/api/version', (_req, res) => res.json(buildInfo));
+let releaseCache: { expires: number; value: unknown } | undefined;
+app.get('/api/downloads', async (_req, res) => {
+  if (releaseCache && releaseCache.expires > Date.now()) {
+    res.json(releaseCache.value);
+    return;
+  }
+  try {
+    const response = await fetch('https://api.github.com/repos/cl0rex1/Galinka/releases/latest', {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Galinka' },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) {
+      res.status(503).json({ error: 'Релиз ещё готовится.' });
+      return;
+    }
+    const release = (await response.json()) as {
+      tag_name: string;
+      html_url: string;
+      assets: { name: string; browser_download_url: string; size: number }[];
+    };
+    const value = {
+      version: release.tag_name.replace(/^v/, ''),
+      url: release.html_url,
+      assets: release.assets
+        .filter((a) => /\.(exe|dmg|AppImage|deb)$/.test(a.name))
+        .map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size })),
+    };
+    releaseCache = { expires: Date.now() + 60000, value };
+    res.json(value);
+  } catch {
+    res.status(503).json({ error: 'Не удалось проверить сборки. Попробуйте позже.' });
+  }
 });
 app.post('/api/auth/register', authLimit, async (req, res) => {
   const data = credentials
@@ -333,7 +404,7 @@ app.post('/api/chats/:id/invite', auth, async (req, res) => {
   );
   const token = randomBytes(24).toString('base64url');
   await pool.query('INSERT INTO invites(token,chat_id) VALUES($1,$2)', [digest(token), chat.id]);
-  res.json({ url: `${origin}/?join=${token}` });
+  res.json({ url: `${origin}/app?join=${token}` });
 });
 app.post('/api/join', auth, async (req, res) => {
   const { token } = z.object({ token: z.string().min(20).max(100) }).parse(req.body);
@@ -580,11 +651,14 @@ if (production) {
     express.static(publicDir, {
       index: false,
       setHeaders(res, file) {
-        if (file.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
+        if (file.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-store');
       },
     }),
   );
-  app.get('/{*path}', (_req, res) => res.sendFile(path.join(publicDir, 'index.html')));
+  app.get('/{*path}', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.sendFile(path.join(publicDir, 'index.html'));
+  });
 }
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (res.headersSent) return;

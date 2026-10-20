@@ -1,12 +1,16 @@
 FROM node:24-alpine AS build
 WORKDIR /app
+ARG BUILD_SHA=0.2.0
+ARG VITE_API_BASE=/api
+ENV BUILD_SHA=$BUILD_SHA VITE_API_BASE=$VITE_API_BASE
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
 FROM node:24-alpine
-ENV NODE_ENV=production PORT=3001
+ARG BUILD_SHA=0.2.0
+ENV NODE_ENV=production PORT=3001 BUILD_SHA=$BUILD_SHA
 WORKDIR /app
 COPY --from=build --chown=node:node /app/package*.json ./
 COPY --from=build --chown=node:node /app/node_modules ./node_modules

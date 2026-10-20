@@ -32,7 +32,8 @@ import {
   Compass,
   Puzzle,
 } from 'lucide-react';
-import { api, ApiError, isDemo } from './api';
+import { api, ApiError, isDemo, API_BASE } from './api';
+import { Updates } from './updates';
 import type { Person, Chat, Message, Attachment } from './types';
 
 type InstallEvent = Event & {
@@ -169,7 +170,7 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
   return (
     <main className="auth-page">
       <section className="auth-story">
-        <a className="brand" href="/">
+        <a className="brand" href="/app">
           <img src="/icon.svg" alt="" />
           galinka<span className="version">early days</span>
         </a>
@@ -198,7 +199,7 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
         </div>
         <div className="auth-bottom">
           <span>Ваш сервер. Ваш круг.</span>
-          <span>Galinka · MVP 0.1</span>
+          <span>Galinka · {__APP_VERSION__}</span>
         </div>
       </section>
       <section className="auth-form-side">
@@ -592,7 +593,7 @@ export default function App() {
         .catch((e) => setError(e.message));
     }
     if (demo) return;
-    const events = new EventSource('/api/events');
+    const events = new EventSource(`${API_BASE}/events`, { withCredentials: true });
     const sync = (reset = false) => {
       refreshChats().catch((e) => setError(e.message));
       if (activeRef.current)
@@ -752,7 +753,7 @@ export default function App() {
     try {
       if (!demo) await api('/auth/logout', 'POST');
       sessionStorage.removeItem('galinka-demo');
-      location.href = '/';
+      location.href = '/app';
     } catch (e) {
       report(e);
     }
@@ -791,7 +792,7 @@ export default function App() {
       a.download = file.name;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } else window.open(`/api/files/${file.id}`, '_blank', 'noopener');
+    } else window.open(`${API_BASE}/files/${file.id}`, '_blank', 'noopener');
   }
   const filtered = chats.filter(
     (c) =>
@@ -816,7 +817,7 @@ export default function App() {
           onLogin={setMe}
           onDemo={() => {
             sessionStorage.setItem('galinka-demo', 'true');
-            location.href = '/?demo=1';
+            location.href = '/app?demo=1';
           }}
         />
         {error && (
@@ -832,7 +833,7 @@ export default function App() {
   return (
     <div className={`app-shell ${activeId && section === 'chats' ? 'has-active' : ''}`}>
       <nav className="rail" aria-label="Основная навигация">
-        <a className="rail-logo" href="/" aria-label="Galinka">
+        <a className="rail-logo" href="/app" aria-label="Galinka">
           <img src="/icon.svg" alt="" />
         </a>
         <div className="rail-links">
@@ -886,7 +887,7 @@ export default function App() {
       </nav>
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <a className="brand" href="/">
+          <a className="brand" href="/app">
             galinka<span className="brand-dot">.</span>
           </a>
           <span className="version">beta</span>
@@ -1618,7 +1619,10 @@ export default function App() {
               <LogOut size={18} />
               {demo ? 'Выйти из демоверсии' : 'Выйти из аккаунта'}
             </button>
-            <p className="settings-version">Galinka 0.1.0 · Сделано для своих</p>
+            <section className="settings-section">
+              <Updates hasDraft={Object.values(drafts).some((v) => v.trim().length > 0)} />
+            </section>
+            <p className="settings-version">Galinka {__APP_VERSION__} · Сделано для своих</p>
           </div>
         )}
       </main>

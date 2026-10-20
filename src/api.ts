@@ -7,14 +7,15 @@ export class ApiError extends Error {
     super(message);
   }
 }
+export const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 export function isDemo() {
   return sessionStorage.getItem('galinka-demo') === 'true';
 }
 export async function api<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
   if (isDemo()) return demoRequest(url, method, body) as Promise<T>;
-  const response = await fetch(`/api${url}`, {
+  const response = await fetch(`${API_BASE}${url}`, {
     method,
-    credentials: 'same-origin',
+    credentials: 'include',
     headers: body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
     body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body),
   });

@@ -1,0 +1,10 @@
+services:
+  app:
+    networks:
+      default: {}
+      edge:
+        aliases: [galinka]
+networks:
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-quiby-core_default}

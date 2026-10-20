@@ -1,15 +1,20 @@
 name: galinka
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        BUILD_SHA: ${BUILD_SHA:-0.2.0}
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
     restart: unless-stopped
     init: true
     ports:
-      - '${APP_PORT:-3010}:3001'
+      - '${APP_BIND:-127.0.0.1}:${APP_PORT:-3010}:3001'
     environment:
       DATABASE_URL: postgres://galinka:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/galinka
       INVITE_CODE: ${INVITE_CODE:?Set INVITE_CODE in .env}
       APP_ORIGIN: ${APP_ORIGIN:?Set your public HTTPS origin}
+      PUBLIC_API_ORIGIN: ${PUBLIC_API_ORIGIN:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       TRUST_PROXY: ${TRUST_PROXY:-1}
       NODE_ENV: production

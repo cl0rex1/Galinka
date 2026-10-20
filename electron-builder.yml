@@ -1,0 +1,43 @@
+appId: me.quiby.galinka
+productName: Galinka
+copyright: Copyright © 2026 Galinka
+asar: true
+directories:
+  output: release
+files:
+  - desktop/**
+  - package.json
+  - node_modules/**
+artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  category: public.app-category.social-networking
+  icon: public/icon-512.png
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: public/icon-512.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  maintainer: Galinka <cl0rex1@users.noreply.github.com>
+  category: Network
+  icon: public/icon-512.png
+publish:
+  provider: github
+  owner: cl0rex1
+  repo: Galinka
+  releaseType: release

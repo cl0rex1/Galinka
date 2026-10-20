@@ -75,6 +75,23 @@ test(
     try {
       await start(3008);
       await start(3009);
+      const apiPrefix = await fetch(base + '/messenger/version', { headers: { Origin: base } });
+      assert.equal(apiPrefix.status, 200);
+      assert.equal(apiPrefix.headers.get('access-control-allow-origin'), base);
+      const preflight = await fetch(base + '/messenger/chats', {
+        method: 'OPTIONS',
+        headers: {
+          Origin: base,
+          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'Content-Type',
+        },
+      });
+      assert.equal(preflight.status, 204);
+      const blockedPreflight = await fetch(base + '/messenger/chats', {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://evil.example' },
+      });
+      assert.equal(blockedPreflight.status, 403);
       const suffix = randomUUID().slice(0, 8);
       const register = async (name: string) => {
         const r = await request('/auth/register', 'POST', {

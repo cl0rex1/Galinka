@@ -50,3 +50,24 @@ for (const width of [320, 375, 414, 768])
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true);
   });
+
+test('landing provides downloads and installation instructions', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Место, где свои.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Как установить', exact: true }).click();
+  await expect(page.locator('.phone-instructions')).toContainText('iPhone');
+  await page.getByRole('link', { name: 'Начать общаться', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'С возвращением', exact: true })).toBeVisible();
+});
+test('web update check reports the installed release', async ({ page }) => {
+  await page.route('**/api/version', (route) =>
+    route.fulfill({ json: { version: '0.2.0', build: '0.2.0' } }),
+  );
+  await page.goto('/?demo=1');
+  await page
+    .getByRole('button', { name: 'Настройки', exact: true })
+    .filter({ visible: true })
+    .click();
+  await page.getByRole('button', { name: 'Проверить обновления', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('актуальная версия');
+});
