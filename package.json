@@ -1,0 +1,49 @@
+{
+  "name": "galinka",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "tsx watch --env-file-if-exists=.env server/index.ts",
+    "dev:web": "vite --host 127.0.0.1",
+    "check": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
+    "build": "npm run check && vite build && tsc -p server/tsconfig.json && cp server/schema.sql dist-server/schema.sql",
+    "start": "node --env-file-if-exists=.env dist-server/index.js",
+    "test": "tsx --env-file-if-exists=.env --test tests/*.test.ts",
+    "test:e2e": "playwright test",
+    "setup": "node scripts/setup.mjs"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "lucide-react": "^0.468.0",
+    "multer": "^2.0.2",
+    "pg": "^8.16.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@fontsource-variable/golos-text": "^5.2.8",
+    "@fontsource-variable/manrope": "^5.2.8",
+    "@playwright/test": "^1.56.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/express": "^5.0.3",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^24.9.0",
+    "@types/pg": "^8.15.5",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.2.1",
+    "prettier": "^3.9.10",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.11"
+  }
+}

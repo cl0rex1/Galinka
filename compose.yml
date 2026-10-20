@@ -1,0 +1,64 @@
+name: galinka
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - '${APP_PORT:-3010}:3001'
+    environment:
+      DATABASE_URL: postgres://galinka:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/galinka
+      INVITE_CODE: ${INVITE_CODE:?Set INVITE_CODE in .env}
+      APP_ORIGIN: ${APP_ORIGIN:?Set your public HTTPS origin}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      NODE_ENV: production
+      UPLOAD_DIR: /app/uploads
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    x-casaos:
+      ports:
+        - container: '3001'
+          description:
+            en_us: Galinka web application
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: galinka
+      POSTGRES_DB: galinka
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U galinka -d galinka']
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  postgres:
+  uploads:
+x-casaos:
+  author: cl0rex1
+  category: Chat
+  title:
+    en_us: Galinka
+  description:
+    en_us: A private home for conversations with friends
+    ru_ru: Место для общения со своими
+  main: app
+  port_map: '3010'
+  scheme: http
+  index: /
