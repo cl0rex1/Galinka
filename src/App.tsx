@@ -31,9 +31,13 @@ import {
   WifiOff,
   Compass,
   Puzzle,
+  ArrowUp,
 } from 'lucide-react';
 import { api, ApiError, isDemo, API_BASE } from './api';
 import { Updates } from './updates';
+import { ThemePicker, ThemeToggle } from './theme';
+import { NotificationSettings, useNotifications, isNative, clearPushDevice } from './notifications';
+import { App as NativeApp } from '@capacitor/app';
 import type { Person, Chat, Message, Attachment } from './types';
 
 type InstallEvent = Event & {
@@ -172,7 +176,7 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
       <section className="auth-story">
         <a className="brand" href="/app">
           <img src="/icon.svg" alt="" />
-          galinka<span className="version">early days</span>
+          galinka
         </a>
         <div className="auth-intro">
           <span className="small-label">
@@ -203,15 +207,16 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
         </div>
       </section>
       <section className="auth-form-side">
+        <div className="auth-theme">
+          <ThemeToggle />
+        </div>
         <div className="auth-form-wrap">
           <span className="auth-icon">
             <MessageCircle size={28} />
           </span>
-          <h2>{register ? 'Заходите, вы свои' : 'С возвращением'}</h2>
+          <h2>{register ? 'Регистрация' : 'С возвращением'}</h2>
           <p className="muted">
-            {register
-              ? 'Пара деталей — и можно общаться.'
-              : 'Здесь наверняка уже что-то обсуждают.'}
+            {register ? 'Создайте аккаунт по приглашению.' : 'Войдите, чтобы продолжить.'}
           </p>
           <div className="auth-tabs">
             <button
@@ -236,7 +241,7 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
           <form onSubmit={submit}>
             {register && (
               <label>
-                Как вас зовут
+                Имя
                 <input
                   name="name"
                   autoComplete="name"
@@ -292,17 +297,17 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
                 <LoaderCircle className="spin" size={18} />
               ) : (
                 <>
-                  {register ? 'Присоединиться' : 'Войти в Galinka'}
+                  {register ? 'Создать аккаунт' : 'Войти'}
                   <ArrowRight size={18} />
                 </>
               )}
             </button>
           </form>
           <div className="auth-divider">
-            <span>или сначала осмотритесь</span>
+            <span>или</span>
           </div>
           <button className="secondary wide" onClick={onDemo}>
-            Попробовать демоверсию
+            Открыть демо
             <ArrowUpRight size={17} />
           </button>
           <p className="auth-footnote">
@@ -372,7 +377,7 @@ function NewChat({
     }
   }
   return (
-    <Modal title="Начать разговор" onClose={onClose}>
+    <Modal title="Новый чат" onClose={onClose}>
       <div className="segmented">
         <button
           className={kind === 'direct' ? 'selected' : ''}
@@ -407,11 +412,11 @@ function NewChat({
           </label>
         )}
         <label>
-          Найти друзей
+          Найти пользователя
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Имя или логин, от 2 символов"
+            placeholder="Имя или логин"
           />
         </label>
         {selected.length > 0 && (
@@ -453,11 +458,11 @@ function NewChat({
             </button>
           ))}
           {query.length >= 2 && !searching && results.length === 0 && (
-            <p className="muted">Никого не нашли. Друг уже зарегистрировался на этом сервере?</p>
+            <p className="muted">Никого не найдено.</p>
           )}
           {query.length < 2 && (
             <p className="muted">
-              Начните с имени друга.
+              Введите не менее 2 символов.
               {kind === 'group' ? ' Участников также можно пригласить ссылкой.' : ''}
             </p>
           )}
@@ -493,7 +498,7 @@ export default function App() {
     [listQuery, setListQuery] = useState(''),
     [searchOpen, setSearchOpen] = useState(false),
     [messageQuery, setMessageQuery] = useState(''),
-    [infoOpen, setInfoOpen] = useState(() => window.innerWidth > 1080),
+    [infoOpen, setInfoOpen] = useState(false),
     [drafts, setDrafts] = useState<Record<string, string>>({}),
     [sending, setSending] = useState(false),
     [attachment, setAttachment] = useState<File | null>(null),
@@ -527,6 +532,33 @@ export default function App() {
   queryRef.current = messageQuery;
   const active = chats.find((c) => c.id === activeId),
     draft = activeId ? drafts[activeId] || '' : '';
+  const notifications = useNotifications(me?.id, demo, (id) => {
+    setActiveId(id);
+    setSection('chats');
+    setSearchOpen(false);
+    setMessageQuery('');
+  });
+  useEffect(() => {
+    if (!isNative) return;
+    const back = NativeApp.addListener('backButton', () => {
+      if (modal) setModal(null);
+      else if (infoOpen) setInfoOpen(false);
+      else if (searchOpen) {
+        setSearchOpen(false);
+        setMessageQuery('');
+      } else if (section !== 'chats') setSection('chats');
+      else if (activeId) setActiveId(null);
+      else void NativeApp.minimizeApp();
+    });
+    return () => {
+      void back.then((handle) => handle.remove());
+    };
+  }, [modal, infoOpen, searchOpen, section, activeId]);
+  useEffect(() => {
+    if (!textarea.current) return;
+    textarea.current.style.height = 'auto';
+    textarea.current.style.height = `${Math.min(textarea.current.scrollHeight, 160)}px`;
+  }, [draft]);
   useEffect(() => {
     if (new URLSearchParams(location.search).has('demo')) {
       sessionStorage.setItem('galinka-demo', 'true');
@@ -660,7 +692,7 @@ export default function App() {
   }, [activeId, messageQuery, me?.id, loadMessages, refreshChats]);
   useEffect(() => {
     if (followBottom.current && !messageQuery) bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [messages, messageQuery]);
+  }, [messages, messageQuery, loading, section]);
   function report(e: unknown) {
     setError((e as Error).message || 'Не удалось выполнить действие.');
   }
@@ -751,6 +783,7 @@ export default function App() {
   }
   async function logout() {
     try {
+      if (!demo) await clearPushDevice().catch(() => {});
       if (!demo) await api('/auth/logout', 'POST');
       sessionStorage.removeItem('galinka-demo');
       location.href = '/app';
@@ -792,7 +825,42 @@ export default function App() {
       a.download = file.name;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } else window.open(`${API_BASE}/files/${file.id}`, '_blank', 'noopener');
+    } else {
+      try {
+        const response = await fetch(`${API_BASE}/files/${file.id}`, { credentials: 'include' });
+        if (!response.ok) throw Error('Не удалось скачать файл.');
+        const blob = await response.blob();
+        if (isNative) {
+          const [{ Filesystem, Directory }, { Share }] = await Promise.all([
+            import('@capacitor/filesystem'),
+            import('@capacitor/share'),
+          ]);
+          const data = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(',')[1]);
+            reader.onerror = () => reject(Error('Не удалось прочитать файл.'));
+            reader.readAsDataURL(blob);
+          });
+          const safeName = file.name.replace(/[^\p{L}\p{N}._ -]/gu, '_');
+          const { uri } = await Filesystem.writeFile({
+            path: `attachments/${crypto.randomUUID()}-${safeName}`,
+            data,
+            directory: Directory.Cache,
+            recursive: true,
+          });
+          await Share.share({ title: file.name, url: uri });
+        } else {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = file.name;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+      } catch (error) {
+        report(error);
+      }
+    }
   }
   const filtered = chats.filter(
     (c) =>
@@ -807,7 +875,7 @@ export default function App() {
     return (
       <div className="boot">
         <img src="/icon.svg" alt="Galinka" />
-        <p>Собираем своих…</p>
+        <p>Загрузка…</p>
       </div>
     );
   if (!me)
@@ -863,6 +931,7 @@ export default function App() {
           </IconButton>
         </div>
         <div className="rail-bottom">
+          <ThemeToggle />
           <IconButton label="Установить приложение" onClick={() => setModal('install')}>
             <Download size={21} />
           </IconButton>
@@ -890,11 +959,14 @@ export default function App() {
           <a className="brand" href="/app">
             galinka<span className="brand-dot">.</span>
           </a>
-          <span className="version">beta</span>
+          <span className="sidebar-status">
+            <span className={`status-dot ${!connected ? 'offline' : ''}`} />
+            {demo ? 'Демо' : connected ? 'В сети' : 'Нет связи'}
+          </span>
         </div>
         <div className="sidebar-heading">
           <h1>
-            Разговоры<span>{chats.length}</span>
+            Чаты<span>{chats.length}</span>
           </h1>
           <IconButton label="Новый чат" className="new-chat" onClick={() => setModal('new')}>
             <Plus size={21} />
@@ -904,7 +976,7 @@ export default function App() {
           <Search size={18} />
           <input
             aria-label="Найти чат"
-            placeholder="Найти разговор"
+            placeholder="Поиск"
             value={listQuery}
             onChange={(e) => setListQuery(e.target.value)}
           />
@@ -944,10 +1016,7 @@ export default function App() {
                 <span className="chat-item-preview">
                   <span>
                     {c.last_message?.sender_id === me.id && <CheckCheck size={13} />}{' '}
-                    {c.last_message?.body ||
-                      (c.last_message?.file_id
-                        ? 'Прикреплённый файл'
-                        : 'Пока тихо. Начните разговор.')}
+                    {c.last_message?.body || (c.last_message?.file_id ? 'Файл' : 'Нет сообщений')}
                   </span>
                   {c.unread > 0 && <b className="unread">{c.unread}</b>}
                 </span>
@@ -957,24 +1026,12 @@ export default function App() {
           {!filtered.length && (
             <div className="list-empty">
               <MessageCircle size={24} />
-              <p>{listQuery ? 'Такого разговора пока нет' : 'Здесь начинаются разговоры'}</p>
+              <p>{listQuery ? 'Чат не найден' : 'Пока нет чатов'}</p>
               <button className="text-button" onClick={() => setModal('new')}>
                 Написать другу <Plus size={16} />
               </button>
             </div>
           )}
-        </div>
-        <div className="sidebar-module">
-          <span className="nelya-small">
-            <Sparkles size={20} />
-          </span>
-          <div>
-            <strong>Знакомьтесь, Неля</strong>
-            <p>Ещё одна в вашей компании.</p>
-          </div>
-          <IconButton label="Познакомиться с Нелей" onClick={() => setSection('modules')}>
-            <ArrowUpRight size={18} />
-          </IconButton>
         </div>
         <div className="server-status">
           <span className={`status-dot ${!connected ? 'offline' : ''}`} />
@@ -990,10 +1047,10 @@ export default function App() {
         {demo && (
           <div className="demo-bar">
             <span>
-              <span className="status-dot" /> Демо: вымышленные чаты, данные только в браузере
+              <span className="status-dot" /> Демо · данные в браузере
             </span>
             <button onClick={logout}>
-              К своему аккаунту <ArrowUpRight size={14} />
+              Войти <ArrowUpRight size={14} />
             </button>
           </div>
         )}
@@ -1028,9 +1085,9 @@ export default function App() {
                 </h2>
                 <p>
                   {active.kind === 'saved'
-                    ? 'Только вы и ваши мысли'
+                    ? 'Личные заметки'
                     : active.kind === 'group'
-                      ? `${active.member_count} ${plural(active.member_count)} · ваш маленький круг`
+                      ? `${active.member_count} ${plural(active.member_count)}`
                       : `@${active.peer?.username || ''}`}
                 </p>
               </button>
@@ -1090,7 +1147,7 @@ export default function App() {
                       <span />
                       <span />
                       <span />
-                      <p>Загружаем разговор…</p>
+                      <p>Загрузка…</p>
                     </div>
                   ) : (
                     <>
@@ -1104,11 +1161,11 @@ export default function App() {
                           <span className="empty-mark">
                             <MessageCircle size={32} />
                           </span>
-                          <h2>{messageQuery ? 'Ничего не нашлось' : 'Скажите первое «привет»'}</h2>
+                          <h2>{messageQuery ? 'Ничего не нашлось' : 'Нет сообщений'}</h2>
                           <p>
                             {messageQuery
                               ? 'Попробуйте другое слово или очистите поиск.'
-                              : 'Здесь будет ваша история. Начните её с сообщения.'}
+                              : 'Напишите первое сообщение.'}
                           </p>
                           {messageQuery && (
                             <button className="text-button" onClick={() => setMessageQuery('')}>
@@ -1244,20 +1301,6 @@ export default function App() {
                   )}
                 </div>
                 <div className="composer-wrap">
-                  {active.nelya && (
-                    <div className="nelya-hint">
-                      <Sparkles size={13} />
-                      <span>Неля рядом.</span>
-                      <button
-                        onClick={() => {
-                          changeDraft('@неля помощь');
-                          textarea.current?.focus();
-                        }}
-                      >
-                        Позовите через @неля
-                      </button>
-                    </div>
-                  )}
                   {attachment && (
                     <div className="pending-file">
                       <FileText size={18} />
@@ -1306,7 +1349,7 @@ export default function App() {
                     <textarea
                       ref={textarea}
                       aria-label="Сообщение"
-                      placeholder="Сообщение для своих…"
+                      placeholder="Сообщение…"
                       rows={1}
                       value={draft}
                       maxLength={8000}
@@ -1359,14 +1402,13 @@ export default function App() {
                       {sending ? (
                         <LoaderCircle size={20} className="spin" />
                       ) : (
-                        <ArrowRight size={22} />
+                        <ArrowUp size={22} />
                       )}
                     </button>
                   </form>
                   <div className="composer-foot">
-                    <span>Будьте собой. Вы среди своих.</span>
                     <span className="desktop-hint">
-                      Enter — отправить · Shift + Enter — новая строка
+                      Enter — отправить · Shift + Enter — перенос
                     </span>
                     <span className="mobile-hint">До 20 МБ на файл</span>
                   </div>
@@ -1385,9 +1427,9 @@ export default function App() {
                     <h3>{active.title}</h3>
                     <p>
                       {active.kind === 'group'
-                        ? 'Хорошо, когда есть свои.'
+                        ? `${active.member_count} ${plural(active.member_count)}`
                         : active.kind === 'saved'
-                          ? 'Чтобы ничего не потерялось.'
+                          ? 'Личные заметки'
                           : `@${active.peer?.username}`}
                     </p>
                     {active.kind === 'group' && active.owner_id === me.id && (
@@ -1448,21 +1490,6 @@ export default function App() {
                       <ArrowUpRight size={15} />
                     </button>
                   </div>
-                  <div className="little-note">
-                    <div className="botanical" aria-hidden="true">
-                      <span />
-                      <span />
-                      <span />
-                      <span />
-                      <i />
-                    </div>
-                    <p>
-                      Ближе,
-                      <br />
-                      даже когда далеко.
-                    </p>
-                    <small>Для разговоров, которые важны.</small>
-                  </div>
                   <div className="info-footer">
                     <Lock size={13} />
                     <span>
@@ -1478,8 +1505,8 @@ export default function App() {
         ) : section === 'chats' ? (
           <div className="workspace-empty">
             <Leaf size={44} />
-            <h2>Ваши люди — рядом.</h2>
-            <p>Выберите разговор или начните новый.</p>
+            <h2>Выберите чат</h2>
+            <p>Или начните новый разговор.</p>
             <button className="primary" onClick={() => setModal('new')}>
               <Plus size={18} />
               Написать другу
@@ -1517,10 +1544,7 @@ export default function App() {
                 <h2>
                   Это Неля<span>.</span>
                 </h2>
-                <p>
-                  Поможет определиться с ужином, придумает план на вечер или честно подбросит
-                  монетку. Ещё одна в вашей компании.
-                </p>
+                <p>Подбросит монетку, выберет вариант или предложит план.</p>
                 <span className="module-disclosure">
                   <Lock size={13} /> Работает на вашем сервере · без ИИ и внешних API
                 </span>
@@ -1554,16 +1578,6 @@ export default function App() {
                 )}
               </div>
             </section>
-            <div className="modules-future">
-              <span>
-                <Compass size={23} />
-              </span>
-              <div>
-                <h3>Дальше — придумаем вместе</h3>
-                <p>Место для будущих модулей: от совместных планов до маленьких игр.</p>
-              </div>
-              <span className="coming-soon">Ещё не доступны</span>
-            </div>
           </div>
         ) : (
           <div className="content-page settings-page">
@@ -1574,8 +1588,8 @@ export default function App() {
               <span className="page-symbol">
                 <Settings size={25} />
               </span>
-              <h1>Как вам удобно.</h1>
-              <p>Ваш профиль и приложение.</p>
+              <h1>Настройки</h1>
+              <p>Профиль, оформление и уведомления</p>
             </div>
             <section className="settings-section">
               <div className="settings-profile">
@@ -1596,8 +1610,13 @@ export default function App() {
               </div>
             </section>
             <section className="settings-section">
-              <h3>Galinka на ваших устройствах</h3>
-              <p>Установите приложение из браузера. Один аккаунт, все ваши разговоры.</p>
+              <h3>Оформление</h3>
+              <ThemePicker />
+            </section>
+            <NotificationSettings state={notifications} demo={demo} />
+            <section className="settings-section">
+              <h3>Приложение</h3>
+              <p>Android, Windows и Linux</p>
               <button className="primary" onClick={() => setModal('install')}>
                 <Download size={18} />
                 Установить Galinka
@@ -1607,11 +1626,9 @@ export default function App() {
             <section className="settings-section privacy-note">
               <Lock size={22} />
               <div>
-                <h3>Ваш сервер — ваш круг</h3>
+                <h3>Конфиденциальность</h3>
                 <p>
-                  Сообщения и файлы доступны участникам чата. MVP использует защищённое соединение
-                  при настройке HTTPS. Сквозного шифрования в этой версии нет: администратор сервера
-                  имеет доступ к данным.
+                  Чаты доступны участникам и администратору сервера. Сквозного шифрования пока нет.
                 </p>
               </div>
             </section>
@@ -1663,10 +1680,10 @@ export default function App() {
         />
       )}
       {modal === 'install' && (
-        <Modal error={error} title="Свои всегда под рукой" onClose={() => setModal(null)}>
+        <Modal error={error} title="Установить Galinka" onClose={() => setModal(null)}>
           <div className="install-intro">
             <img src="/icon.svg" alt="" />
-            <p>Galinka устанавливается прямо из браузера — без магазина приложений.</p>
+            <p>Выберите приложение для своего устройства.</p>
           </div>
           {install ? (
             <button
@@ -1688,25 +1705,26 @@ export default function App() {
               </div>
               <div>
                 <strong>Android</strong>
-                <p>Откройте в Chrome → меню ⋮ → «Добавить на главный экран» → «Установить».</p>
+                <p>
+                  Скачайте APK в разделе загрузок. Также можно установить веб-версию из меню Chrome.
+                </p>
               </div>
               <div>
                 <strong>Windows, macOS и Linux</strong>
-                <p>
-                  Откройте в Chrome или Edge → меню → «Установить Galinka». В Safari на Mac: «Файл»
-                  → «Добавить в Dock».
-                </p>
+                <p>Установщики и AppImage доступны в разделе загрузок.</p>
               </div>
             </div>
           )}
-          <p className="tiny muted">
-            Для установки нужен адрес сервера с HTTPS. Для локальной разработки подходит localhost.
-            Отдельных APK и EXE в MVP пока нет.
-          </p>
+          <a
+            className="primary wide"
+            href={isNative ? 'https://mess.quiby.me/#download' : '/#download'}
+          >
+            Скачать приложение <Download size={18} />
+          </a>
         </Modal>
       )}
       {modal === 'profile' && (
-        <Modal error={error} title="Как вас называть?" onClose={() => setModal(null)}>
+        <Modal error={error} title="Изменить имя" onClose={() => setModal(null)}>
           <form
             onSubmit={async (e) => {
               e.preventDefault();
@@ -1739,7 +1757,7 @@ export default function App() {
         </Modal>
       )}
       {modal === 'invite' && (
-        <Modal error={error} title="Пригласить своих" onClose={() => setModal(null)}>
+        <Modal error={error} title="Пригласить в группу" onClose={() => setModal(null)}>
           <p className="muted">
             Ссылка добавит зарегистрированного друга в «{active?.title}». Действует 7 дней. Новому
             участнику также понадобится код регистрации от владельца сервера.

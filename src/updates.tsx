@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Download, RefreshCw, ExternalLink } from 'lucide-react';
 import { API_BASE } from './api';
+import { Capacitor } from '@capacitor/core';
 export type UpdateStatus = {
   phase: string;
   version?: string;
@@ -28,6 +29,7 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
     [busy, setBusy] = useState(false),
     [reloadConfirm, setReloadConfirm] = useState(false);
   const desktop = window.galinkaDesktop;
+  const native = Capacitor.isNativePlatform();
   useEffect(() => {
     if (desktop) {
       desktop
@@ -44,20 +46,23 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
       if (desktop) {
         setStatus(await desktop.check());
       } else {
-        const response = await fetch(`${API_BASE}/version`, {
+        const response = await fetch(`${API_BASE}${native ? '/downloads' : '/version'}`, {
           cache: 'no-store',
           credentials: 'include',
         });
         if (!response.ok) throw Error();
         const remote = await response.json();
         setStatus({
-          phase:
-            remote.version !== __APP_VERSION__ || remote.build !== __BUILD_ID__
-              ? 'available'
-              : 'current',
+          phase: (
+            native
+              ? remote.version.localeCompare(__APP_VERSION__, undefined, { numeric: true }) > 0
+              : remote.version !== __APP_VERSION__ || remote.build !== __BUILD_ID__
+          )
+            ? 'available'
+            : 'current',
           version: remote.version,
         });
-        if ('serviceWorker' in navigator) {
+        if (!native && 'serviceWorker' in navigator) {
           const registration = await navigator.serviceWorker.getRegistration();
           await registration?.update();
         }
@@ -69,6 +74,10 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
     }
   }
   async function update() {
+    if (native) {
+      window.open('https://mess.quiby.me/#download', '_blank', 'noopener');
+      return;
+    }
     if (hasDraft && !reloadConfirm) {
       setReloadConfirm(true);
       return;
@@ -99,7 +108,7 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
       <div>
         <strong>Обновления Galinka</strong>
         <p>
-          Веб-версия {__APP_VERSION__}
+          Версия {__APP_VERSION__}
           {status.installedVersion ? ` · приложение ${status.installedVersion}` : ''}
         </p>
       </div>
@@ -132,7 +141,9 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
               ? phase === 'downloaded'
                 ? 'Установить и перезапустить'
                 : 'Скачать обновление'
-              : 'Обновить приложение'}
+              : native
+                ? 'Скачать APK'
+                : 'Обновить приложение'}
           </button>
         ) : (
           <button className="secondary" onClick={check} disabled={busy || phase === 'downloading'}>
@@ -148,9 +159,11 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
         )}
       </div>
       <p className="tiny muted">
-        {desktop
-          ? 'Обновления настольной оболочки — из GitHub Releases. На macOS автоматическая установка требует подписанной сборки.'
-          : 'Обновится интерфейс на этом устройстве. Сервер обновляется отдельно администратором.'}
+        {native
+          ? 'Установите новый APK поверх приложения.'
+          : desktop
+            ? 'Обновления из GitHub Releases.'
+            : 'Обновится интерфейс на этом устройстве.'}
       </p>
     </div>
   );

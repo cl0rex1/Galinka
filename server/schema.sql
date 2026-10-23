@@ -39,3 +39,14 @@ CREATE TABLE IF NOT EXISTS invites (
 );
 
 ALTER TABLE messages ALTER COLUMN created_at SET DEFAULT clock_timestamp();
+
+CREATE TABLE IF NOT EXISTS push_devices (
+ token text PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ session_token text NOT NULL REFERENCES sessions(token) ON DELETE CASCADE,
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS push_devices_user ON push_devices(user_id);
+CREATE TABLE IF NOT EXISTS push_jobs (
+ message_id uuid PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+ attempts integer NOT NULL DEFAULT 0, available_at timestamptz NOT NULL DEFAULT now()
+);

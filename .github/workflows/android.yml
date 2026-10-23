@@ -1,0 +1,45 @@
+name: Android APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - run: npm run check
+      - name: Restore optional Firebase client configuration
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then printf '%s' "$GOOGLE_SERVICES_JSON" > android/app/google-services.json; fi
+      - name: Build APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          GALINKA_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          GALINKA_KEY_ALIAS: galinka
+        run: |
+          chmod +x android/gradlew
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/galinka-release.jks"
+            export GALINKA_KEYSTORE="$RUNNER_TEMP/galinka-release.jks"
+            npm run android:release
+          else
+            npm run android:build
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: release/*.apk
+          if-no-files-found: error

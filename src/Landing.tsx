@@ -7,39 +7,43 @@ import {
   Smartphone,
   Check,
   Users,
-  Leaf,
-  Sparkles,
-  ChevronRight,
+  MessageCircle,
 } from 'lucide-react';
 import { API_BASE } from './api';
+import { ThemeToggle } from './theme';
 type Release = {
   version: string;
   url: string;
   assets: { name: string; url: string; size: number }[];
 };
+const platforms = ['Windows', 'Android', 'Arch Linux', 'Linux', 'macOS'] as const;
 export default function Landing() {
-  const [release, setRelease] = useState<Release | null>(null),
-    [loading, setLoading] = useState(true),
-    [platform, setPlatform] = useState('Windows'),
-    [install, setInstall] = useState(false);
+  const [release, setRelease] = useState<Release | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [platform, setPlatform] = useState<string>('Windows');
+  const [install, setInstall] = useState(false);
   useEffect(() => {
     const ua = navigator.userAgent;
-    if (/Mac/.test(ua)) setPlatform('macOS');
-    else if (/Linux/.test(ua) && !/Android/.test(ua)) setPlatform('Linux');
+    if (/Android/.test(ua)) setPlatform('Android');
+    else if (/Mac/.test(ua)) setPlatform('macOS');
+    else if (/Linux/.test(ua)) setPlatform('Linux');
     fetch(`${API_BASE}/downloads`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then(setRelease)
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
-  const files =
-    release?.assets.filter((a) =>
-      platform === 'Windows'
-        ? a.name.endsWith('.exe')
-        : platform === 'Linux'
-          ? a.name.endsWith('.AppImage') || a.name.endsWith('.deb')
-          : a.name.endsWith('.dmg'),
-    ) || [];
+  const extension =
+    platform === 'Windows'
+      ? '.exe'
+      : platform === 'Android'
+        ? '.apk'
+        : platform === 'Arch Linux'
+          ? '.pkg.tar.zst'
+          : platform === 'Linux'
+            ? '.AppImage'
+            : '.dmg';
+  const files = release?.assets.filter((asset) => asset.name.endsWith(extension)) || [];
   return (
     <main className="landing">
       <header className="landing-nav">
@@ -48,17 +52,17 @@ export default function Landing() {
           galinka<span className="brand-dot">.</span>
         </a>
         <nav>
+          <ThemeToggle />
           <a href="#download">Скачать</a>
-          <a href="/app">
-            Открыть в браузере
-            <ArrowUpRight size={15} />
+          <a className="secondary" href="/app">
+            Войти <ArrowUpRight size={15} />
           </a>
         </nav>
       </header>
       <section className="landing-hero">
         <div className="landing-copy">
           <span className="landing-eyebrow">
-            <span className="status-dot" /> Для вашей компании
+            <span className="status-dot" /> Всегда на связи
           </span>
           <h1>
             Место,
@@ -66,20 +70,19 @@ export default function Landing() {
             где свои.
           </h1>
           <p>
-            Разговоры до ночи, спонтанные планы
-            <br />и простое «как ты?» — теперь в Galinka.
+            Личные чаты, общие планы и важные мелочи.
+            <br />
+            Всё в одном спокойном мессенджере.
           </p>
           <div className="landing-cta">
-            <a className="primary" href="#download">
-              <Download size={18} />
-              Скачать Galinka
+            <a className="primary" href="/app">
+              Начать общаться <ArrowRight size={18} />
             </a>
-            <a className="text-button" href="/app">
-              Начать общаться
-              <ArrowRight size={17} />
+            <a className="text-button" href="/?demo=1">
+              Открыть демо <ArrowUpRight size={16} />
             </a>
           </div>
-          <span className="landing-platform-note">Windows · macOS · Linux · iOS · Android</span>
+          <span className="landing-platform-note">Android · Windows · Linux</span>
         </div>
         <div className="landing-conversation" aria-label="Пример разговора в Galinka">
           <div className="landing-chat-title">
@@ -88,176 +91,129 @@ export default function Landing() {
             </span>
             <div>
               <strong>На выходные</strong>
-              <p>Ваш маленький круг</p>
+              <p>5 участников</p>
             </div>
-            <Leaf size={24} />
+            <MessageCircle size={22} />
           </div>
-          <div className="landing-chat-day">Один из тех разговоров</div>
+          <div className="landing-chat-day">Сегодня</div>
           <div className="landing-sample">
             <span className="avatar small tone-1">А</span>
             <div>
               <small>Аня</small>
-              <p>
-                А давайте на выходных
-                <br />
-                куда-нибудь из города? 🌿
-              </p>
+              <p>Завтра за город? 🌿</p>
             </div>
           </div>
           <div className="landing-sample sample-own">
             <div>
-              <p>Я за. Берём кофе и в путь?</p>
+              <p>Да! В 9 у кофейни?</p>
               <small>
-                Вы среди своих <Check size={12} />
+                12:04 <Check size={12} />
               </small>
             </div>
           </div>
           <div className="landing-sample">
-            <span className="avatar small tone-5">
-              <Sparkles size={16} />
-            </span>
+            <span className="avatar small tone-2">М</span>
             <div>
-              <small>Неля · модуль</small>
-              <p>
-                Как насчёт прогулки
-                <br />
-                без маршрута?
-              </p>
+              <small>Макс</small>
+              <p>Беру кофе на всех ☕</p>
             </div>
           </div>
-          <a href="/app" className="landing-demo-link">
-            Ваш разговор начнётся здесь
-            <ArrowRight size={18} />
+          <a href="/?demo=1" className="landing-demo-link">
+            Сообщение… <ArrowRight size={18} />
           </a>
         </div>
       </section>
       <section className="landing-download" id="download">
         <div className="download-heading">
-          <span className="page-symbol">
-            <Download size={25} />
-          </span>
           <div>
-            <h2>Свои — всегда под рукой.</h2>
-            <p>Установите приложение на компьютер или телефон.</p>
+            <span className="landing-eyebrow">На ваших устройствах</span>
+            <h2>Разговоры — с собой.</h2>
           </div>
           {release && <span className="version">v{release.version}</span>}
         </div>
+        <div className="download-tabs" role="group" aria-label="Операционная система">
+          {platforms.map((value) => (
+            <button
+              key={value}
+              aria-pressed={value === platform}
+              className={value === platform ? 'selected' : ''}
+              onClick={() => setPlatform(value)}
+            >
+              {value}
+            </button>
+          ))}
+        </div>
         <div className="download-grid">
-          <div className="desktop-download">
-            <div className="download-tabs" aria-label="Операционная система">
-              {['Windows', 'macOS', 'Linux'].map((p) => (
-                <button
-                  key={p}
-                  className={p === platform ? 'selected' : ''}
-                  onClick={() => setPlatform(p)}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-            <div className="download-details">
-              <Monitor size={29} />
-              <h3>Galinka для {platform}</h3>
-              <p>
-                Отдельное окно для ваших разговоров.
-                <br />
-                Проверка обновлений прямо в настройках.
-              </p>
-              {loading ? (
-                <p className="muted">Проверяем доступные сборки…</p>
-              ) : files.length ? (
-                files.map((a) => (
-                  <a key={a.name} className="primary" href={a.url}>
-                    <Download size={17} />
-                    Скачать{' '}
-                    {platform === 'macOS'
-                      ? a.name.includes('arm64')
-                        ? 'для Apple Silicon'
-                        : 'для Intel'
-                      : a.name.endsWith('.deb')
-                        ? 'DEB'
-                        : 'приложение'}
-                  </a>
-                ))
-              ) : (
-                <div className="downloads-pending">
-                  <p>Сборка для {platform} готовится.</p>
-                  <a className="secondary" href="/app">
-                    Открыть веб-версию
-                    <ArrowUpRight size={15} />
-                  </a>
-                </div>
-              )}
-              {platform === 'macOS' && (
-                <small className="muted">
-                  Первый выпуск пока без подписи Apple Developer. Автоустановка на macOS появится с
-                  подписанными релизами.
-                </small>
-              )}
-              {platform === 'Linux' && (
-                <small className="muted">
-                  Для обновления внутри приложения используйте AppImage.
-                </small>
-              )}
-            </div>
+          <div className="download-details">
+            {platform === 'Android' ? <Smartphone size={30} /> : <Monitor size={30} />}
+            <h3>Galinka для {platform}</h3>
+            <p>
+              {platform === 'Android'
+                ? 'APK для Android 7 и новее.'
+                : platform === 'Arch Linux'
+                  ? 'Пакет для установки через pacman.'
+                  : platform === 'Linux'
+                    ? 'AppImage для Linux x64.'
+                    : 'Отдельное приложение для ваших чатов.'}
+            </p>
+            {loading ? (
+              <p className="muted">Проверяем сборки…</p>
+            ) : files.length ? (
+              files.map((asset) => (
+                <a key={asset.name} className="primary" href={asset.url}>
+                  <Download size={17} />
+                  Скачать{' '}
+                  {platform === 'macOS'
+                    ? asset.name.includes('arm64')
+                      ? 'для Apple Silicon'
+                      : 'для Intel'
+                    : 'приложение'}
+                  <span className="download-size">{Math.round(asset.size / 1048576)} МБ</span>
+                </a>
+              ))
+            ) : (
+              <div className="downloads-pending">
+                <p>Установщик появится после публикации релиза.</p>
+                <a className="secondary" href="/app">
+                  Открыть веб-версию <ArrowUpRight size={15} />
+                </a>
+              </div>
+            )}
+            {platform === 'Arch Linux' && (
+              <code className="install-command">sudo pacman -U ./Galinka-*.pkg.tar.zst</code>
+            )}
           </div>
           <div className="phone-download">
-            <Smartphone size={30} />
-            <h3>На iPhone и Android</h3>
-            <p>
-              Установите Galinka из браузера.
-              <br />
-              Приложение появится на главном экране.
-            </p>
-            <button className="secondary" onClick={() => setInstall((v) => !v)}>
-              {install ? 'Скрыть инструкцию' : 'Как установить'}
-              <ChevronRight size={16} />
+            <Smartphone size={28} />
+            <h3>И прямо в браузере</h3>
+            <p>На компьютере, iPhone и Android.</p>
+            <button
+              className="secondary"
+              onClick={() => setInstall(!install)}
+              aria-expanded={install}
+            >
+              Как установить <ArrowRight size={16} />
             </button>
             {install && (
               <div className="phone-instructions">
                 <p>
-                  <strong>iPhone:</strong> откройте веб-версию в Safari → «Поделиться» → «На экран
-                  Домой».
+                  <strong>iPhone:</strong> Safari → «Поделиться» → «На экран Домой».
                 </p>
                 <p>
-                  <strong>Android:</strong> откройте веб-версию в Chrome → меню ⋮ → «Установить
-                  приложение».
+                  <strong>Android:</strong> Chrome → меню → «Установить приложение».
                 </p>
               </div>
             )}
-            <a className="text-button" href="/app">
-              Перейти к установке
-              <ArrowRight size={16} />
-            </a>
-            <span className="phone-note">
-              <LockIcon />
-              Ваши разговоры хранятся на сервере Quiby
-            </span>
           </div>
         </div>
       </section>
-      <section className="landing-invite">
-        <Leaf size={29} />
-        <div>
-          <h2>Хорошо, когда есть свои.</h2>
-          <p>Для регистрации нужен код приглашения. Попросите его у того, кто вас позвал.</p>
-        </div>
-        <a className="primary" href="/app">
-          Присоединиться
-          <ArrowRight size={17} />
-        </a>
-      </section>
       <footer className="landing-footer">
         <span className="brand">galinka.</span>
-        <p>Сделано для своих.</p>
+        <p>Вход по приглашению</p>
         <a href={release?.url || 'https://github.com/cl0rex1/Galinka/releases'}>
-          Релизы на GitHub
-          <ArrowUpRight size={14} />
+          Релизы <ArrowUpRight size={14} />
         </a>
       </footer>
     </main>
   );
-}
-function LockIcon() {
-  return <Check size={13} />;
 }

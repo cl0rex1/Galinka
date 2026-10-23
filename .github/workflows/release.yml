@@ -29,6 +29,14 @@ jobs:
       - run: npm run desktop:build -- --${{ matrix.target }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - if: matrix.target == 'win'
+        run: node tests/desktop/smoke.cjs
+      - if: matrix.target == 'linux'
+        run: npm run arch:build
+      - if: matrix.target == 'linux'
+        name: Validate Arch package in pacman
+        run: |
+          docker run --rm -v "$PWD/release:/packages:ro" archlinux:base bash -lc 'pacman -Syu --noconfirm && pacman -U --noconfirm /packages/*.pkg.tar.zst && test -x /usr/bin/galinka && test -s /usr/lib/galinka/app.asar'
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.target }}
@@ -38,10 +46,12 @@ jobs:
             release/*.zip
             release/*.AppImage
             release/*.deb
+            release/*.pkg.tar.zst
             release/latest*.yml
             release/*.blockmap
           if-no-files-found: error
   publish:
+    if: startsWith(github.ref, 'refs/tags/')
     needs: package
     runs-on: ubuntu-latest
     steps:
@@ -57,4 +67,9 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --verify-tag --title "Galinka $RELEASE_TAG" --notes-file docs/RELEASE.md
-          gh release upload "$RELEASE_TAG" release/* --clobber
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[].name' > /tmp/galinka-assets.txt
+          for artifact in release/*; do
+            if ! grep -Fxq "$(basename "$artifact")" /tmp/galinka-assets.txt; then
+              gh release upload "$RELEASE_TAG" "$artifact"
+            fi
+          done

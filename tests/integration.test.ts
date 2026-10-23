@@ -6,6 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
+import { digest } from '../server/security.js';
 const database = process.env.TEST_DATABASE_URL;
 test(
   'real PostgreSQL: accounts, access boundaries, groups, files, Nelya and cross-replica events',
@@ -28,6 +29,7 @@ test(
           APP_ORIGIN: base,
           UPLOAD_DIR: directory,
           NODE_ENV: 'test',
+          PUSH_ENABLED: 'false',
         },
         stdio: 'pipe',
       });
@@ -138,6 +140,36 @@ test(
         alice.data.id,
       ]);
       assert.ok(session.rows.every((s) => s.token !== alice.cookie.split('=')[1]));
+      assert.equal((await request('/push/status')).status, 401);
+      assert.deepEqual((await request('/push/status', 'GET', undefined, alice.cookie)).data, {
+        enabled: false,
+      });
+      assert.equal(
+        (
+          await request(
+            '/push/devices',
+            'POST',
+            { token: 'test-device-token-long-enough' },
+            alice.cookie,
+          )
+        ).status,
+        503,
+      );
+      const deviceToken = 'test-device-' + suffix + '-long-enough';
+      const deviceSession = digest(alice.cookie.split('=')[1]);
+      await db.query('INSERT INTO push_devices(token,user_id,session_token) VALUES($1,$2,$3)', [
+        deviceToken,
+        alice.data.id,
+        deviceSession,
+      ]);
+      assert.equal(
+        (await request('/push/devices', 'DELETE', { token: deviceToken }, bob.cookie)).status,
+        200,
+      );
+      assert.equal(
+        (await db.query('SELECT token FROM push_devices WHERE token=$1', [deviceToken])).rowCount,
+        1,
+      );
       const direct = await request(
         '/chats',
         'POST',
@@ -311,6 +343,10 @@ test(
       });
       assert.equal(csrf.status, 403);
       await request('/auth/logout', 'POST', {}, alice.cookie);
+      assert.equal(
+        (await db.query('SELECT token FROM push_devices WHERE token=$1', [deviceToken])).rowCount,
+        0,
+      );
       assert.equal((await request('/me', 'GET', undefined, alice.cookie)).status, 401);
     } finally {
       for (const server of servers) server.kill('SIGTERM');

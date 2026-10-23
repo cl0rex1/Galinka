@@ -3,9 +3,11 @@ productName: Galinka
 copyright: Copyright © 2026 Galinka
 asar: true
 directories:
-  output: release
+  output: ../release
 files:
   - desktop/**
+  - web/**
+  - public/**
   - package.json
   - node_modules/**
 artifactName: '${productName}-${version}-${os}-${arch}.${ext}'

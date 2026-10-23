@@ -61,7 +61,7 @@ test('landing provides downloads and installation instructions', async ({ page }
 });
 test('web update check reports the installed release', async ({ page }) => {
   await page.route('**/api/version', (route) =>
-    route.fulfill({ json: { version: '0.2.0', build: '0.2.0' } }),
+    route.fulfill({ json: { version: '0.3.0', build: '0.3.0' } }),
   );
   await page.goto('/?demo=1');
   await page
@@ -70,4 +70,47 @@ test('web update check reports the installed release', async ({ page }) => {
     .click();
   await page.getByRole('button', { name: 'Проверить обновления', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('актуальная версия');
+});
+
+test('themes persist and system mode follows the device; demo never asks for push access', async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/?demo=1');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page
+    .getByRole('button', { name: 'Настройки', exact: true })
+    .filter({ visible: true })
+    .click();
+  await page.getByRole('button', { name: 'Тёмная', exact: false }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByRole('switch', { name: 'Пуш-уведомления' })).toHaveCount(0);
+  await expect(page.getByText('Недоступны в демоверсии.')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page
+    .getByRole('button', { name: 'Настройки', exact: true })
+    .filter({ visible: true })
+    .click();
+  await page.getByRole('button', { name: 'Системная', exact: false }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await page.screenshot({ path: testInfo.outputPath('settings-dark.png') });
+  await page.getByRole('button', { name: 'Чаты', exact: true }).filter({ visible: true }).click();
+  await page.screenshot({ path: testInfo.outputPath('desktop-dark.png') });
+});
+
+test('chat details open on demand and a multiline composer keeps the draft', async ({ page }) => {
+  await page.goto('/?demo=1');
+  await expect(page.locator('.chat-info')).toHaveCount(0);
+  await page.getByRole('button', { name: 'О чате', exact: true }).click();
+  await expect(page.locator('.chat-info')).toBeVisible();
+  await page.getByRole('button', { name: 'Закрыть информацию' }).click();
+  const composer = page.getByRole('textbox', { name: 'Сообщение', exact: true });
+  await composer.fill('Первая строка\nВторая строка\nТретья строка');
+  expect((await composer.boundingBox())!.height).toBeGreaterThan(50);
+  await page.getByRole('button', { name: /Аня.*плейлист/ }).click();
+  await page.getByRole('button', { name: /На выходные.*Неля/ }).click();
+  await expect(composer).toHaveValue('Первая строка\nВторая строка\nТретья строка');
 });

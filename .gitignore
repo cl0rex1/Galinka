@@ -11,3 +11,11 @@ playwright-report/
 *.log
 
 release/
+.tools/
+.secrets/
+dist-desktop/
+dist-android/
+*.jks
+*.keystore
+android/app/google-services.json
+firebase-service-account*.json

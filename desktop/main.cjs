@@ -1,4 +1,6 @@
-const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, protocol, net } = require('electron');
+const { readFile, stat } = require('node:fs/promises');
+const { existsSync } = require('node:fs');
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const APP_URL = 'https://mess.quiby.me/app';
@@ -6,6 +8,47 @@ const RELEASES = 'https://github.com/cl0rex1/Galinka/releases/latest';
 let window,
   state = { phase: 'idle', version: app.getVersion() },
   busy = false;
+async function serveBundledApp() {
+  const root = path.resolve(
+    __dirname,
+    '..',
+    existsSync(path.join(__dirname, '..', 'web')) ? 'web' : 'dist',
+  );
+  const types = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript',
+    '.css': 'text/css',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.woff2': 'font/woff2',
+    '.webmanifest': 'application/manifest+json',
+  };
+  protocol.handle('https', async (request) => {
+    const url = new URL(request.url);
+    if (url.origin !== new URL(APP_URL).origin)
+      return net.fetch(request, { bypassCustomProtocolHandlers: true });
+    try {
+      let file = path.resolve(root, '.' + decodeURIComponent(url.pathname));
+      if (file !== root && !file.startsWith(root + path.sep))
+        return new Response('', { status: 403 });
+      if (
+        url.pathname === '/' ||
+        url.pathname === '/app' ||
+        !(await stat(file).catch(() => null))?.isFile()
+      )
+        file = path.join(root, 'index.html');
+      return new Response(await readFile(file), {
+        headers: {
+          'Content-Type': types[path.extname(file)] || 'application/octet-stream',
+          'Content-Security-Policy':
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self' https://api.quiby.me; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+        },
+      });
+    } catch {
+      return new Response('Galinka could not load. Please reinstall.', { status: 500 });
+    }
+  });
+}
 const send = (next) => {
   state = { ...state, ...next };
   window?.webContents.send('updates:status', state);
@@ -93,7 +136,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     title: 'Galinka',
-    backgroundColor: '#f8f6ef',
+    backgroundColor: '#111817',
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -135,7 +178,8 @@ else {
       window.focus();
     }
   });
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    await serveBundledApp();
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
         { label: 'Galinka', submenu: [{ role: 'about' }, { role: 'quit' }] },

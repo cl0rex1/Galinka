@@ -12,3 +12,11 @@ docs/screenshots
 
 release
 desktop
+.tools
+.secrets
+android
+dist-android
+dist-desktop
+*.jks
+*.keystore
+firebase-service-account*.json

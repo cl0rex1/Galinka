@@ -1,0 +1,16 @@
+# Install the released binary with: makepkg -si
+pkgname=galinka
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='Galinka messenger'
+arch=('x86_64')
+url='https://github.com/cl0rex1/Galinka'
+license=('custom')
+depends=('electron44>=44.9.1')
+source=("$url/releases/download/v$pkgver/Galinka-$pkgver-arch-x64.pkg.tar.zst")
+noextract=("Galinka-$pkgver-arch-x64.pkg.tar.zst")
+sha256sums=('00969ddd08380a71fe88726324c9b2708e9a4705ccf5eb1170ac2093099188b6')
+
+package() {
+  bsdtar -xf "$srcdir/Galinka-$pkgver-arch-x64.pkg.tar.zst" -C "$pkgdir" --exclude .PKGINFO
+}

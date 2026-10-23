@@ -1,21 +1,21 @@
 :root {
-  --color-paper: oklch(97.8% 0.009 90);
-  --color-surface: oklch(99.4% 0.003 90);
-  --color-chat: oklch(97% 0.012 92);
-  --color-paper-2: oklch(95% 0.014 95);
-  --color-paper-3: oklch(92% 0.016 95);
-  --color-rail: oklch(94% 0.015 110);
-  --color-ink: oklch(27% 0.025 155);
-  --color-ink-2: oklch(39% 0.018 155);
-  --color-muted: oklch(49% 0.014 135);
-  --color-faint: oklch(57% 0.014 135);
-  --color-accent: oklch(49% 0.065 155);
-  --color-accent-hover: oklch(42% 0.065 155);
-  --color-accent-ink: oklch(99% 0.004 95);
-  --color-mint: oklch(92% 0.032 145);
-  --color-mint-deep: oklch(85% 0.055 145);
-  --color-outgoing: oklch(90% 0.041 130);
-  --color-rule: oklch(89% 0.014 100);
+  --color-paper: #f5f7f6;
+  --color-surface: #ffffff;
+  --color-chat: #f3f6f4;
+  --color-paper-2: #edf1ee;
+  --color-paper-3: #e3e9e4;
+  --color-rail: #e9efeb;
+  --color-ink: #1c3027;
+  --color-ink-2: #3d5147;
+  --color-muted: #62746a;
+  --color-faint: #73867a;
+  --color-accent: #307957;
+  --color-accent-hover: #236243;
+  --color-accent-ink: #ffffff;
+  --color-mint: #e5f1e9;
+  --color-mint-deep: #cee5d5;
+  --color-outgoing: #d9eddf;
+  --color-rule: #e2e8e3;
   --color-focus: oklch(41% 0.12 230);
   --color-error: oklch(45% 0.16 28);
   --color-error-bg: oklch(95% 0.025 28);
@@ -65,4 +65,45 @@
   --dur-short: 180ms;
   --dur-medium: 280ms;
   --rule-thin: 1px;
+}
+
+:root {
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --color-paper: #111817;
+  --color-surface: #19221f;
+  --color-chat: #111a16;
+  --color-paper-2: #202c26;
+  --color-paper-3: #2b3b32;
+  --color-rail: #141e19;
+  --color-ink: #e3eee7;
+  --color-ink-2: #bdcfc3;
+  --color-muted: #a0b4a7;
+  --color-faint: #8ba493;
+  --color-accent: #83cba0;
+  --color-accent-hover: #a4dfbb;
+  --color-accent-ink: #112b1c;
+  --color-mint: #243e2e;
+  --color-mint-deep: #31533c;
+  --color-outgoing: #284b36;
+  --color-rule: #2b3a31;
+  --color-focus: #a0dbba;
+  --color-error: #ffaaa3;
+  --color-error-bg: #3c2524;
+  --color-peach: #3d3028;
+  --color-peach-ink: #e3b89b;
+  --color-blue: #24333d;
+  --color-blue-ink: #a7ccdf;
+  --color-lavender: #332c40;
+  --color-lavender-ink: #cdb9e7;
+  --color-yellow: #3c3824;
+  --color-yellow-ink: #dfcf93;
+  --color-nelya: #343328;
+  --color-nelya-ink: #d8ce9c;
+  --color-bot-bubble: #252d23;
+  --color-overlay: #0009;
+  --color-shadow: #0002;
+  --color-shadow-deep: #0005;
 }

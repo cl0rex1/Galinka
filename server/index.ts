@@ -9,6 +9,7 @@ import path from 'node:path';
 import { z, ZodError } from 'zod';
 import { digest, hashPassword, verifyPassword, readCookie } from './security.js';
 import { nelyaReply } from './nelya.js';
+import { pushEnabled, startPushWorker } from './push.js';
 
 const production = process.env.NODE_ENV === 'production';
 const origin = process.env.APP_ORIGIN || 'http://localhost:5173';
@@ -213,6 +214,36 @@ app.get('/api/health', async (_req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/version', (_req, res) => res.json(buildInfo));
+app.get('/api/push/status', auth, (_req, res) => res.json({ enabled: pushEnabled }));
+const pushToken = z.object({
+  token: z
+    .string()
+    .min(20)
+    .max(4096)
+    .regex(/^[A-Za-z0-9_:\-]+$/),
+});
+app.post('/api/push/devices', auth, async (req, res) => {
+  requireValue(pushEnabled, 503, 'Пуши пока не подключены.');
+  const { token } = pushToken.parse(req.body);
+  await transaction(async (db) => {
+    await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user(req).id]);
+    await db.query(
+      `INSERT INTO push_devices(token,user_id,session_token) VALUES($1,$2,$3)
+      ON CONFLICT(token) DO UPDATE SET user_id=$2,session_token=$3,updated_at=now()`,
+      [token, user(req).id, (req as AuthedRequest).sessionToken],
+    );
+    await db.query(
+      'DELETE FROM push_devices WHERE user_id=$1 AND token IN (SELECT token FROM push_devices WHERE user_id=$1 ORDER BY updated_at DESC OFFSET 12)',
+      [user(req).id],
+    );
+  });
+  res.json({ ok: true });
+});
+app.delete('/api/push/devices', auth, async (req, res) => {
+  const { token } = pushToken.parse(req.body);
+  await pool.query('DELETE FROM push_devices WHERE token=$1 AND user_id=$2', [token, user(req).id]);
+  res.json({ ok: true });
+});
 let releaseCache: { expires: number; value: unknown } | undefined;
 app.get('/api/downloads', async (_req, res) => {
   if (releaseCache && releaseCache.expires > Date.now()) {
@@ -237,7 +268,7 @@ app.get('/api/downloads', async (_req, res) => {
       version: release.tag_name.replace(/^v/, ''),
       url: release.html_url,
       assets: release.assets
-        .filter((a) => /\.(exe|dmg|AppImage|deb)$/.test(a.name))
+        .filter((a) => /\.(exe|dmg|AppImage|deb|apk|pkg\.tar\.zst)$/.test(a.name))
         .map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size })),
     };
     releaseCache = { expires: Date.now() + 60000, value };
@@ -460,6 +491,7 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       [randomUUID(), chat.id, user(req).id, data.body, data.fileId, data.nonce],
     );
     if (rows[0]) {
+      if (pushEnabled) await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [rows[0].id]);
       const reply = chat.nelya ? nelyaReply(data.body) : null;
       if (reply)
         await db.query('INSERT INTO messages(id,chat_id,body,nonce) VALUES($1,$2,$3,$4)', [
@@ -699,8 +731,10 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 const server = app.listen(Number(process.env.PORT) || 3001, '0.0.0.0', () =>
   console.log(`Galinka API on http://localhost:${process.env.PORT || 3001}`),
 );
+const stopPush = startPushWorker(pool);
 server.requestTimeout = 120_000;
 async function stop() {
+  stopPush();
   stopping = true;
   for (const res of streams.keys()) res.end();
   server.close();

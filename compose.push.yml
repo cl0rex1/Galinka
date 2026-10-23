@@ -1,0 +1,7 @@
+services:
+  app:
+    environment:
+      PUSH_ENABLED: 'true'
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-admin.json
+    volumes:
+      - ./.secrets/firebase-admin.json:/run/secrets/firebase-admin.json:ro

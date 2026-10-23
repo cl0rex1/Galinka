@@ -8,6 +8,20 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(version),
     __BUILD_ID__: JSON.stringify(process.env.BUILD_SHA || version),
   },
-  server: { port: 5173, proxy: { '/api': 'http://127.0.0.1:3001' } },
+  server: {
+    port: 5173,
+    proxy: { '/api': 'http://127.0.0.1:3001' },
+    watch: {
+      ignored: [
+        '**/release/**',
+        '**/dist-desktop/**',
+        '**/dist-android/**',
+        '**/android/**',
+        '**/.tools/**',
+        '**/.secrets/**',
+        '**/docs/screenshots/**',
+      ],
+    },
+  },
   build: { target: 'es2022' },
 });
