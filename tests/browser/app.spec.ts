@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+const { version } = JSON.parse(
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+);
 test('demo conversation and Nelya work; modules and keyboard modal are usable', async ({
   page,
 }) => {
@@ -61,7 +65,7 @@ test('landing provides downloads and installation instructions', async ({ page }
 });
 test('web update check reports the installed release', async ({ page }) => {
   await page.route('**/api/version', (route) =>
-    route.fulfill({ json: { version: '0.3.1', build: '0.3.1' } }),
+    route.fulfill({ json: { version, build: process.env.BUILD_SHA || version } }),
   );
   await page.goto('/?demo=1');
   await page

@@ -11,7 +11,7 @@ npm ci
 npm run android:build
 ```
 
-Результат — `release/Galinka-0.3.1-android-debug.apk`. Для распространения используйте подписанную release-сборку:
+Результат — `release/Galinka-0.3.2-android-debug.apk`. Для распространения используйте подписанную release-сборку:
 
 ```sh
 export GALINKA_KEYSTORE=/absolute/path/galinka-release.jks
@@ -24,7 +24,7 @@ npm run android:release
 
 ## Подключение пушей
 
-Без Firebase APK работает, а настройки показывают «Пуши пока не подключены». Доставка в этой сборке не включена и на устройстве не проверена.
+Начиная с APK 0.3.2 клиентская конфигурация Firebase включена в сборку, сервер CasaOS настроен для отправки. Для получения уведомлений войдите в аккаунт, включите «Настройки → Уведомления» и разрешите уведомления Android. Получение токена Firebase проверяется в эмуляторе; фактическую доставку на конкретном телефоне проверяйте по шагу 5 ниже.
 
 1. Создайте Firebase-проект, включите Cloud Messaging API и зарегистрируйте Android-приложение с package name `me.quiby.galinka`.
 2. Сохраните клиентский `google-services.json` в `android/app/google-services.json`. Пересоберите APK. Флаг пушей включается автоматически только при наличии этого файла.
@@ -52,3 +52,5 @@ GitHub Actions → Android APK собирает APK вручную. Без signi
 Локальная копия: `.secrets/galinka-release.jks` и `.secrets/android-signing.json`, права 0600. Защищённая резервная копия хранится в `.secrets/android-signing-backup` на сервере Galinka. Для CI используются зашифрованные GitHub Actions Secrets `ANDROID_KEYSTORE_BASE64` и `ANDROID_STORE_PASSWORD`. Не коммитьте и не отправляйте эти файлы в чат.
 
 `./gradlew :app:connectedDebugAndroidTest` из `android/` проверяет на устройстве/эмуляторе, что встроенный WebView получает настоящий JSON `/messenger/health` и ответ 401 `/messenger/me` без входа. Проверка не создаёт пользователей и сообщений. Она автоматически выполняется перед публикацией APK.
+
+Клиентская конфигурация хранится в GitHub Actions Secret `GOOGLE_SERVICES_JSON`; серверный ключ находится только в `.secrets/firebase-admin.json` на CasaOS и смонтирован в контейнер как `/run/secrets/firebase-admin.json` с доступом только для чтения. Серверный ключ не включается в APK или GitHub.
