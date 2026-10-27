@@ -20,12 +20,12 @@
 
 Скачайте установщик в [GitHub Releases](https://github.com/cl0rex1/Galinka/releases/latest):
 
-- **Android 7+:** `Galinka-0.3.0-android-release.apk`.
-- **Windows x64:** `Galinka-0.3.0-win-x64.exe` (NSIS, без сертификата Microsoft).
+- **Android 7+:** `Galinka-0.3.1-android-release.apk`.
+- **Windows x64:** `Galinka-0.3.1-win-x64.exe` (NSIS, без сертификата Microsoft).
 - **Arch Linux x64:** пакет `.pkg.tar.zst`:
 
 ```sh
-sudo pacman -U ./Galinka-0.3.0-arch-x64.pkg.tar.zst
+sudo pacman -U ./Galinka-0.3.1-arch-x64.pkg.tar.zst
 ```
 
 Arch использует `electron44` из репозитория; обновления приложения устанавливаются через pacman. Рецепт makepkg — [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD). Linux AppImage/DEB и macOS DMG/ZIP собирает workflow Desktop release. На iPhone доступна PWA: Safari → «Поделиться» → «На экран Домой».
@@ -38,7 +38,7 @@ React 19 · TypeScript · Vite · Node.js 24 · Express 5 · PostgreSQL · Docke
 
 Установка на CasaOS, HTTPS, резервные копии и обновление — [docs/DEPLOY.md](docs/DEPLOY.md). Для Quiby используется `compose.edge.yml`; для Firebase добавьте `compose.push.yml` после настройки ключа.
 
-Сообщения хранятся в PostgreSQL; LISTEN/NOTIFY и SSE обновляют открытые клиенты. Настольные приложения и APK содержат интерфейс и обращаются к `https://api.quiby.me/messenger`. Сессии — в HttpOnly cookie. В localStorage хранятся тема, настройка пушей и явно обозначенные демоданные. Демо: `/?demo=1`.
+Сообщения хранятся в PostgreSQL; LISTEN/NOTIFY и SSE обновляют открытые клиенты. Настольные приложения и APK содержат интерфейс и обращаются к `https://mess.quiby.me/messenger`. Сессии — в HttpOnly cookie. В localStorage хранятся тема, настройка пушей и явно обозначенные демоданные. Демо: `/?demo=1`.
 
 Сквозного шифрования, звонков и восстановления пароля через email нет. Администратор сервера имеет доступ к данным. Галочка означает сохранение сообщения, а не прочтение. Квота файлов — 500 МБ на аккаунт. Перед публичным масштабированием нужны общий rate limiter и файловое хранилище.
 
@@ -67,4 +67,4 @@ npm run android:release
 
 Для Android нужны JDK 21, Android SDK и `ANDROID_HOME`. Release требует ключ подписи; подробности — [docs/ANDROID.md](docs/ANDROID.md). В PowerShell для передачи флагов используйте `npm.cmd run desktop:build -- --win`. Проверка готового Windows-приложения: `node tests/desktop/smoke.cjs`.
 
-Тег `vX.Y.Z` запускает настольные сборки и публикацию релиза. Android workflow запускается вручную и поддерживает signing secrets. Обновление сервера выполняется отдельно от выпуска установщиков; [docs/RELEASE.md](docs/RELEASE.md) описывает текущий выпуск.
+Тег `vX.Y.Z` запускает настольные сборки и публикацию релиза. Android собирается и проверяется на эмуляторе вместе с тегом релиза; workflow также можно запустить вручную. Ключ хранится в GitHub Actions Secrets. Обновление сервера выполняется отдельно от выпуска установщиков; [docs/RELEASE.md](docs/RELEASE.md) описывает текущий выпуск.

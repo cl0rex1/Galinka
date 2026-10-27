@@ -2,28 +2,26 @@
 
 - `https://mess.quiby.me/` — сайт загрузки.
 - `https://mess.quiby.me/app` — веб-клиент и адрес настольного приложения.
-- `https://api.quiby.me/messenger/*` — REST API, файлы, SSE, версия и список сборок.
+- `https://mess.quiby.me/messenger/*` — REST API, файлы, SSE, версия и список сборок.
 
-Cloudflare Tunnel `quiby-core` уже связан с Docker-сетью `quiby-core_default`. Добавьте только сервис Galinka к этой сети через `compose.edge.yml`. Маршруты, в таком порядке:
+Cloudflare Tunnel `quiby-core` связан с Docker-сетью `quiby-core_default`. Galinka подключается к этой сети через `compose.edge.yml`. Единственный необходимый маршрут:
 
-| Hostname      | Path                 | Service                              |
-| ------------- | -------------------- | ------------------------------------ |
-| api.quiby.me  | `^/messenger(/.*)?$` | `http://galinka:3001`                |
-| mess.quiby.me | любой                | `http://galinka:3001`                |
-| api.quiby.me  | любой                | прежний `http://quiby-core-api:3001` |
+| Hostname      | Path  | Service               |
+| ------------- | ----- | --------------------- |
+| mess.quiby.me | любой | `http://galinka:3001` |
 
-Не заменяйте существующий маршрут API Quiby и не публикуйте CasaOS или PostgreSQL. Поле Service URL не включает путь: приложение само преобразует `/messenger` во внутренний `/api`.
+Домен `api.quiby.me` обслуживает отдельный проект Quiby через VPS. Galinka его не использует. REST API, файлы и SSE доступны через `/messenger` на собственном домене; приложение преобразует этот префикс во внутренний `/api`. VPS и маршрут API Quiby менять не нужно.
 
 В `.env` на сервере:
 
 ```dotenv
 APP_ORIGIN=https://mess.quiby.me
-PUBLIC_API_ORIGIN=https://api.quiby.me
-VITE_API_BASE=https://api.quiby.me/messenger
+PUBLIC_API_ORIGIN=https://mess.quiby.me
+VITE_API_BASE=/messenger
 COOKIE_SECURE=true
 TRUST_PROXY=1
 EDGE_NETWORK=quiby-core_default
-BUILD_SHA=0.3.0
+BUILD_SHA=0.3.1
 ```
 
 Запуск: `docker compose -f compose.yml -f compose.edge.yml up -d --build`. Для каждого деплоя задавайте `BUILD_SHA` актуальным коммитом или версией; это же значение попадает в клиент, service worker и API версии. Локальный доступ к cookie по HTTP при `COOKIE_SECURE=true` не работает — используйте публичные HTTPS-домены.

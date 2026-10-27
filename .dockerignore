@@ -20,3 +20,4 @@ dist-desktop
 *.jks
 *.keystore
 firebase-service-account*.json
+compose.casaos.yml

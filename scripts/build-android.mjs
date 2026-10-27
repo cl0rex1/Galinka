@@ -6,6 +6,7 @@ const release = process.argv.includes('--release');
 const env = { ...process.env };
 if (existsSync('.secrets/android-signing.json'))
   Object.assign(env, JSON.parse(readFileSync('.secrets/android-signing.json', 'utf8')));
+if (env.GALINKA_KEYSTORE) env.GALINKA_KEYSTORE = path.resolve(env.GALINKA_KEYSTORE);
 if (release && !env.GALINKA_KEYSTORE)
   throw Error(
     'Release APK requires GALINKA_KEYSTORE and GALINKA_STORE_PASSWORD. See docs/ANDROID.md.',

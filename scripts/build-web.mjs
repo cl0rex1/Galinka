@@ -15,7 +15,7 @@ const result = spawnSync(
     stdio: 'inherit',
     env: {
       ...process.env,
-      ...(native || desktop ? { VITE_API_BASE: 'https://api.quiby.me/messenger' } : {}),
+      ...(native || desktop ? { VITE_API_BASE: 'https://mess.quiby.me/messenger' } : {}),
       VITE_NATIVE_PUSH: native && existsSync('android/app/google-services.json') ? 'true' : 'false',
     },
   },

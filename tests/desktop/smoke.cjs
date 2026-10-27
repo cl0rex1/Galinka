@@ -9,6 +9,13 @@ const fs = require('node:fs/promises');
   try {
     const page = await app.firstWindow();
     await page.goto('https://mess.quiby.me/app?demo=1');
+    const api = await page.evaluate(async () => {
+      const health = await fetch('/messenger/health');
+      const me = await fetch('/messenger/me');
+      return { health: await health.json(), me: me.status };
+    });
+    expect(api.health).toEqual({ ok: true });
+    expect(api.me).toBe(401);
     await expect(page.getByRole('heading', { name: 'На выходные', exact: true })).toBeVisible();
     await page
       .getByRole('textbox', { name: 'Сообщение', exact: true })
@@ -24,7 +31,7 @@ const fs = require('node:fs/promises');
     await page.getByRole('button', { name: 'Тёмная', exact: false }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     const status = await page.evaluate(() => window.galinkaDesktop.status());
-    expect(status.installedVersion).toBe('0.3.0');
+    expect(status.installedVersion).toBe(require('../../package.json').version);
     await fs.mkdir('docs/screenshots', { recursive: true });
     await page.screenshot({ path: 'docs/screenshots/windows-app.png' });
     console.log('Packaged Windows app: bundled HTTPS UI, messages, theme and preload passed.');

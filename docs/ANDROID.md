@@ -1,6 +1,6 @@
 # Android
 
-Приложение `me.quiby.galinka` работает на Android 7+ (API 24), целевая версия — Android 16 / API 36. Интерфейс включён в APK; сервер сообщений — `https://api.quiby.me/messenger`. Локальный HTTPS-origin совпадает с `APP_ORIGIN=https://mess.quiby.me`, поэтому HttpOnly/SameSite-сессии и проверка источника сохраняются.
+Приложение `me.quiby.galinka` работает на Android 7+ (API 24), целевая версия — Android 16 / API 36. Интерфейс включён в APK; сервер сообщений — `https://mess.quiby.me/messenger`. Локальный HTTPS-origin совпадает с `APP_ORIGIN=https://mess.quiby.me`. `MainActivity` пропускает `/messenger` в настоящую сеть, остальные пути обслуживаются из APK. Поэтому API, SSE и вложения не подменяются локальным HTML, а HttpOnly/SameSite-сессии и проверка источника сохраняются.
 
 ## Сборка
 
@@ -11,7 +11,7 @@ npm ci
 npm run android:build
 ```
 
-Результат — `release/Galinka-0.3.0-android-debug.apk`. Для распространения используйте подписанную release-сборку:
+Результат — `release/Galinka-0.3.1-android-debug.apk`. Для распространения используйте подписанную release-сборку:
 
 ```sh
 export GALINKA_KEYSTORE=/absolute/path/galinka-release.jks
@@ -44,3 +44,11 @@ docker compose -f compose.yml -f compose.edge.yml -f compose.push.yml up -d --bu
 GitHub Actions → Android APK собирает APK вручную. Без signing secrets создаётся debug-артефакт. Для release задайте `ANDROID_KEYSTORE_BASE64`, `ANDROID_STORE_PASSWORD`; необязательный `GOOGLE_SERVICES_JSON` содержит клиентскую конфигурацию Firebase. Ключ сервисного аккаунта хранится только на сервере.
 
 Документация: [Capacitor / Firebase](https://capacitorjs.com/docs/guides/push-notifications-firebase), [Firebase Admin](https://firebase.google.com/docs/admin/setup).
+
+## Ключ начиная с 0.3.1
+
+Прежний ключ 0.3.0 недоступен. Для 0.3.1 создан новый постоянный ключ. При переходе с 0.3.0 удалите старое приложение, установите новый APK и войдите снова. Аккаунты и сообщения хранятся на сервере. Дальнейшие версии подписываются этим же новым ключом.
+
+Локальная копия: `.secrets/galinka-release.jks` и `.secrets/android-signing.json`, права 0600. Защищённая резервная копия хранится в `.secrets/android-signing-backup` на сервере Galinka. Для CI используются зашифрованные GitHub Actions Secrets `ANDROID_KEYSTORE_BASE64` и `ANDROID_STORE_PASSWORD`. Не коммитьте и не отправляйте эти файлы в чат.
+
+`./gradlew connectedDebugAndroidTest` из `android/` проверяет на устройстве/эмуляторе, что встроенный WebView получает настоящий JSON `/messenger/health` и ответ 401 `/messenger/me` без входа. Проверка не создаёт пользователей и сообщений. Она автоматически выполняется перед публикацией APK.

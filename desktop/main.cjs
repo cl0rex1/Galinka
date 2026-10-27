@@ -25,7 +25,11 @@ async function serveBundledApp() {
   };
   protocol.handle('https', async (request) => {
     const url = new URL(request.url);
-    if (url.origin !== new URL(APP_URL).origin)
+    if (
+      url.origin !== new URL(APP_URL).origin ||
+      url.pathname === '/messenger' ||
+      url.pathname.startsWith('/messenger/')
+    )
       return net.fetch(request, { bypassCustomProtocolHandlers: true });
     try {
       let file = path.resolve(root, '.' + decodeURIComponent(url.pathname));
@@ -41,7 +45,7 @@ async function serveBundledApp() {
         headers: {
           'Content-Type': types[path.extname(file)] || 'application/octet-stream',
           'Content-Security-Policy':
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self' https://api.quiby.me; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
         },
       });
     } catch {

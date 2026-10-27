@@ -61,7 +61,7 @@ test('landing provides downloads and installation instructions', async ({ page }
 });
 test('web update check reports the installed release', async ({ page }) => {
   await page.route('**/api/version', (route) =>
-    route.fulfill({ json: { version: '0.3.0', build: '0.3.0' } }),
+    route.fulfill({ json: { version: '0.3.1', build: '0.3.1' } }),
   );
   await page.goto('/?demo=1');
   await page

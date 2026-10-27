@@ -1,6 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
-// Match APP_ORIGIN so the existing HttpOnly, SameSite=strict sessions also work in Android.
+// MainActivity sends /messenger to HTTPS while serving the UI from bundled assets.
+// Keeping APP_ORIGIN preserves HttpOnly, SameSite=strict sessions without extra CORS origins.
 const config: CapacitorConfig = {
   appId: 'me.quiby.galinka',
   appName: 'Galinka',

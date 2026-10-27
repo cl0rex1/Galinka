@@ -1,6 +1,7 @@
 name: Android APK
 on:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -38,6 +39,16 @@ jobs:
           else
             npm run android:build
           fi
+      - name: Enable emulator acceleration
+        run: sudo chmod 666 /dev/kvm
+      - name: Verify bundled Android UI can reach the real API
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_2
+          script: cd android && ./gradlew connectedDebugAndroidTest --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
