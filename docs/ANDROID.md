@@ -51,4 +51,4 @@ GitHub Actions → Android APK собирает APK вручную. Без signi
 
 Локальная копия: `.secrets/galinka-release.jks` и `.secrets/android-signing.json`, права 0600. Защищённая резервная копия хранится в `.secrets/android-signing-backup` на сервере Galinka. Для CI используются зашифрованные GitHub Actions Secrets `ANDROID_KEYSTORE_BASE64` и `ANDROID_STORE_PASSWORD`. Не коммитьте и не отправляйте эти файлы в чат.
 
-`./gradlew connectedDebugAndroidTest` из `android/` проверяет на устройстве/эмуляторе, что встроенный WebView получает настоящий JSON `/messenger/health` и ответ 401 `/messenger/me` без входа. Проверка не создаёт пользователей и сообщений. Она автоматически выполняется перед публикацией APK.
+`./gradlew :app:connectedDebugAndroidTest` из `android/` проверяет на устройстве/эмуляторе, что встроенный WebView получает настоящий JSON `/messenger/health` и ответ 401 `/messenger/me` без входа. Проверка не создаёт пользователей и сообщений. Она автоматически выполняется перед публикацией APK.
