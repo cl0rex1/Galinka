@@ -32,17 +32,17 @@
 
 Скачайте установщик в [GitHub Releases](https://github.com/cl0rex1/Galinka/releases/latest):
 
-- **Android 7+:** `Galinka-0.4.0-android-release.apk`.
-- **Windows x64:** `Galinka-0.4.0-win-x64.exe` (NSIS, без сертификата Microsoft).
+- **Android 7+:** `Galinka-0.4.1-android-release.apk`.
+- **Windows x64:** `Galinka-0.4.1-win-x64.exe` (NSIS, без сертификата Microsoft).
 - **Arch Linux x64:** пакет `.pkg.tar.zst`:
 
 ```sh
-sudo pacman -U ./Galinka-0.4.0-arch-x64.pkg.tar.zst
+sudo pacman -U ./Galinka-0.4.1-arch-x64.pkg.tar.zst
 ```
 
 Arch использует `electron44` из репозитория; обновления приложения устанавливаются через pacman. Рецепт makepkg — [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD). Linux AppImage/DEB и macOS DMG/ZIP собирает workflow Desktop release. На iPhone доступна PWA: Safari → «Поделиться» → «На экран Домой».
 
-**Android Push подключён к Firebase:** установите APK 0.4.0+, войдите в аккаунт и включите «Настройки → Уведомления». Android должен разрешить уведомления. Настройка и обслуживание — [docs/ANDROID.md](docs/ANDROID.md). Фоновые уведомления веб-версии и закрытого настольного приложения не реализованы.
+**Android Push подключён к Firebase:** установите APK 0.4.1+, войдите в аккаунт и включите «Настройки → Уведомления». Android должен разрешить уведомления. Настройка и обслуживание — [docs/ANDROID.md](docs/ANDROID.md). Фоновые уведомления веб-версии и закрытого настольного приложения не реализованы.
 
 ## Сервер
 

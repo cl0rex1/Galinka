@@ -1,3 +1,13 @@
+// Empty optional signing secrets must not be treated as certificate paths.
+for (const key of [
+  'CSC_LINK',
+  'CSC_KEY_PASSWORD',
+  'APPLE_ID',
+  'APPLE_APP_SPECIFIC_PASSWORD',
+  'APPLE_TEAM_ID',
+]) {
+  if (!process.env[key]?.trim()) delete process.env[key];
+}
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
