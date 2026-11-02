@@ -22,3 +22,5 @@ dist-desktop
 *.keystore
 firebase-service-account*.json
 compose.casaos.yml
+
+.deploy/

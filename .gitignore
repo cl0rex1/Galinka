@@ -23,3 +23,5 @@ compose.casaos.yml
 
 # Microsoft Office temporary lock files
 ~$*
+
+.deploy/
