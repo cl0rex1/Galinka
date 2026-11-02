@@ -75,21 +75,8 @@ jobs:
         with:
           name: android-apk
           path: release
-      - name: Verify release APK and write checksums
-        run: |
-          test -n "$(find release -name '*-android-release.apk' -print -quit)"
-          cd release
-          sha256sum * > SHA256SUMS
-      - name: Publish installers and update manifests
+      - name: Publish complete release
+        run: node scripts/publish-release.mjs
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --draft --verify-tag --title "Galinka $RELEASE_TAG" --notes-file docs/RELEASE.md
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[].name' > /tmp/galinka-assets.txt
-          for artifact in release/*; do
-            if ! grep -Fxq "$(basename "$artifact")" /tmp/galinka-assets.txt; then
-              gh release upload "$RELEASE_TAG" "$artifact"
-            fi
-          done
-          gh release edit "$RELEASE_TAG" --draft=false --latest
