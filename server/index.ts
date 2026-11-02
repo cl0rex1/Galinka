@@ -4,7 +4,7 @@ import helmet from 'helmet';
 import multer from 'multer';
 import { Pool, Client, type PoolClient } from 'pg';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFile, mkdir, unlink } from 'node:fs/promises';
+import { readFile, mkdir, unlink, open } from 'node:fs/promises';
 import path from 'node:path';
 import { z, ZodError } from 'zod';
 import { digest, hashPassword, verifyPassword, readCookie } from './security.js';
@@ -13,6 +13,10 @@ import { pushEnabled, startPushWorker } from './push.js';
 
 const production = process.env.NODE_ENV === 'production';
 const origin = process.env.APP_ORIGIN || 'http://localhost:5173';
+const publicApiOrigin = process.env.PUBLIC_API_ORIGIN
+  ? new URL(process.env.PUBLIC_API_ORIGIN).origin
+  : undefined;
+const apiOrigins = publicApiOrigin ? [publicApiOrigin] : [];
 const inviteCode = process.env.INVITE_CODE || '';
 if (inviteCode.length < 12)
   throw Error('Set INVITE_CODE to a random string of at least 12 characters.');
@@ -81,11 +85,9 @@ app.use(
         'script-src': ["'self'"],
         'style-src': ["'self'", "'unsafe-inline'"],
         'font-src': ["'self'"],
-        'img-src': ["'self'", 'blob:', 'data:'],
-        'connect-src': [
-          "'self'",
-          ...(process.env.PUBLIC_API_ORIGIN ? [new URL(process.env.PUBLIC_API_ORIGIN).origin] : []),
-        ],
+        'img-src': ["'self'", 'blob:', 'data:', ...apiOrigins],
+        'media-src': ["'self'", 'blob:', ...apiOrigins],
+        'connect-src': ["'self'", ...apiOrigins],
         'object-src': ["'none'"],
         'upgrade-insecure-requests': production && origin.startsWith('https:') ? [] : null,
       },
@@ -136,7 +138,7 @@ const credentials = z.object({
     .regex(/^[a-z0-9_]{3,24}$/),
   password: z.string().min(10).max(128),
 });
-const personSQL = `id, username, name, color`;
+const personSQL = `id, username, name, color, role`;
 class HttpError extends Error {
   constructor(
     public status: number,
@@ -148,13 +150,13 @@ class HttpError extends Error {
 const requireValue = (condition: unknown, status: number, message: string) => {
   if (!condition) throw new HttpError(status, message);
 };
-type User = { id: string; username: string; name: string; color: number };
+type User = { id: string; username: string; name: string; color: number; role: 'admin' | 'user' };
 type AuthedRequest = Request & { user: User; sessionToken: string };
 async function auth(req: Request, res: Response, next: NextFunction) {
   try {
     const token = digest(readCookie(req.headers.cookie));
     const { rows } = await pool.query(
-      `SELECT u.id,u.username,u.name,u.color FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>now()`,
+      `SELECT u.id,u.username,u.name,u.color,u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>now() AND NOT u.blocked`,
       [token],
     );
     if (!rows[0]) {
@@ -168,6 +170,10 @@ async function auth(req: Request, res: Response, next: NextFunction) {
   }
 }
 const user = (req: Request) => (req as AuthedRequest).user;
+function admin(req: Request, _res: Response, next: NextFunction) {
+  requireValue(user(req).role === 'admin', 403, 'Доступ только для администратора.');
+  next();
+}
 async function member(chatId: string, userId: string, db: Pool | PoolClient = pool) {
   const { rows } = await db.query(
     'SELECT c.* FROM chats c JOIN members m ON m.chat_id=c.id WHERE c.id=$1 AND m.user_id=$2',
@@ -175,6 +181,12 @@ async function member(chatId: string, userId: string, db: Pool | PoolClient = po
   );
   requireValue(rows[0], 404, 'Чат не найден.');
   return rows[0];
+}
+// Membership changes and mutations share the chat lock, so a removed member cannot
+// commit a message or upload after a concurrent removal has completed.
+async function lockedMember(chatId: string, userId: string, db: PoolClient) {
+  await db.query('SELECT id FROM chats WHERE id=$1 FOR UPDATE', [uuid.parse(chatId)]);
+  return member(chatId, userId, db);
 }
 async function transaction<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
   const db = await pool.connect();
@@ -190,8 +202,15 @@ async function transaction<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
     db.release();
   }
 }
-async function notify(db: Pool | PoolClient, chatId: string, deletedId?: string) {
-  await db.query("SELECT pg_notify('galinka', $1)", [JSON.stringify({ chatId, deletedId })]);
+async function notify(
+  db: Pool | PoolClient,
+  chatId: string,
+  deletedId?: string,
+  removedUserId?: string,
+) {
+  await db.query("SELECT pg_notify('galinka', $1)", [
+    JSON.stringify({ chatId, deletedId, removedUserId }),
+  ]);
 }
 const secure =
   process.env.COOKIE_SECURE === 'true' || (production && process.env.COOKIE_SECURE !== 'false');
@@ -277,21 +296,18 @@ app.get('/api/downloads', async (_req, res) => {
     res.status(503).json({ error: 'Не удалось проверить сборки. Попробуйте позже.' });
   }
 });
-app.post('/api/auth/register', authLimit, async (req, res) => {
-  const data = credentials
-    .extend({ name: z.string().trim().min(1).max(40), invite: z.string().max(200) })
-    .parse(req.body);
-  requireValue(
-    timingSafeEqual(Buffer.from(digest(data.invite)), Buffer.from(digest(inviteCode))),
-    403,
-    'Код приглашения не подошёл. Попросите его у владельца сервера.',
-  );
+async function createAccount(data: {
+  username: string;
+  name: string;
+  password: string;
+  role?: 'admin' | 'user';
+}) {
   const id = randomUUID(),
     password = await hashPassword(data.password);
-  const account = await transaction(async (db) => {
+  return transaction(async (db) => {
     const { rows } = await db.query(
-      `INSERT INTO users(id,username,name,password,color) VALUES($1,$2,$3,$4,$5) RETURNING ${personSQL}`,
-      [id, data.username, data.name, password, Math.floor(Math.random() * 6)],
+      `INSERT INTO users(id,username,name,password,color,role) VALUES($1,$2,$3,$4,$5,$6) RETURNING ${personSQL}`,
+      [id, data.username, data.name, password, Math.floor(Math.random() * 6), data.role || 'user'],
     );
     const chatId = randomUUID();
     await db.query(
@@ -307,7 +323,18 @@ app.post('/api/auth/register', authLimit, async (req, res) => {
     ]);
     return rows[0];
   });
-  await session(res, id);
+}
+app.post('/api/auth/register', authLimit, async (req, res) => {
+  const data = credentials
+    .extend({ name: z.string().trim().min(1).max(40), invite: z.string().max(200) })
+    .parse(req.body);
+  requireValue(
+    timingSafeEqual(Buffer.from(digest(data.invite)), Buffer.from(digest(inviteCode))),
+    403,
+    'Код приглашения не подошёл. Попросите его у владельца сервера.',
+  );
+  const account = await createAccount(data);
+  await session(res, account.id);
   res.status(201).json(account);
 });
 app.post('/api/auth/login', authLimit, async (req, res) => {
@@ -319,9 +346,10 @@ app.post('/api/auth/login', authLimit, async (req, res) => {
     account?.password || '00000000000000000000000000000000:' + '0'.repeat(128),
   );
   requireValue(account && valid, 401, 'Логин или пароль не подошли.');
+  requireValue(!account.blocked, 403, 'Аккаунт заблокирован. Обратитесь к администратору.');
   await session(res, account.id);
-  const { id, username, name, color } = account;
-  res.json({ id, username, name, color });
+  const { id, username, name, color, role } = account;
+  res.json({ id, username, name, color, role });
 });
 app.post('/api/auth/logout', auth, async (req, res) => {
   const token = (req as AuthedRequest).sessionToken;
@@ -342,20 +370,130 @@ app.patch('/api/me', auth, async (req, res) => {
 app.get('/api/users', auth, async (req, res) => {
   const q = z.string().trim().min(2).max(40).parse(req.query.q);
   const { rows } = await pool.query(
-    `SELECT ${personSQL} FROM users WHERE id<>$1 AND (strpos(lower(name),lower($2))>0 OR strpos(username,lower($2))>0) ORDER BY username LIMIT 20`,
+    `SELECT ${personSQL} FROM users WHERE id<>$1 AND NOT blocked AND (strpos(lower(name),lower($2))>0 OR strpos(username,lower($2))>0) ORDER BY username LIMIT 20`,
     [user(req).id, q],
   );
   res.json(rows);
 });
+const pageQuery = z.coerce.number().int().min(1).max(100000).default(1);
+const accountFields = credentials.extend({
+  name: z.string().trim().min(1).max(40),
+  role: z.enum(['admin', 'user']).default('user'),
+});
+app.get('/api/admin/users', auth, admin, async (req, res) => {
+  const q = z.string().trim().max(40).default('').parse(req.query.q);
+  const page = pageQuery.parse(req.query.page);
+  const where = 'strpos(lower(name),lower($1))>0 OR strpos(username,lower($1))>0';
+  const { rows } = await pool.query(
+    `SELECT ${personSQL},blocked,created_at FROM users WHERE ${where} ORDER BY created_at,id LIMIT 50 OFFSET $2`,
+    [q, (page - 1) * 50],
+  );
+  const count = await pool.query(`SELECT count(*)::int AS total FROM users WHERE ${where}`, [q]);
+  res.json({ items: rows, total: count.rows[0].total, page });
+});
+app.post('/api/admin/users', auth, admin, async (req, res) => {
+  res.status(201).json(await createAccount(accountFields.parse(req.body)));
+});
+app.patch('/api/admin/users/:id', auth, admin, async (req, res) => {
+  const id = uuid.parse(req.params.id);
+  const data = accountFields
+    .partial()
+    .extend({ role: z.enum(['admin', 'user']).optional(), blocked: z.boolean().optional() })
+    .strict()
+    .parse(req.body);
+  const password = data.password === undefined ? undefined : await hashPassword(data.password);
+  const account = await transaction(async (db) => {
+    // Serialize role/block changes so concurrent requests cannot remove the last active admin.
+    await db.query('SELECT pg_advisory_xact_lock(648292)');
+    const actor = await db.query(
+      "SELECT 1 FROM users WHERE id=$1 AND role='admin' AND NOT blocked",
+      [user(req).id],
+    );
+    requireValue(actor.rowCount, 403, 'Права администратора изменились. Войдите снова.');
+    const { rows } = await db.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [id]);
+    requireValue(rows[0], 404, 'Пользователь не найден.');
+    const current = rows[0];
+    if (
+      current.role === 'admin' &&
+      !current.blocked &&
+      (data.role === 'user' || data.blocked === true)
+    ) {
+      const others = await db.query(
+        "SELECT 1 FROM users WHERE role='admin' AND NOT blocked AND id<>$1 LIMIT 1",
+        [id],
+      );
+      requireValue(others.rowCount, 409, 'Нельзя отключить последнего активного администратора.');
+    }
+    const result = await db.query(
+      `UPDATE users SET username=COALESCE($1,username),name=COALESCE($2,name),role=COALESCE($3,role),blocked=COALESCE($4,blocked),password=COALESCE($5,password) WHERE id=$6 RETURNING ${personSQL},blocked,created_at`,
+      [data.username, data.name, data.role, data.blocked, password, id],
+    );
+    if (
+      data.blocked === true ||
+      password !== undefined ||
+      (data.role !== undefined && data.role !== current.role)
+    ) {
+      await db.query('DELETE FROM sessions WHERE user_id=$1', [id]);
+      await db.query("SELECT pg_notify('galinka',$1)", [JSON.stringify({ revokedUserId: id })]);
+    }
+    return result.rows[0];
+  });
+  res.json(account);
+});
+const announcementFields = z.object({
+  title: z.string().trim().min(1).max(120),
+  body: z.string().trim().min(1).max(10000),
+  published: z.boolean().default(false),
+});
+async function announcements(req: Request, res: Response, all: boolean) {
+  const page = pageQuery.parse(req.query.page);
+  const where = all ? 'true' : 'published';
+  const { rows } = await pool.query(
+    `SELECT id,title,body,published,author_id,created_at,updated_at FROM announcements WHERE ${where} ORDER BY updated_at DESC,id DESC LIMIT 50 OFFSET $1`,
+    [(page - 1) * 50],
+  );
+  const count = await pool.query(`SELECT count(*)::int AS total FROM announcements WHERE ${where}`);
+  res.json({ items: rows, total: count.rows[0].total, page });
+}
+app.get('/api/announcements', auth, (req, res) => announcements(req, res, false));
+app.get('/api/admin/announcements', auth, admin, (req, res) => announcements(req, res, true));
+app.post('/api/admin/announcements', auth, admin, async (req, res) => {
+  const data = announcementFields.parse(req.body);
+  const { rows } = await pool.query(
+    'INSERT INTO announcements(id,title,body,published,author_id) VALUES($1,$2,$3,$4,$5) RETURNING *',
+    [randomUUID(), data.title, data.body, data.published, user(req).id],
+  );
+  res.status(201).json(rows[0]);
+});
+app.patch('/api/admin/announcements/:id', auth, admin, async (req, res) => {
+  const data = announcementFields
+    .partial()
+    .extend({ published: z.boolean().optional() })
+    .strict()
+    .parse(req.body);
+  const { rows } = await pool.query(
+    'UPDATE announcements SET title=COALESCE($1,title),body=COALESCE($2,body),published=COALESCE($3,published),updated_at=now() WHERE id=$4 RETURNING *',
+    [data.title, data.body, data.published, uuid.parse(req.params.id)],
+  );
+  requireValue(rows[0], 404, 'Объявление не найдено.');
+  res.json(rows[0]);
+});
+app.delete('/api/admin/announcements/:id', auth, admin, async (req, res) => {
+  const result = await pool.query('DELETE FROM announcements WHERE id=$1', [
+    uuid.parse(req.params.id),
+  ]);
+  requireValue(result.rowCount, 404, 'Объявление не найдено.');
+  res.json({ ok: true });
+});
 app.get('/api/chats', auth, async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,m.read_at,
+    `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,m.read_at,m.pinned,m.muted,m.archived,
  CASE WHEN c.kind='direct' THEN (SELECT u.name FROM members mm JOIN users u ON u.id=mm.user_id WHERE mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) ELSE c.title END AS title,
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
  (SELECT row_to_json(u) FROM (SELECT u.id,u.name,u.username,u.color FROM members mm JOIN users u ON u.id=mm.user_id WHERE mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) u) AS peer,
  (SELECT row_to_json(msg) FROM (SELECT body,created_at,sender_id,file_id FROM messages WHERE chat_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) msg) AS last_message,
  (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread
- FROM chats c JOIN members m ON m.chat_id=c.id WHERE m.user_id=$1 ORDER BY COALESCE((SELECT max(created_at) FROM messages WHERE chat_id=c.id),c.created_at) DESC`,
+ FROM chats c JOIN members m ON m.chat_id=c.id WHERE m.user_id=$1 ORDER BY m.pinned DESC,COALESCE((SELECT max(created_at) FROM messages WHERE chat_id=c.id),c.created_at) DESC,c.id`,
     [user(req).id],
   );
   res.json(rows);
@@ -375,6 +513,11 @@ app.post('/api/chats', auth, async (req, res) => {
     'Укажите название группы или собеседника.',
   );
   const id = await transaction(async (db) => {
+    const available = await db.query(
+      'SELECT id FROM users WHERE id=ANY($1::uuid[]) AND NOT blocked',
+      [ids],
+    );
+    requireValue(available.rowCount === ids.length, 400, 'Один из пользователей недоступен.');
     const key = data.kind === 'direct' ? [...ids].sort().join(':') : null;
     const { rows } = await db.query(
       `INSERT INTO chats(id,kind,title,owner_id,direct_key) VALUES($1,$2,$3,$4,$5) ON CONFLICT(direct_key) DO UPDATE SET direct_key=EXCLUDED.direct_key RETURNING id`,
@@ -393,48 +536,161 @@ app.post('/api/chats', auth, async (req, res) => {
 });
 app.get('/api/chats/:id/members', auth, async (req, res) => {
   await member(String(req.params.id), user(req).id);
+  // Recheck access in the data snapshot in case membership changed after the 404 check.
   const { rows } = await pool.query(
-    'SELECT u.id,u.name,u.username,u.color FROM members m JOIN users u ON u.id=m.user_id WHERE m.chat_id=$1 ORDER BY u.name',
-    [req.params.id],
+    `SELECT u.id,u.name,u.username,u.color FROM members m JOIN users u ON u.id=m.user_id
+     WHERE m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) ORDER BY u.name`,
+    [req.params.id, user(req).id],
   );
   res.json(rows);
 });
 app.patch('/api/chats/:id', auth, async (req, res) => {
-  const chat = await member(String(req.params.id), user(req).id);
-  requireValue(chat.owner_id === user(req).id, 403, 'Настройки меняет создатель чата.');
   const data = z
-    .object({ nelya: z.boolean().optional(), title: z.string().trim().min(1).max(70).optional() })
+    .object({
+      nelya: z.boolean().optional(),
+      title: z.string().trim().min(1).max(70).optional(),
+      ownerId: uuid.optional(),
+    })
+    .strict()
+    .refine((value) => Object.keys(value).length > 0)
     .parse(req.body);
-  requireValue(
-    data.title === undefined || chat.kind === 'group',
-    400,
-    'Переименовать можно только группу.',
-  );
-  await pool.query(
-    'UPDATE chats SET nelya=COALESCE($1,nelya),title=COALESCE($2,title) WHERE id=$3',
-    [data.nelya, data.title, chat.id],
-  );
-  await notify(pool, chat.id);
+  await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    requireValue(chat.owner_id === user(req).id, 403, 'Настройки меняет создатель чата.');
+    requireValue(
+      data.title === undefined || chat.kind === 'group',
+      400,
+      'Переименовать можно только группу.',
+    );
+    if (data.ownerId) {
+      requireValue(chat.kind === 'group', 400, 'Передать владение можно только группой.');
+      const target = await db.query(
+        'SELECT 1 FROM members m JOIN users u ON u.id=m.user_id WHERE m.chat_id=$1 AND m.user_id=$2 AND NOT u.blocked',
+        [chat.id, data.ownerId],
+      );
+      requireValue(target.rowCount, 400, 'Новый владелец должен быть участником группы.');
+    }
+    await db.query(
+      'UPDATE chats SET nelya=COALESCE($1,nelya),title=COALESCE($2,title),owner_id=COALESCE($3,owner_id) WHERE id=$4',
+      [data.nelya, data.title, data.ownerId, chat.id],
+    );
+    await notify(db, chat.id);
+  });
+  res.json({ ok: true });
+});
+app.patch('/api/chats/:id/preferences', auth, async (req, res) => {
+  const data = z
+    .object({
+      pinned: z.boolean().optional(),
+      muted: z.boolean().optional(),
+      archived: z.boolean().optional(),
+    })
+    .strict()
+    .refine((value) => Object.keys(value).length > 0)
+    .parse(req.body);
+  await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    await db.query(
+      'UPDATE members SET pinned=COALESCE($1,pinned),muted=COALESCE($2,muted),archived=COALESCE($3,archived) WHERE chat_id=$4 AND user_id=$5',
+      [data.pinned, data.muted, data.archived, chat.id, user(req).id],
+    );
+    await notify(db, chat.id);
+  });
+  res.json({ ok: true });
+});
+app.post('/api/chats/:id/members', auth, async (req, res) => {
+  const { userIds } = z
+    .object({ userIds: z.array(uuid).min(1).max(99) })
+    .strict()
+    .parse(req.body);
+  await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    requireValue(
+      chat.kind === 'group' && chat.owner_id === user(req).id,
+      403,
+      'Участников добавляет владелец группы.',
+    );
+    const ids = [...new Set<string>(userIds)];
+    const available = await db.query(
+      'SELECT id FROM users WHERE id=ANY($1::uuid[]) AND NOT blocked',
+      [ids],
+    );
+    requireValue(available.rowCount === ids.length, 400, 'Один из пользователей недоступен.');
+    const size = await db.query(
+      'SELECT count(*)::int AS n FROM (SELECT user_id FROM members WHERE chat_id=$1 UNION SELECT unnest($2::uuid[])) people',
+      [chat.id, ids],
+    );
+    requireValue(size.rows[0].n <= 100, 400, 'В группе может быть до 100 участников.');
+    await db.query(
+      'INSERT INTO members(chat_id,user_id) SELECT $1,unnest($2::uuid[]) ON CONFLICT DO NOTHING',
+      [chat.id, ids],
+    );
+    await notify(db, chat.id);
+  });
+  res.json({ ok: true });
+});
+app.delete('/api/chats/:id/members/:userId', auth, async (req, res) => {
+  const targetId = uuid.parse(req.params.userId);
+  const removedFiles = await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    requireValue(chat.kind === 'group', 400, 'Выйти можно только из группы.');
+    requireValue(
+      targetId === user(req).id || chat.owner_id === user(req).id,
+      403,
+      'Участников удаляет владелец группы.',
+    );
+    const target = await db.query('SELECT 1 FROM members WHERE chat_id=$1 AND user_id=$2', [
+      chat.id,
+      targetId,
+    ]);
+    requireValue(target.rowCount, 404, 'Участник не найден.');
+    if (targetId === chat.owner_id) {
+      const size = await db.query('SELECT count(*)::int AS n FROM members WHERE chat_id=$1', [
+        chat.id,
+      ]);
+      requireValue(size.rows[0].n === 1, 409, 'Сначала передайте владение другому участнику.');
+      const files = await db.query('SELECT id FROM files WHERE chat_id=$1', [chat.id]);
+      await db.query('DELETE FROM chats WHERE id=$1', [chat.id]);
+      await notify(db, chat.id, undefined, targetId);
+      return files.rows.map((file) => file.id as string);
+    }
+    await db.query('DELETE FROM members WHERE chat_id=$1 AND user_id=$2', [chat.id, targetId]);
+    // A removed participant must not regain access using a previously issued link.
+    await db.query('DELETE FROM invites WHERE chat_id=$1', [chat.id]);
+    await notify(db, chat.id, undefined, targetId);
+    return [];
+  });
+  await Promise.all(removedFiles.map((id) => unlink(path.join(directory, id)).catch(() => {})));
   res.json({ ok: true });
 });
 app.post('/api/chats/:id/read', auth, async (req, res) => {
   await member(String(req.params.id), user(req).id);
   const { lastMessageId } = z.object({ lastMessageId: uuid }).parse(req.body);
-  await pool.query(
-    'UPDATE members SET read_at=GREATEST(read_at,COALESCE((SELECT created_at FROM messages WHERE id=$3 AND chat_id=$1),read_at)) WHERE chat_id=$1 AND user_id=$2',
-    [req.params.id, user(req).id, lastMessageId],
-  );
+  await transaction(async (db) => {
+    const updated = await db.query(
+      `UPDATE members SET read_at=GREATEST(members.read_at,msg.created_at),receipt_at=msg.created_at
+       FROM messages msg WHERE members.chat_id=$1 AND members.user_id=$2 AND msg.id=$3 AND msg.chat_id=$1
+       AND (members.receipt_at IS NULL OR members.receipt_at<msg.created_at)`,
+      [req.params.id, user(req).id, lastMessageId],
+    );
+    if (updated.rowCount)
+      await db.query("SELECT pg_notify('galinka', $1)", [
+        JSON.stringify({ type: 'read', chatId: String(req.params.id) }),
+      ]);
+  });
   res.json({ ok: true });
 });
 app.post('/api/chats/:id/invite', auth, async (req, res) => {
-  const chat = await member(String(req.params.id), user(req).id);
-  requireValue(
-    chat.kind === 'group' && chat.owner_id === user(req).id,
-    403,
-    'Приглашение создаёт владелец группы.',
-  );
   const token = randomBytes(24).toString('base64url');
-  await pool.query('INSERT INTO invites(token,chat_id) VALUES($1,$2)', [digest(token), chat.id]);
+  await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    requireValue(
+      chat.kind === 'group' && chat.owner_id === user(req).id,
+      403,
+      'Приглашение создаёт владелец группы.',
+    );
+    await db.query('INSERT INTO invites(token,chat_id) VALUES($1,$2)', [digest(token), chat.id]);
+  });
   res.json({ url: `${origin}/app?join=${token}` });
 });
 app.post('/api/join', auth, async (req, res) => {
@@ -446,8 +702,22 @@ app.post('/api/join', auth, async (req, res) => {
     );
     requireValue(rows[0], 404, 'Приглашение истекло или не существует.');
     const id = rows[0].chat_id;
+    // The chat lock may have waited behind a removal which revoked this link.
+    const valid = await db.query(
+      'SELECT 1 FROM invites WHERE token=$1 AND chat_id=$2 AND expires_at>now()',
+      [digest(token), id],
+    );
+    requireValue(valid.rowCount, 404, 'Приглашение истекло или не существует.');
     const size = await db.query('SELECT count(*)::int AS n FROM members WHERE chat_id=$1', [id]);
-    requireValue(size.rows[0].n < 100, 400, 'В MVP группа ограничена 100 участниками.');
+    const existing = await db.query('SELECT 1 FROM members WHERE chat_id=$1 AND user_id=$2', [
+      id,
+      user(req).id,
+    ]);
+    requireValue(
+      existing.rowCount || size.rows[0].n < 100,
+      400,
+      'В группе может быть до 100 участников.',
+    );
     await db.query('INSERT INTO members(chat_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [
       id,
       user(req).id,
@@ -457,28 +727,58 @@ app.post('/api/join', auth, async (req, res) => {
   });
   res.json({ id });
 });
-const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.nonce,
+const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.nonce,
  CASE WHEN u.id IS NULL THEN json_build_object('id','nelya','name','Неля','username','nelya','color',5) ELSE json_build_object('id',u.id,'name',u.name,'username',u.username,'color',u.color) END AS sender,
- CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size) END AS file,
+ CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file,
+ CASE WHEN replied.id IS NULL THEN NULL ELSE json_build_object('id',replied.id,'body',replied.body,'sender',json_build_object('id',COALESCE(reply_user.id::text,'nelya'),'name',COALESCE(reply_user.name,'Неля')),'file_name',reply_file.name) END AS reply,
+ (SELECT count(*)::int FROM members reader WHERE reader.chat_id=m.chat_id AND reader.user_id IS DISTINCT FROM m.sender_id AND reader.receipt_at>=m.created_at) AS read_by,
  COALESCE((SELECT json_agg(r) FROM (SELECT emoji,count(*)::int AS count,bool_or(user_id=$2) AS mine FROM reactions WHERE message_id=m.id GROUP BY emoji ORDER BY emoji) r),'[]') AS reactions
- FROM messages m LEFT JOIN users u ON u.id=m.sender_id LEFT JOIN files f ON f.id=m.file_id`;
+ FROM messages m LEFT JOIN users u ON u.id=m.sender_id LEFT JOIN files f ON f.id=m.file_id
+ LEFT JOIN messages replied ON replied.id=m.reply_to_id AND replied.chat_id=m.chat_id
+ LEFT JOIN users reply_user ON reply_user.id=replied.sender_id LEFT JOIN files reply_file ON reply_file.id=replied.file_id`;
 app.get('/api/chats/:id/messages', auth, async (req, res) => {
   await member(String(req.params.id), user(req).id);
   const q = z.string().trim().max(100).optional().parse(req.query.q);
   const before = uuid.optional().parse(req.query.before);
   const { rows } = await pool.query(
-    `${messageSQL} WHERE m.chat_id=$1 AND ($3::text IS NULL OR strpos(lower(m.body),lower($3))>0) AND ($4::uuid IS NULL OR (m.created_at,m.id)<(SELECT created_at,id FROM messages WHERE id=$4 AND chat_id=$1)) ORDER BY m.created_at DESC,m.id DESC LIMIT 60`,
+    `${messageSQL} WHERE m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) AND ($3::text IS NULL OR strpos(lower(m.body),lower($3))>0) AND ($4::uuid IS NULL OR (m.created_at,m.id)<(SELECT created_at,id FROM messages WHERE id=$4 AND chat_id=$1)) ORDER BY m.created_at DESC,m.id DESC LIMIT 60`,
     [req.params.id, user(req).id, q || null, before || null],
   );
   res.json(rows.reverse());
 });
 app.post('/api/chats/:id/messages', auth, async (req, res) => {
   const data = z
-    .object({ body: z.string().trim().max(8000).default(''), fileId: uuid.optional(), nonce: uuid })
+    .object({
+      body: z.string().trim().max(8000).default(''),
+      fileId: uuid.optional(),
+      nonce: uuid,
+      replyTo: uuid.optional(),
+    })
     .parse(req.body);
   requireValue(data.body || data.fileId, 400, 'Напишите сообщение или выберите файл.');
   const id = await transaction(async (db) => {
-    const chat = await member(String(req.params.id), user(req).id, db);
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    // Resolve retries before checking references: the replied-to message might have
+    // been deleted after this message was already committed and its response lost.
+    const existing = await db.query(
+      'SELECT id,chat_id FROM messages WHERE sender_id=$1 AND nonce=$2',
+      [user(req).id, data.nonce],
+    );
+    if (existing.rows[0]) {
+      requireValue(
+        existing.rows[0].chat_id === chat.id,
+        409,
+        'Идентификатор сообщения уже использован.',
+      );
+      return existing.rows[0].id;
+    }
+    if (data.replyTo) {
+      const target = await db.query('SELECT id FROM messages WHERE id=$1 AND chat_id=$2', [
+        data.replyTo,
+        chat.id,
+      ]);
+      requireValue(target.rowCount, 400, 'Сообщение для ответа не найдено в этом чате.');
+    }
     if (data.fileId) {
       const { rows } = await db.query(
         'SELECT id FROM files WHERE id=$1 AND chat_id=$2 AND user_id=$3',
@@ -487,8 +787,8 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       requireValue(rows[0], 400, 'Файл недоступен.');
     }
     const { rows } = await db.query(
-      'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(sender_id,nonce) DO NOTHING RETURNING id',
-      [randomUUID(), chat.id, user(req).id, data.body, data.fileId, data.nonce],
+      'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(sender_id,nonce) DO NOTHING RETURNING id',
+      [randomUUID(), chat.id, user(req).id, data.body, data.fileId, data.nonce, data.replyTo],
     );
     if (rows[0]) {
       if (pushEnabled) await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [rows[0].id]);
@@ -503,29 +803,55 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       await notify(db, chat.id);
       return rows[0].id;
     }
-    const existing = await db.query(
+    const retried = await db.query(
       'SELECT id FROM messages WHERE sender_id=$1 AND nonce=$2 AND chat_id=$3',
       [user(req).id, data.nonce, chat.id],
     );
-    requireValue(existing.rows[0], 409, 'Идентификатор сообщения уже использован.');
-    return existing.rows[0].id;
+    requireValue(retried.rows[0], 409, 'Идентификатор сообщения уже использован.');
+    return retried.rows[0].id;
   });
   res.status(201).json({ id });
 });
+app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
+  const { body } = z
+    .object({ body: z.string().trim().max(8000) })
+    .strict()
+    .parse(req.body);
+  await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    const target = await db.query(
+      'SELECT body,file_id FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 FOR UPDATE',
+      [uuid.parse(req.params.messageId), chat.id, user(req).id],
+    );
+    requireValue(target.rows[0], 404, 'Можно изменить только своё сообщение.');
+    requireValue(body || target.rows[0].file_id, 400, 'Сообщение не может быть пустым.');
+    if (target.rows[0].body !== body) {
+      await db.query('UPDATE messages SET body=$1,edited_at=clock_timestamp() WHERE id=$2', [
+        body,
+        req.params.messageId,
+      ]);
+      await notify(db, chat.id);
+    }
+  });
+  res.json({ ok: true });
+});
 app.delete('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
-  await member(String(req.params.id), user(req).id);
-  const result = await pool.query(
-    'DELETE FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3',
-    [uuid.parse(req.params.messageId), req.params.id, user(req).id],
-  );
-  requireValue(result.rowCount, 404, 'Можно удалить только своё сообщение.');
-  await notify(pool, String(req.params.id), String(req.params.messageId));
+  await transaction(async (db) => {
+    await lockedMember(String(req.params.id), user(req).id, db);
+    const result = await db.query(
+      'DELETE FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3',
+      [uuid.parse(req.params.messageId), req.params.id, user(req).id],
+    );
+    requireValue(result.rowCount, 404, 'Можно удалить только своё сообщение.');
+    await notify(db, String(req.params.id), String(req.params.messageId));
+  });
   res.json({ ok: true });
 });
 app.post('/api/chats/:id/messages/:messageId/reactions', auth, async (req, res) => {
   await member(String(req.params.id), user(req).id);
   const { emoji } = z.object({ emoji: z.enum(['❤', '👍', '😂', '🔥']) }).parse(req.body);
   await transaction(async (db) => {
+    await lockedMember(String(req.params.id), user(req).id, db);
     const target = await db.query('SELECT id FROM messages WHERE id=$1 AND chat_id=$2 FOR UPDATE', [
       uuid.parse(req.params.messageId),
       req.params.id,
@@ -552,6 +878,44 @@ const upload = multer({
   }),
   limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 0 },
 });
+const inlineMediaTypes = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'audio/webm',
+  'audio/ogg',
+  'audio/mp4',
+]);
+async function mediaType(filename: string, declaredType: string) {
+  const file = await open(filename, 'r');
+  try {
+    const prefix = Buffer.alloc(4096);
+    const { bytesRead } = await file.read(prefix, 0, prefix.length, 0);
+    const bytes = prefix.subarray(0, bytesRead);
+    if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+      return 'image/png';
+    if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255)
+      return 'image/jpeg';
+    if (['GIF87a', 'GIF89a'].includes(bytes.toString('ascii', 0, 6))) return 'image/gif';
+    if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP')
+      return 'image/webp';
+    // Ogg, MP4 and WebM can carry video too. Only offer the audio player when
+    // the upload was declared as audio AND its container signature agrees.
+    if (declaredType.toLowerCase().startsWith('audio/')) {
+      if (bytes.toString('ascii', 0, 4) === 'OggS') return 'audio/ogg';
+      if (bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp') return 'audio/mp4';
+      if (
+        bytes.subarray(0, 4).equals(Buffer.from([26, 69, 223, 163])) &&
+        bytes.includes(Buffer.from('webm'))
+      )
+        return 'audio/webm';
+    }
+    return 'application/octet-stream';
+  } finally {
+    await file.close();
+  }
+}
 app.post(
   '/api/chats/:id/files',
   auth,
@@ -568,12 +932,14 @@ app.post(
     requireValue(req.file, 400, 'Выберите файл.');
     const file = req.file!;
     try {
+      const mime = await mediaType(file.path, file.mimetype);
       const name =
         Buffer.from(file.originalname, 'latin1')
           .toString('utf8')
           .replace(/[\x00-\x1f\x7f/\\]/g, '_')
           .slice(0, 180) || 'Файл';
       const record = await transaction(async (db) => {
+        await lockedMember(String(req.params.id), user(req).id, db);
         await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user(req).id]);
         const usage = await db.query(
           'SELECT COALESCE(sum(size),0)::bigint AS total FROM files WHERE user_id=$1',
@@ -585,8 +951,8 @@ app.post(
           'Лимит файлов аккаунта — 500 МБ. Свяжитесь с владельцем сервера.',
         );
         const { rows } = await db.query(
-          'INSERT INTO files(id,chat_id,user_id,name,size) VALUES($1,$2,$3,$4,$5) RETURNING id,name,size',
-          [file.filename, req.params.id, user(req).id, name, file.size],
+          'INSERT INTO files(id,chat_id,user_id,name,size,mime) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,size,mime',
+          [file.filename, req.params.id, user(req).id, name, file.size, mime],
         );
         return rows[0];
       });
@@ -603,6 +969,16 @@ app.get('/api/files/:id', auth, async (req, res) => {
     [uuid.parse(req.params.id), user(req).id],
   );
   requireValue(rows[0], 404, 'Файл не найден.');
+  if (req.query.inline === '1' && inlineMediaTypes.has(rows[0].mime)) {
+    res.setHeader('Content-Type', rows[0].mime);
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    if (publicApiOrigin && publicApiOrigin !== origin)
+      res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+    res.sendFile(path.join(directory, rows[0].id));
+    return;
+  }
   res.setHeader('Content-Type', 'application/octet-stream');
   res.download(path.join(directory, rows[0].id), rows[0].name);
 });
@@ -624,9 +1000,10 @@ app.get('/api/events', auth, async (req, res) => {
   streams.set(res, { userId: uid, token });
   const heartbeat = setInterval(async () => {
     try {
-      const valid = await pool.query('SELECT 1 FROM sessions WHERE token=$1 AND expires_at>now()', [
-        token,
-      ]);
+      const valid = await pool.query(
+        'SELECT 1 FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>now() AND NOT u.blocked',
+        [token],
+      );
       if (!valid.rowCount) {
         res.end();
         return;
@@ -653,11 +1030,22 @@ async function listen() {
   client.on('notification', async (event) => {
     try {
       if (!event.payload) return;
-      const change = JSON.parse(event.payload) as { chatId: string; deletedId?: string };
+      const change = JSON.parse(event.payload) as {
+        type?: 'read' | 'refresh';
+        chatId: string;
+        deletedId?: string;
+        revokedUserId?: string;
+        removedUserId?: string;
+      };
+      if (change.revokedUserId) {
+        for (const [res, info] of streams) if (info.userId === change.revokedUserId) res.end();
+        return;
+      }
       const { rows } = await pool.query('SELECT user_id FROM members WHERE chat_id=$1', [
         change.chatId,
       ]);
       const ids = new Set(rows.map((r) => r.user_id));
+      if (change.removedUserId) ids.add(change.removedUserId);
       for (const [res, info] of streams)
         if (ids.has(info.userId)) {
           if (res.writableLength > 1024 * 1024) {

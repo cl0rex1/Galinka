@@ -8,11 +8,14 @@ const people: Person[] = [
   { id: 'ilya', name: 'Илья', username: 'ilya', color: 4 },
 ];
 const bot: Person = { id: 'nelya', name: 'Неля', username: 'nelya', color: 5 };
+const demoFiles = new Map<string, string>();
+export const getDemoFileUrl = (id: string) => demoFiles.get(id);
 function seed() {
   const chats: Chat[] = [
     {
       id: 'weekend',
       kind: 'group',
+      pinned: true,
       title: 'На выходные',
       owner_id: self.id,
       nelya: true,
@@ -140,6 +143,7 @@ export async function demoRequest(url: string, method: string, body: unknown): P
   const parts = pathname.split('/').filter(Boolean);
   const chat = state.chats.find((c) => c.id === parts[1]);
   let result: unknown = { ok: true };
+  if (pathname === '/announcements') return { items: [], total: 0, page: 1 };
   if (pathname === '/me') {
     if (method === 'PATCH') {
       Object.assign(self, { name: data.name });
@@ -152,7 +156,14 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         p.id !== self.id &&
         `${p.name} ${p.username}`.toLowerCase().includes((params.get('q') || '').toLowerCase()),
     );
-  else if (pathname === '/chats' && method === 'GET') result = state.chats;
+  else if (pathname === '/chats' && method === 'GET')
+    result = [...state.chats].sort(
+      (a, b) =>
+        Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) ||
+        (b.last_message?.created_at || b.created_at).localeCompare(
+          a.last_message?.created_at || a.created_at,
+        ),
+    );
   else if (pathname === '/chats' && method === 'POST') {
     const peer = people.find((p) => p.id === data.userIds[0]);
     const existing = data.kind === 'direct' && state.chats.find((c) => c.peer?.id === peer?.id);
@@ -175,20 +186,50 @@ export async function demoRequest(url: string, method: string, body: unknown): P
       result = { id: c.id };
     }
   } else if (parts[0] === 'chats' && chat) {
-    if (parts[2] === 'members')
-      result = state.membership[chat.id]
-        ? state.membership[chat.id].map((id) => state.people.find((p) => p.id === id))
-        : chat.kind === 'direct'
-          ? [self, chat.peer]
+    if (parts[2] === 'members') {
+      const ids =
+        state.membership[chat.id] ??
+        (chat.kind === 'direct'
+          ? [self.id, chat.peer!.id]
           : chat.kind === 'saved'
-            ? [self]
-            : people.slice(0, chat.member_count);
-    else if (parts[2] === 'read') chat.unread = 0;
+            ? [self.id]
+            : people.slice(0, chat.member_count).map((person) => person.id));
+      if (method === 'POST') {
+        if (chat.kind !== 'group' || chat.owner_id !== self.id)
+          throw Error('Участников добавляет владелец группы.');
+        state.membership[chat.id] = [...new Set([...ids, ...data.userIds])];
+        chat.member_count = state.membership[chat.id].length;
+      } else if (method === 'DELETE') {
+        if (chat.kind !== 'group' || (parts[3] !== self.id && chat.owner_id !== self.id))
+          throw Error('Недостаточно прав.');
+        if (parts[3] === chat.owner_id && ids.length > 1)
+          throw Error('Сначала передайте группу другому участнику.');
+        state.membership[chat.id] = ids.filter((id) => id !== parts[3]);
+        chat.member_count = state.membership[chat.id].length;
+        if (parts[3] === self.id) state.chats = state.chats.filter((item) => item.id !== chat.id);
+      } else
+        result = ids.map((id) => state.people.find((person) => person.id === id)).filter(Boolean);
+    } else if (parts[2] === 'preferences' && method === 'PATCH') {
+      for (const key of ['pinned', 'muted', 'archived'] as const)
+        if (typeof data[key] === 'boolean') chat[key] = data[key];
+      result = { pinned: !!chat.pinned, muted: !!chat.muted, archived: !!chat.archived };
+    } else if (parts[2] === 'read') chat.unread = 0;
     else if (parts[2] === 'invite') result = { url: `${location.origin}/?demo=1` };
-    else if (parts.length === 2 && method === 'PATCH') Object.assign(chat, data);
-    else if (parts[2] === 'files') {
+    else if (parts.length === 2 && method === 'PATCH') {
+      if (chat.owner_id !== self.id) throw Error('Настройки меняет владелец группы.');
+      if (data.ownerId) chat.owner_id = data.ownerId;
+      if (data.title !== undefined) chat.title = data.title;
+      if (data.nelya !== undefined) chat.nelya = data.nelya;
+    } else if (parts[2] === 'files') {
       const f = (body as FormData).get('file') as File;
-      result = { id: crypto.randomUUID(), name: f.name, size: f.size };
+      const id = crypto.randomUUID();
+      demoFiles.set(id, URL.createObjectURL(f));
+      result = {
+        id,
+        name: f.name,
+        size: f.size,
+        mime: f.type.split(';')[0] || 'application/octet-stream',
+      };
     } else if (parts[2] === 'messages') {
       if (method === 'GET')
         result = state.messages
@@ -211,9 +252,35 @@ export async function demoRequest(url: string, method: string, body: unknown): P
             m.reactions = m.reactions.filter((r) => r.count > 0);
           } else m.reactions.push({ emoji: data.emoji, count: 1, mine: true });
         }
-      } else if (method === 'DELETE')
+      } else if (method === 'PATCH') {
+        const target = state.messages.find(
+          (message) =>
+            message.id === parts[3] && message.chat_id === chat.id && message.sender_id === self.id,
+        );
+        if (!target) throw Error('Можно изменить только своё сообщение.');
+        if (!data.body?.trim() && !target.file) throw Error('Сообщение не может быть пустым.');
+        target.body = data.body.trim();
+        target.edited_at = new Date().toISOString();
+        for (const message of state.messages)
+          if (message.reply?.id === target.id) message.reply.body = target.body;
+        if (chat.last_message?.created_at === target.created_at) chat.last_message = target;
+      } else if (method === 'DELETE') {
         state.messages = state.messages.filter((m) => m.id !== parts[3]);
-      else if (method === 'POST') {
+        for (const message of state.messages)
+          if (message.reply?.id === parts[3]) message.reply = null;
+        chat.last_message =
+          state.messages.filter((message) => message.chat_id === chat.id).at(-1) || null;
+      } else if (method === 'POST') {
+        const duplicate = state.messages.find(
+          (message) => message.sender_id === self.id && message.nonce === data.nonce,
+        );
+        if (duplicate) return { id: duplicate.id };
+        const quoted = data.replyTo
+          ? state.messages.find(
+              (message) => message.id === data.replyTo && message.chat_id === chat.id,
+            )
+          : undefined;
+        if (data.replyTo && !quoted) throw Error('Сообщение для ответа не найдено.');
         const m: Message = {
           id: crypto.randomUUID(),
           chat_id: chat.id,
@@ -224,6 +291,16 @@ export async function demoRequest(url: string, method: string, body: unknown): P
           nonce: data.nonce,
           file: data.fileId ? data.demoFile : null,
           reactions: [],
+          edited_at: null,
+          read_by: 0,
+          reply: quoted
+            ? {
+                id: quoted.id,
+                body: quoted.body,
+                sender: { id: quoted.sender.id, name: quoted.sender.name },
+                file_name: quoted.file?.name || null,
+              }
+            : null,
         };
         state.messages.push(m);
         chat.last_message = m;
@@ -253,6 +330,8 @@ export async function demoRequest(url: string, method: string, body: unknown): P
             body: text,
             file: null,
             reactions: [],
+            reply: null,
+            edited_at: null,
           };
           state.messages.push(reply);
           chat.last_message = reply;

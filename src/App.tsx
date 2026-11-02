@@ -1,4 +1,14 @@
-import { useState, useEffect, useRef, useCallback, type ReactNode, type FormEvent } from 'react';
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useCallback,
+  useId,
+  Fragment,
+  type ReactNode,
+  type FormEvent,
+} from 'react';
 import {
   MessageCircle,
   Search,
@@ -15,8 +25,16 @@ import {
   X,
   Paperclip,
   Smile,
-  CheckCheck,
   Check,
+  CheckCheck,
+  Reply,
+  Pencil,
+  Pin,
+  PinOff,
+  Bell,
+  BellOff,
+  Archive,
+  ArchiveRestore,
   ChevronDown,
   Info,
   Sparkles,
@@ -32,9 +50,17 @@ import {
   Compass,
   Puzzle,
   ArrowUp,
+  ArrowDown,
+  Megaphone,
 } from 'lucide-react';
+import { GroupSettings } from './GroupSettings';
+import { MediaAttachment } from './MediaAttachment';
+import { VoiceRecorder } from './VoiceRecorder';
+import { MessageText } from './MessageText';
+import { getDemoFileUrl } from './demo';
+import { Announcements } from './Announcements';
 import { api, ApiError, isDemo, API_BASE } from './api';
-import { Updates } from './updates';
+import { Updates, useUpdates } from './updates';
 import { ThemePicker, ThemeToggle } from './theme';
 import { NotificationSettings, useNotifications, isNative, clearPushDevice } from './notifications';
 import { App as NativeApp } from '@capacitor/app';
@@ -44,7 +70,7 @@ type InstallEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: string }>;
 };
-type ModalKind = 'new' | 'install' | 'profile' | 'invite' | 'delete' | null;
+type ModalKind = 'new' | 'install' | 'profile' | 'invite' | 'delete' | 'group' | null;
 const time = (date: string) =>
   new Date(date).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
 const bytes = (n: number) =>
@@ -113,18 +139,21 @@ function IconButton({
     </button>
   );
 }
-function Modal({
+export function Modal({
   title,
   onClose,
   children,
   error,
+  closeDisabled = false,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   error?: string;
+  closeDisabled?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const dialog = ref.current!;
     dialog.showModal();
@@ -133,15 +162,19 @@ function Modal({
   return (
     <dialog
       ref={ref}
-      onCancel={onClose}
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!closeDisabled) onClose();
+      }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !closeDisabled) onClose();
       }}
       className="modal"
     >
       <div className="modal-head">
-        <h2>{title}</h2>
-        <IconButton label="Закрыть" onClick={onClose}>
+        <h2 id={titleId}>{title}</h2>
+        <IconButton label="Закрыть" disabled={closeDisabled} onClick={onClose}>
           <X size={20} />
         </IconButton>
       </div>
@@ -154,7 +187,13 @@ function Modal({
     </dialog>
   );
 }
-function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: () => void }) {
+export function Auth({
+  onLogin,
+  onDemo,
+}: {
+  onLogin: (person: Person) => void;
+  onDemo?: () => void;
+}) {
   const [register, setRegister] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
@@ -202,7 +241,7 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
           </div>
         </div>
         <div className="auth-bottom">
-          <span>Ваш сервер. Ваш круг.</span>
+          <span>Ваши люди. Ваши разговоры.</span>
           <span>Galinka · {__APP_VERSION__}</span>
         </div>
       </section>
@@ -218,26 +257,28 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
           <p className="muted">
             {register ? 'Создайте аккаунт по приглашению.' : 'Войдите, чтобы продолжить.'}
           </p>
-          <div className="auth-tabs">
-            <button
-              className={!register ? 'selected' : ''}
-              onClick={() => {
-                setRegister(false);
-                setError('');
-              }}
-            >
-              Войти
-            </button>
-            <button
-              className={register ? 'selected' : ''}
-              onClick={() => {
-                setRegister(true);
-                setError('');
-              }}
-            >
-              Создать аккаунт
-            </button>
-          </div>
+          {onDemo && (
+            <div className="auth-tabs">
+              <button
+                className={!register ? 'selected' : ''}
+                onClick={() => {
+                  setRegister(false);
+                  setError('');
+                }}
+              >
+                Войти
+              </button>
+              <button
+                className={register ? 'selected' : ''}
+                onClick={() => {
+                  setRegister(true);
+                  setError('');
+                }}
+              >
+                Создать аккаунт
+              </button>
+            </div>
+          )}
           <form onSubmit={submit}>
             {register && (
               <label>
@@ -280,12 +321,7 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
             {register && (
               <label>
                 Код приглашения
-                <input
-                  name="invite"
-                  required
-                  autoComplete="off"
-                  placeholder="У владельца сервера"
-                />
+                <input name="invite" required autoComplete="off" placeholder="Код приглашения" />
                 <small>Galinka пока для друзей. Попросите код у того, кто вас позвал.</small>
               </label>
             )}
@@ -303,15 +339,19 @@ function Auth({ onLogin, onDemo }: { onLogin: (person: Person) => void; onDemo: 
               )}
             </button>
           </form>
-          <div className="auth-divider">
-            <span>или</span>
-          </div>
-          <button className="secondary wide" onClick={onDemo}>
-            Открыть демо
-            <ArrowUpRight size={17} />
-          </button>
+          {onDemo && (
+            <>
+              <div className="auth-divider">
+                <span>или</span>
+              </div>
+              <button className="secondary wide" onClick={onDemo}>
+                Открыть демо
+                <ArrowUpRight size={17} />
+              </button>
+            </>
+          )}
           <p className="auth-footnote">
-            <Lock size={13} /> Пароли защищены. Данные хранятся на вашем сервере.
+            <Lock size={13} /> Войдите, чтобы продолжить общение.
           </p>
         </div>
       </section>
@@ -485,6 +525,7 @@ function NewChat({
   );
 }
 export default function App() {
+  const updates = useUpdates();
   const [me, setMe] = useState<Person | null>(null),
     [ready, setReady] = useState(false),
     [demo, setDemo] = useState(isDemo),
@@ -492,7 +533,7 @@ export default function App() {
     [activeId, setActiveId] = useState<string | null>(null),
     [messages, setMessages] = useState<Message[]>([]),
     [members, setMembers] = useState<Person[]>([]),
-    [section, setSection] = useState<'chats' | 'modules' | 'settings'>('chats'),
+    [section, setSection] = useState<'chats' | 'modules' | 'announcements' | 'settings'>('chats'),
     [modal, setModal] = useState<ModalKind>(null),
     [filter, setFilter] = useState('Все'),
     [listQuery, setListQuery] = useState(''),
@@ -500,8 +541,17 @@ export default function App() {
     [messageQuery, setMessageQuery] = useState(''),
     [infoOpen, setInfoOpen] = useState(false),
     [drafts, setDrafts] = useState<Record<string, string>>({}),
-    [sending, setSending] = useState(false),
-    [attachment, setAttachment] = useState<File | null>(null),
+    [replies, setReplies] = useState<Record<string, Message>>({}),
+    [editing, setEditing] = useState<{ message: Message; body: string } | null>(null),
+    [savingEdit, setSavingEdit] = useState(false),
+    [copiedMessageId, setCopiedMessageId] = useState<string | null>(null),
+    [preferenceBusy, setPreferenceBusy] = useState(false),
+    [sendingIds, setSendingIds] = useState<string[]>([]),
+    [attachments, setAttachments] = useState<Record<string, { file: File; uploaded?: Attachment }>>(
+      {},
+    ),
+    [awayFromBottom, setAwayFromBottom] = useState(false),
+    [newMessageIds, setNewMessageIds] = useState<string[]>([]),
     [error, setError] = useState(''),
     [connected, setConnected] = useState(true),
     [loading, setLoading] = useState(false),
@@ -524,14 +574,88 @@ export default function App() {
     textarea = useRef<HTMLTextAreaElement>(null),
     fileInput = useRef<HTMLInputElement>(null),
     requestEpoch = useRef(0),
-    nonce = useRef<string | null>(null),
-    uploaded = useRef<Attachment | null>(null),
+    chatRequestEpoch = useRef(0),
+    nonces = useRef<Record<string, string>>({}),
+    sendingChats = useRef(new Set<string>()),
+    lastRead = useRef<Record<string, string>>({}),
+    messagesRef = useRef(messages),
+    scrollRestore = useRef<{ id: string; top: number; height: number } | null>(null),
     joined = useRef(false),
-    followBottom = useRef(true);
+    followBottom = useRef(true),
+    jumpingToLatest = useRef(false),
+    editRequest = useRef(false);
   activeRef.current = activeId;
   queryRef.current = messageQuery;
+  messagesRef.current = messages;
   const active = chats.find((c) => c.id === activeId),
-    draft = activeId ? drafts[activeId] || '' : '';
+    draft = activeId ? drafts[activeId] || '' : '',
+    attachment = activeId ? attachments[activeId]?.file : undefined,
+    sending = activeId ? sendingIds.includes(activeId) : false,
+    reply = activeId ? replies[activeId] : undefined,
+    edit = editing?.message.chat_id === activeId ? editing : null,
+    composerValue = edit ? edit.body : draft,
+    savingCurrentEdit = Boolean(edit && savingEdit);
+  const report = useCallback((e: unknown) => {
+    if (e instanceof ApiError && e.status === 401) {
+      // A revoked/expired session must stop rendering private conversation data.
+      ++requestEpoch.current;
+      ++chatRequestEpoch.current;
+      initialized.current = false;
+      lastRead.current = {};
+      nonces.current = {};
+      setMe(null);
+      setActiveId(null);
+      setChats([]);
+      setMessages([]);
+      setMembers([]);
+      setAttachments({});
+      setDrafts({});
+      setReplies({});
+      setEditing(null);
+      setModal(null);
+      setInfoOpen(false);
+      setSearchOpen(false);
+      setMessageQuery('');
+      setSection('chats');
+      setError(
+        'Сессия завершена. Войдите снова — ваши текстовые черновики сохранены на этом устройстве.',
+      );
+      return;
+    }
+    setError((e as Error).message || 'Не удалось выполнить действие.');
+  }, []);
+  const handleLogin = useCallback((person: Person) => {
+    let saved: Record<string, string> = {};
+    try {
+      const value = JSON.parse(localStorage.getItem(`galinka-drafts:${person.id}`) || '{}');
+      if (value && typeof value === 'object' && !Array.isArray(value))
+        saved = Object.fromEntries(
+          Object.entries(value)
+            .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+            .slice(0, 200)
+            .map(([id, text]) => [id, text.slice(0, 8000)]),
+        );
+    } catch {
+      /* Private browsing may disable local storage. */
+    }
+    setError('');
+    setConnected(navigator.onLine);
+    setDrafts(saved);
+    setMe(person);
+  }, []);
+  useEffect(() => {
+    if (!me) return;
+    try {
+      const saved = Object.fromEntries(
+        Object.entries(drafts).filter(([, text]) => text.length > 0),
+      );
+      if (Object.keys(saved).length)
+        localStorage.setItem(`galinka-drafts:${me.id}`, JSON.stringify(saved));
+      else localStorage.removeItem(`galinka-drafts:${me.id}`);
+    } catch {
+      /* Sending remains available when storage is full or unavailable. */
+    }
+  }, [drafts, me?.id]);
   const notifications = useNotifications(me?.id, demo, (id) => {
     setActiveId(id);
     setSection('chats');
@@ -542,6 +666,12 @@ export default function App() {
     if (!isNative) return;
     const back = NativeApp.addListener('backButton', () => {
       if (modal) setModal(null);
+      else if (emojiOpen) setEmojiOpen(false);
+      else if (edit) setEditing(null);
+      else if (document.querySelector('details.message-menu[open], details.chat-actions[open]'))
+        document
+          .querySelectorAll('details.message-menu[open], details.chat-actions[open]')
+          .forEach((menu) => menu.removeAttribute('open'));
       else if (infoOpen) setInfoOpen(false);
       else if (searchOpen) {
         setSearchOpen(false);
@@ -553,19 +683,19 @@ export default function App() {
     return () => {
       void back.then((handle) => handle.remove());
     };
-  }, [modal, infoOpen, searchOpen, section, activeId]);
+  }, [modal, emojiOpen, infoOpen, searchOpen, section, activeId, edit]);
   useEffect(() => {
     if (!textarea.current) return;
     textarea.current.style.height = 'auto';
     textarea.current.style.height = `${Math.min(textarea.current.scrollHeight, 160)}px`;
-  }, [draft]);
+  }, [composerValue]);
   useEffect(() => {
     if (new URLSearchParams(location.search).has('demo')) {
       sessionStorage.setItem('galinka-demo', 'true');
       setDemo(true);
     }
     api<Person>('/me')
-      .then(setMe)
+      .then(handleLogin)
       .catch((e) => {
         if (!(e instanceof ApiError) || e.status !== 401)
           setError('Не удалось подключиться к серверу. Демоверсия доступна ниже.');
@@ -581,38 +711,86 @@ export default function App() {
     return () => window.removeEventListener('beforeinstallprompt', handle);
   }, []);
   const refreshChats = useCallback(async () => {
+    const epoch = ++chatRequestEpoch.current;
     const data = await api<Chat[]>('/chats');
+    if (epoch !== chatRequestEpoch.current) return data;
     setChats(data);
     if (!initialized.current) {
       initialized.current = true;
-      if (window.innerWidth > 640) setActiveId((id) => id || data[0]?.id || null);
+      if (
+        !window.matchMedia(
+          '(max-width: 800px), (max-width: 960px) and (max-height: 500px) and (pointer: coarse)',
+        ).matches
+      )
+        setActiveId((id) => id || data.find((chat) => !chat.archived)?.id || null);
     }
     return data;
   }, []);
-  const loadMessages = useCallback(async (id: string, reset = false) => {
-    const epoch = ++requestEpoch.current,
-      q = queryRef.current;
-    const data = await api<Message[]>(
-      `/chats/${id}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`,
-    );
-    if (activeRef.current !== id || epoch !== requestEpoch.current) return;
-    setMessages((prev) => {
-      if (reset || q || !data.length) return data;
-      const boundary = prev.findIndex((m) => m.id === data[0].id);
-      return boundary > 0 ? [...prev.slice(0, boundary), ...data] : data;
-    });
-    setHasOlder(data.length === 60);
-    if (
-      !q &&
-      data.length &&
-      sectionRef.current === 'chats' &&
-      document.visibilityState === 'visible'
-    )
-      await api(`/chats/${id}/read`, 'POST', { lastMessageId: data.at(-1)!.id });
-  }, []);
+  const markRead = useCallback(
+    async (id: string, lastMessageId: string) => {
+      if (
+        queryRef.current ||
+        activeRef.current !== id ||
+        !followBottom.current ||
+        sectionRef.current !== 'chats' ||
+        document.visibilityState !== 'visible' ||
+        lastRead.current[id] === lastMessageId
+      )
+        return;
+      lastRead.current[id] = lastMessageId;
+      try {
+        await api(`/chats/${id}/read`, 'POST', { lastMessageId });
+        // Refresh instead of clearing the count blindly: a newer message may have arrived meanwhile.
+        await refreshChats();
+      } catch (e) {
+        if (lastRead.current[id] === lastMessageId) delete lastRead.current[id];
+        if (e instanceof ApiError && e.status === 401) report(e);
+      }
+    },
+    [refreshChats, report],
+  );
+  const loadMessages = useCallback(
+    async (id: string, reset = false) => {
+      if (activeRef.current !== id) return;
+      const epoch = ++requestEpoch.current,
+        q = queryRef.current;
+      const data = await api<Message[]>(
+        `/chats/${id}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+      );
+      if (activeRef.current !== id || epoch !== requestEpoch.current || queryRef.current !== q)
+        return;
+      const previous = messagesRef.current;
+      const latest = previous.at(-1);
+      setNewMessageIds(
+        !reset && !q && latest
+          ? data
+              .filter(
+                (m) =>
+                  !previous.some((old) => old.id === m.id) && m.created_at >= latest.created_at,
+              )
+              .map((m) => m.id)
+          : [],
+      );
+      const boundary = data.length ? previous.findIndex((m) => m.id === data[0].id) : -1;
+      setMessages((prev) => {
+        if (reset || q || data.length < 60) return data;
+        const overlap = prev.findIndex((m) => m.id === data[0].id);
+        return overlap > 0 ? [...prev.slice(0, overlap), ...data] : data;
+      });
+      // A non-overlapping window means over 60 new messages arrived while offline.
+      // Expose older history again; retaining the old "fully loaded" flag would hide it.
+      if (reset || q || boundary < 0 || data.length < 60) setHasOlder(data.length === 60);
+      if (!q && data.length) await markRead(id, data.at(-1)!.id);
+    },
+    [markRead],
+  );
   useEffect(() => {
     if (!me) return;
-    refreshChats().catch((e) => setError(e.message));
+    let live = true;
+    const reportLive = (error: unknown) => {
+      if (live) report(error);
+    };
+    refreshChats().catch(reportLive);
     const token = new URLSearchParams(location.search).get('join');
     if (token && !joined.current && !demo) {
       joined.current = true;
@@ -622,45 +800,126 @@ export default function App() {
           setActiveId(r.id);
           history.replaceState({}, '', location.pathname);
         })
-        .catch((e) => setError(e.message));
+        .catch(reportLive);
     }
-    if (demo) return;
+    if (demo)
+      return () => {
+        live = false;
+      };
     const events = new EventSource(`${API_BASE}/events`, { withCredentials: true });
-    const sync = (reset = false) => {
-      refreshChats().catch((e) => setError(e.message));
-      if (activeRef.current)
-        loadMessages(activeRef.current, reset).catch((e) => setError(e.message));
+    let syncTimer: ReturnType<typeof setTimeout> | undefined;
+    let pendingList = false,
+      pendingMessages = false;
+    const sync = (chatId?: string, readOnly = false) => {
+      if (!live) return;
+      pendingList ||= !readOnly;
+      pendingMessages ||= Boolean(activeRef.current && (!chatId || chatId === activeRef.current));
+      if (syncTimer) return;
+      syncTimer = setTimeout(() => {
+        syncTimer = undefined;
+        if (!live) return;
+        const list = pendingList,
+          conversation = pendingMessages;
+        pendingList = pendingMessages = false;
+        if (list) refreshChats().catch(reportLive);
+        if (conversation && activeRef.current) loadMessages(activeRef.current).catch(reportLive);
+      }, 100);
     };
     events.onmessage = (event) => {
+      if (!live) return;
       setConnected(true);
-      const change = JSON.parse(event.data) as { type: string; deletedId?: string };
-      if (change.deletedId) setMessages((prev) => prev.filter((m) => m.id !== change.deletedId));
-      sync(change.type === 'connected');
+      try {
+        const change = JSON.parse(event.data) as {
+          type: string;
+          chatId?: string;
+          deletedId?: string;
+          removedUserId?: string;
+        };
+        if (change.removedUserId === me.id && change.chatId) {
+          const removedId = change.chatId;
+          ++chatRequestEpoch.current;
+          setChats((previous) => previous.filter((chat) => chat.id !== removedId));
+          if (activeRef.current === removedId) {
+            ++requestEpoch.current;
+            activeRef.current = null;
+            setActiveId(null);
+            setMessages([]);
+            setMembers([]);
+            setInfoOpen(false);
+            setModal(null);
+            setEditing(null);
+            setError('Вы больше не участвуете в этой группе.');
+          }
+        }
+        if (change.deletedId) {
+          setMessages((prev) => prev.filter((m) => m.id !== change.deletedId));
+          setEditing((previous) => (previous?.message.id === change.deletedId ? null : previous));
+          setReplies((previous) =>
+            Object.fromEntries(
+              Object.entries(previous).filter(([, message]) => message.id !== change.deletedId),
+            ),
+          );
+        }
+        sync(change.chatId, change.type === 'read');
+      } catch {
+        sync();
+      }
     };
-    events.onerror = () => setConnected(false);
+    let checkingSession = false;
+    events.onerror = () => {
+      if (!live) return;
+      setConnected(false);
+      if (checkingSession) return;
+      checkingSession = true;
+      api<Person>('/me')
+        .catch((e) => {
+          if (live && e instanceof ApiError && e.status === 401) report(e);
+        })
+        .finally(() => {
+          checkingSession = false;
+        });
+    };
     const visible = () => {
       if (document.visibilityState === 'visible') sync();
     };
+    const online = () => sync();
+    const offline = () => setConnected(false);
     document.addEventListener('visibilitychange', visible);
+    window.addEventListener('online', online);
+    window.addEventListener('offline', offline);
     // Recover missed events and unread state after background suspension or a proxy interruption.
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') sync();
     }, 30000);
     return () => {
+      live = false;
       events.close();
+      clearTimeout(syncTimer);
       clearInterval(interval);
       document.removeEventListener('visibilitychange', visible);
+      window.removeEventListener('online', online);
+      window.removeEventListener('offline', offline);
     };
-  }, [me?.id, demo, refreshChats, loadMessages]);
+  }, [me?.id, demo, refreshChats, loadMessages, report]);
   useEffect(() => {
-    setAttachment(null);
-    uploaded.current = null;
-    nonce.current = null;
-  }, [activeId]);
-  useEffect(() => {
+    if (!activeId || (!infoOpen && modal !== 'group') || !me) return;
+    const controller = new AbortController();
+    api<Person[]>(`/chats/${activeId}/members`, 'GET', undefined, { signal: controller.signal })
+      .then(setMembers)
+      .catch((error) => {
+        if (!controller.signal.aborted) report(error);
+      });
+    return () => controller.abort();
+  }, [activeId, active?.member_count, active?.owner_id, infoOpen, modal, me?.id, report]);
+  useLayoutEffect(() => {
     if (!activeId || !me) return;
     let valid = true;
     setLoading(true);
+    setPaging(false);
+    setAwayFromBottom(false);
+    setNewMessageIds([]);
+    jumpingToLatest.current = false;
+    scrollRestore.current = null;
     setMessages([]);
     setMembers([]);
     followBottom.current = true;
@@ -676,7 +935,7 @@ export default function App() {
             if (valid) refreshChats().catch(() => {});
           })
           .catch((e) => {
-            if (valid) setError(e.message);
+            if (valid) report(e);
           })
           .finally(() => {
             if (valid) setLoading(false);
@@ -689,13 +948,71 @@ export default function App() {
       clearTimeout(timer);
       ++requestEpoch.current;
     };
-  }, [activeId, messageQuery, me?.id, loadMessages, refreshChats]);
+  }, [activeId, messageQuery, me?.id, loadMessages, refreshChats, report]);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const restore = scrollRestore.current;
+    if (restore && restore.id === activeId) {
+      el.scrollTop = restore.top + el.scrollHeight - restore.height;
+      scrollRestore.current = null;
+    } else if (followBottom.current && !messageQuery) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, messageQuery, loading, section, activeId, reply?.id, edit?.message.id, attachment]);
   useEffect(() => {
-    if (followBottom.current && !messageQuery) bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [messages, messageQuery, loading, section]);
-  function report(e: unknown) {
-    setError((e as Error).message || 'Не удалось выполнить действие.');
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as Element;
+      document
+        .querySelectorAll('details.message-menu[open], details.chat-actions[open]')
+        .forEach((menu) => {
+          if (!menu.contains(target)) menu.removeAttribute('open');
+        });
+      if (!target.closest('.emoji-wrap')) setEmojiOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+      const menus = document.querySelectorAll(
+        'details.message-menu[open], details.chat-actions[open]',
+      );
+      if (menus.length) {
+        menus.forEach((menu) => menu.removeAttribute('open'));
+        return;
+      }
+      if (!editRequest.current) setEditing(null);
+      setEmojiOpen(false);
+      setInfoOpen(false);
+    };
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('keydown', escape);
+    };
+  }, []);
+  function jumpToLatest() {
+    followBottom.current = true;
+    setAwayFromBottom(false);
+    const el = scroller.current;
+    jumpingToLatest.current = !!el && el.scrollHeight - el.scrollTop - el.clientHeight >= 80;
+    el?.scrollTo({
+      top: el.scrollHeight,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ? 'instant'
+        : 'smooth',
+    });
+    const latest = messages.at(-1);
+    if (!jumpingToLatest.current && activeId && latest) void markRead(activeId, latest.id);
   }
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      if (followBottom.current && !queryRef.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [activeId, section, ready, me?.id]);
   function select(id: string) {
     if (window.innerWidth <= 1080) setInfoOpen(false);
     setActiveId(id);
@@ -704,42 +1021,186 @@ export default function App() {
     setSearchOpen(false);
     setError('');
     setEmojiOpen(false);
+    setEditing(null);
+    setCopiedMessageId(null);
+    closeMenus();
   }
   function changeDraft(value: string) {
+    if (edit) {
+      setEditing((previous) => (previous ? { ...previous, body: value } : null));
+      return;
+    }
     if (activeId) setDrafts((prev) => ({ ...prev, [activeId]: value }));
-    nonce.current = null;
+    if (activeId) delete nonces.current[activeId];
+  }
+  function closeMenus() {
+    document
+      .querySelectorAll('details.message-menu[open], details.chat-actions[open]')
+      .forEach((menu) => menu.removeAttribute('open'));
+  }
+  function positionMessageMenu(details: HTMLDetailsElement) {
+    if (!details.open) return;
+    setCopiedMessageId(null);
+    const menu = details.querySelector<HTMLElement>('.message-menu-content');
+    const summary = details.querySelector('summary');
+    if (!menu || !summary) return;
+    const viewport = window.visualViewport;
+    const width = Math.min(240, window.innerWidth - 24);
+    const height = Math.min(menu.scrollHeight, (viewport?.height ?? window.innerHeight) - 24);
+    const origin = viewport?.offsetTop ?? 0;
+    const rect = summary.getBoundingClientRect();
+    const desiredLeft = details.closest('.own') ? rect.left : rect.right - width;
+    const desiredTop =
+      rect.top - height - 8 >= origin + 12 ? rect.top - height - 8 : rect.bottom + 8;
+    menu.style.setProperty(
+      '--message-menu-x',
+      `${Math.max(12, Math.min(desiredLeft, window.innerWidth - width - 12))}px`,
+    );
+    menu.style.setProperty(
+      '--message-menu-y',
+      `${Math.max(origin + 12, Math.min(desiredTop, origin + (viewport?.height ?? window.innerHeight) - height - 12))}px`,
+    );
+  }
+  function startReply(message: Message) {
+    if (sendingChats.current.has(message.chat_id)) return;
+    setEditing(null);
+    setReplies((previous) => ({ ...previous, [message.chat_id]: message }));
+    delete nonces.current[message.chat_id];
+    closeMenus();
+    textarea.current?.focus({ preventScroll: true });
+  }
+  function startEdit(message: Message) {
+    if (sendingChats.current.has(message.chat_id) || editRequest.current) return;
+    setEditing({ message, body: message.body });
+    setEmojiOpen(false);
+    closeMenus();
+    textarea.current?.focus({ preventScroll: true });
+  }
+  async function saveEdit() {
+    if (!edit || editRequest.current || (!edit.body.trim() && !edit.message.file)) return;
+    const target = edit;
+    editRequest.current = true;
+    setSavingEdit(true);
+    setError('');
+    try {
+      await api(`/chats/${target.message.chat_id}/messages/${target.message.id}`, 'PATCH', {
+        body: target.body.trim(),
+      });
+      setEditing((previous) => (previous?.message.id === target.message.id ? null : previous));
+      await Promise.all([loadMessages(target.message.chat_id), refreshChats()]);
+    } catch (error) {
+      report(error);
+    } finally {
+      editRequest.current = false;
+      setSavingEdit(false);
+    }
+  }
+  async function copyMessage(message: Message) {
+    try {
+      await navigator.clipboard.writeText(message.body || message.file?.name || '');
+      setCopiedMessageId(message.id);
+    } catch {
+      setError('Не удалось скопировать. Выделите текст сообщения и скопируйте вручную.');
+    }
+  }
+  function attachFile(file: File) {
+    if (!activeId || edit || sending) return;
+    if (file.size > 20 * 1024 * 1024) {
+      setError('Максимальный размер файла — 20 МБ.');
+      return;
+    }
+    setAttachments((previous) => ({ ...previous, [activeId]: { file } }));
+    delete nonces.current[activeId];
+  }
+  async function setChatPreference(
+    chat: Chat,
+    changes: { pinned?: boolean; muted?: boolean; archived?: boolean },
+  ) {
+    if (preferenceBusy) return;
+    setPreferenceBusy(true);
+    closeMenus();
+    try {
+      await api(`/chats/${chat.id}/preferences`, 'PATCH', changes);
+      await refreshChats();
+      if (changes.archived && activeRef.current === chat.id) {
+        setActiveId(null);
+        setInfoOpen(false);
+        setEditing(null);
+      }
+    } catch (error) {
+      report(error);
+    } finally {
+      setPreferenceBusy(false);
+    }
   }
   async function send(e?: FormEvent) {
     e?.preventDefault();
-    if (!activeId || sending || (!draft.trim() && !attachment)) return;
+    if (edit) {
+      await saveEdit();
+      return;
+    }
+    if (!activeId || sendingChats.current.has(activeId) || (!draft.trim() && !attachment)) return;
     const id = activeId,
-      text = draft.trim();
-    setSending(true);
+      text = draft.trim(),
+      originalDraft = draft,
+      fileDraft = attachments[id],
+      replyDraft = replies[id];
+    // Each chat owns its retry nonce and upload; changing chats cannot mix attachments.
+    const messageNonce = (nonces.current[id] ??= crypto.randomUUID());
+    sendingChats.current.add(id);
+    setSendingIds([...sendingChats.current]);
     setError('');
     try {
-      if (attachment && !uploaded.current) {
+      let file = fileDraft?.uploaded;
+      if (fileDraft && !file) {
         const form = new FormData();
-        form.append('file', attachment);
-        uploaded.current = await api<Attachment>(`/chats/${id}/files`, 'POST', form);
+        form.append('file', fileDraft.file);
+        file = await api<Attachment>(`/chats/${id}/files`, 'POST', form);
+        setAttachments((prev) =>
+          prev[id]?.file === fileDraft.file
+            ? { ...prev, [id]: { ...fileDraft, uploaded: file } }
+            : prev,
+        );
       }
-      nonce.current ??= crypto.randomUUID();
       await api(`/chats/${id}/messages`, 'POST', {
         body: text,
-        nonce: nonce.current,
-        fileId: uploaded.current?.id,
-        demoFile: demo ? uploaded.current : undefined,
+        nonce: messageNonce,
+        fileId: file?.id,
+        demoFile: demo ? file : undefined,
+        replyTo: replyDraft?.id,
       });
-      setDrafts((prev) => ({ ...prev, [id]: '' }));
-      setAttachment(null);
-      uploaded.current = null;
-      nonce.current = null;
-      followBottom.current = true;
+      setDrafts((prev) => (prev[id] === originalDraft ? { ...prev, [id]: '' } : prev));
+      setReplies((previous) => {
+        if (previous[id]?.id !== replyDraft?.id) return previous;
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
+      setAttachments((prev) => {
+        if (prev[id]?.file !== fileDraft?.file) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      if (nonces.current[id] === messageNonce) delete nonces.current[id];
+      if (activeRef.current === id) {
+        followBottom.current = true;
+        setAwayFromBottom(false);
+      }
       await Promise.all([loadMessages(id), refreshChats()]);
-      textarea.current?.focus();
+      if (activeRef.current === id && sectionRef.current === 'chats')
+        textarea.current?.focus({ preventScroll: true });
     } catch (e) {
-      report(e);
+      if (e instanceof ApiError && e.status === 401) {
+        report(e);
+        return;
+      }
+      setError(
+        `${activeRef.current === id ? '' : `Чат «${chats.find((chat) => chat.id === id)?.title || 'Переписка'}»: `}${(e as Error).message}`,
+      );
     } finally {
-      setSending(false);
+      sendingChats.current.delete(id);
+      setSendingIds([...sendingChats.current]);
     }
   }
   async function react(message: Message, emoji: string) {
@@ -785,6 +1246,11 @@ export default function App() {
     try {
       if (!demo) await clearPushDevice().catch(() => {});
       if (!demo) await api('/auth/logout', 'POST');
+      try {
+        if (me) localStorage.removeItem(`galinka-drafts:${me.id}`);
+      } catch {
+        /* Storage may be unavailable. */
+      }
       sessionStorage.removeItem('galinka-demo');
       location.href = '/app';
     } catch (e) {
@@ -792,29 +1258,39 @@ export default function App() {
     }
   }
   async function loadOlder() {
-    if (!activeId || !messages.length) return;
+    if (!activeId || !messages.length || paging) return;
     setPaging(true);
-    const id = activeId;
-    const height = scroller.current?.scrollHeight || 0;
+    const id = activeId,
+      q = messageQuery,
+      epoch = requestEpoch.current;
     try {
       const data = await api<Message[]>(
-        `/chats/${id}/messages?before=${encodeURIComponent(messages[0].id)}${messageQuery ? `&q=${encodeURIComponent(messageQuery)}` : ''}`,
+        `/chats/${id}/messages?before=${encodeURIComponent(messages[0].id)}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
       );
-      if (activeRef.current !== id) return;
+      if (activeRef.current !== id || queryRef.current !== q || epoch !== requestEpoch.current)
+        return;
       followBottom.current = false;
-      setMessages((prev) => [...data, ...prev]);
+      setAwayFromBottom(true);
+      const el = scroller.current;
+      if (el) scrollRestore.current = { id, top: el.scrollTop, height: el.scrollHeight };
+      setMessages((prev) => [...data.filter((m) => !prev.some((old) => old.id === m.id)), ...prev]);
       setHasOlder(data.length === 60);
-      requestAnimationFrame(() => {
-        if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight - height;
-      });
     } catch (e) {
-      report(e);
+      if (activeRef.current === id && queryRef.current === q) report(e);
     } finally {
-      setPaging(false);
+      if (activeRef.current === id && queryRef.current === q) setPaging(false);
     }
   }
   async function downloadFile(file: Attachment) {
     if (demo) {
+      const mediaUrl = getDemoFileUrl(file.id);
+      if (mediaUrl) {
+        const link = document.createElement('a');
+        link.href = mediaUrl;
+        link.download = file.name;
+        link.click();
+        return;
+      }
       const blob = new Blob(
         [`Демонстрационный файл: ${file.name}\nВ реальном чате здесь будет ваш файл.`],
         { type: 'text/plain' },
@@ -862,15 +1338,22 @@ export default function App() {
       }
     }
   }
-  const filtered = chats.filter(
-    (c) =>
-      (filter === 'Все' ||
-        (filter === 'Личные' && c.kind === 'direct') ||
-        (filter === 'Группы' && c.kind === 'group') ||
-        (filter === 'Непрочитанные' && c.unread > 0)) &&
-      c.title.toLowerCase().includes(listQuery.toLowerCase()),
-  );
-  const unread = chats.reduce((n, c) => n + c.unread, 0);
+  const filtered = chats
+    .filter(
+      (c) =>
+        (filter === 'Архив' ? c.archived : !c.archived) &&
+        (filter === 'Все' ||
+          filter === 'Архив' ||
+          (filter === 'Личные' && c.kind === 'direct') ||
+          (filter === 'Группы' && c.kind === 'group') ||
+          (filter === 'Непрочитанные' && c.unread > 0)) &&
+        c.title.toLowerCase().includes(listQuery.toLowerCase()),
+    )
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
+  const archivedCount = chats.filter((chat) => chat.archived).length;
+  const unread = chats
+    .filter((chat) => !chat.muted && !chat.archived)
+    .reduce((n, c) => n + c.unread, 0);
   if (!ready)
     return (
       <div className="boot">
@@ -882,7 +1365,7 @@ export default function App() {
     return (
       <>
         <Auth
-          onLogin={setMe}
+          onLogin={handleLogin}
           onDemo={() => {
             sessionStorage.setItem('galinka-demo', 'true');
             location.href = '/app?demo=1';
@@ -929,12 +1412,23 @@ export default function App() {
           >
             <Bookmark size={23} />
           </IconButton>
+          <IconButton
+            label="Объявления"
+            className={section === 'announcements' ? 'active' : ''}
+            onClick={() => setSection('announcements')}
+          >
+            <Megaphone size={23} />
+          </IconButton>
         </div>
         <div className="rail-bottom">
           <ThemeToggle />
-          <IconButton label="Установить приложение" onClick={() => setModal('install')}>
-            <Download size={21} />
-          </IconButton>
+          <>
+            {updates.available && (
+              <IconButton label="Доступно обновление" onClick={() => setSection('settings')}>
+                <Download size={21} />
+              </IconButton>
+            )}
+          </>
           <IconButton
             label="Настройки"
             className={section === 'settings' ? 'active' : ''}
@@ -966,7 +1460,8 @@ export default function App() {
         </div>
         <div className="sidebar-heading">
           <h1>
-            Чаты<span>{chats.length}</span>
+            {filter === 'Архив' ? 'Архив' : 'Чаты'}
+            <span>{filter === 'Архив' ? archivedCount : chats.length - archivedCount}</span>
           </h1>
           <IconButton label="Новый чат" className="new-chat" onClick={() => setModal('new')}>
             <Plus size={21} />
@@ -1000,47 +1495,86 @@ export default function App() {
             <SlidersHorizontal size={16} />
           </IconButton>
         </div>
+        <div className="sidebar-tools">
+          <button
+            className={filter === 'Архив' ? 'archive-link selected' : 'archive-link'}
+            aria-pressed={filter === 'Архив'}
+            onClick={() => setFilter(filter === 'Архив' ? 'Все' : 'Архив')}
+          >
+            {filter === 'Архив' ? <ArrowLeft size={16} /> : <Archive size={16} />}
+            {filter === 'Архив' ? 'Все чаты' : 'Архив'}
+            <span>{archivedCount}</span>
+          </button>
+          <span>
+            {filter === 'Непрочитанные'
+              ? 'Непрочитанные'
+              : filter === 'Архив'
+                ? 'Скрытые разговоры'
+                : 'Ваши разговоры'}
+          </span>
+        </div>
         <div className="chat-list">
-          {filtered.map((c) => (
-            <button
-              key={c.id}
-              className={`chat-item ${activeId === c.id && section === 'chats' ? 'selected' : ''}`}
-              onClick={() => select(c.id)}
-            >
-              <Avatar chat={c} person={c.peer} />
-              <span className="chat-item-content">
-                <span className="chat-item-title">
-                  <strong>{c.title}</strong>
-                  <time>{c.last_message ? time(c.last_message.created_at) : ''}</time>
-                </span>
-                <span className="chat-item-preview">
-                  <span>
-                    {c.last_message?.sender_id === me.id && <CheckCheck size={13} />}{' '}
-                    {c.last_message?.body || (c.last_message?.file_id ? 'Файл' : 'Нет сообщений')}
+          {filtered.map((c, index) => (
+            <Fragment key={c.id}>
+              {((index === 0 && c.pinned) ||
+                (index > 0 && filtered[index - 1].pinned && !c.pinned)) && (
+                <div className="chat-list-label">{c.pinned ? 'Закреплённые' : 'Другие чаты'}</div>
+              )}
+              <button
+                className={`chat-item ${activeId === c.id && section === 'chats' ? 'selected' : ''}`}
+                onClick={() => select(c.id)}
+              >
+                <Avatar chat={c} person={c.peer} />
+                <span className="chat-item-content">
+                  <span className="chat-item-title">
+                    <strong>{c.title}</strong>
+                    <span className="chat-flags">
+                      {c.pinned && <Pin size={12} aria-label="Закреплён" />}
+                      {c.muted && <BellOff size={12} aria-label="Без уведомлений" />}
+                    </span>
+                    <time>{c.last_message ? time(c.last_message.created_at) : ''}</time>
                   </span>
-                  {c.unread > 0 && <b className="unread">{c.unread}</b>}
+                  <span className="chat-item-preview">
+                    <span>
+                      {drafts[c.id] || attachments[c.id] ? (
+                        <span className="chat-draft">
+                          Черновик: {drafts[c.id] || attachments[c.id].file.name}
+                        </span>
+                      ) : (
+                        <>
+                          {c.last_message?.sender_id === me.id && (
+                            <Check size={13} aria-label="Отправлено" />
+                          )}{' '}
+                          {c.last_message?.body ||
+                            (c.last_message?.file_id ? 'Файл' : 'Нет сообщений')}
+                        </>
+                      )}
+                    </span>
+                    {c.unread > 0 && (
+                      <b className={`unread ${c.muted ? 'muted-unread' : ''}`}>
+                        {c.unread > 99 ? '99+' : c.unread}
+                      </b>
+                    )}
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+            </Fragment>
           ))}
           {!filtered.length && (
             <div className="list-empty">
               <MessageCircle size={24} />
-              <p>{listQuery ? 'Чат не найден' : 'Пока нет чатов'}</p>
+              <p>
+                {listQuery
+                  ? 'Чат не найден'
+                  : filter === 'Архив'
+                    ? 'В архиве пока пусто'
+                    : 'Пока нет чатов'}
+              </p>
               <button className="text-button" onClick={() => setModal('new')}>
                 Написать другу <Plus size={16} />
               </button>
             </div>
           )}
-        </div>
-        <div className="server-status">
-          <span className={`status-dot ${!connected ? 'offline' : ''}`} />
-          {demo
-            ? 'Демо · только в этом браузере'
-            : connected
-              ? 'На связи с вашим сервером'
-              : 'Восстанавливаем соединение'}
-          <Lock size={12} />
         </div>
       </aside>
       <main className="workspace">
@@ -1104,11 +1638,68 @@ export default function App() {
                 </IconButton>
                 <IconButton
                   label="О чате"
-                  className={infoOpen ? 'active' : ''}
+                  className={`info-toggle ${infoOpen ? 'active' : ''}`}
                   onClick={() => setInfoOpen((v) => !v)}
                 >
                   <Info size={21} />
                 </IconButton>
+                <details className="chat-actions">
+                  <summary
+                    className="icon-button"
+                    aria-label="Действия с чатом"
+                    title="Действия с чатом"
+                  >
+                    <MoreHorizontal size={22} />
+                  </summary>
+                  <div className="chat-actions-menu">
+                    <button
+                      type="button"
+                      disabled={preferenceBusy}
+                      onClick={() => void setChatPreference(active, { pinned: !active.pinned })}
+                    >
+                      {active.pinned ? <PinOff size={17} /> : <Pin size={17} />}
+                      {active.pinned ? 'Открепить чат' : 'Закрепить чат'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={preferenceBusy}
+                      onClick={() => void setChatPreference(active, { muted: !active.muted })}
+                    >
+                      {active.muted ? <Bell size={17} /> : <BellOff size={17} />}
+                      {active.muted ? 'Включить уведомления' : 'Без уведомлений'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={preferenceBusy}
+                      onClick={() => void setChatPreference(active, { archived: !active.archived })}
+                    >
+                      {active.archived ? <ArchiveRestore size={17} /> : <Archive size={17} />}
+                      {active.archived ? 'Вернуть из архива' : 'В архив'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeMenus();
+                        setInfoOpen(true);
+                      }}
+                    >
+                      <Info size={17} />
+                      Информация о чате
+                    </button>
+                    {active.kind === 'group' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeMenus();
+                          setModal('group');
+                        }}
+                      >
+                        <Users size={17} />
+                        Управление группой
+                      </button>
+                    )}
+                  </div>
+                </details>
               </div>
             </header>
             {searchOpen && (
@@ -1137,9 +1728,22 @@ export default function App() {
                 <div
                   className="messages"
                   ref={scroller}
+                  onWheel={() => {
+                    jumpingToLatest.current = false;
+                  }}
+                  onTouchStart={() => {
+                    jumpingToLatest.current = false;
+                  }}
                   onScroll={() => {
                     const el = scroller.current!;
-                    followBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+                    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+                    if (jumpingToLatest.current && !atBottom) return;
+                    jumpingToLatest.current = false;
+                    followBottom.current = atBottom;
+                    setAwayFromBottom(!atBottom);
+                    const latest = messages.at(-1);
+                    if (followBottom.current && activeId && latest)
+                      void markRead(activeId, latest.id);
                   }}
                 >
                   {loading ? (
@@ -1204,7 +1808,7 @@ export default function App() {
                               </div>
                             )}
                             <article
-                              className={`message-row ${own ? 'own' : ''} ${bot ? 'bot' : ''} ${same && !newDay ? 'continued' : ''}`}
+                              className={`message-row ${newMessageIds.includes(m.id) ? 'is-new' : ''} ${own ? 'own' : ''} ${bot ? 'bot' : ''} ${same && !newDay ? 'continued' : ''}`}
                             >
                               {!own && (
                                 <div className="message-avatar">
@@ -1221,23 +1825,54 @@ export default function App() {
                                   </div>
                                 )}
                                 <div className="bubble">
-                                  {m.file && (
-                                    <button
-                                      className="file-attachment"
-                                      onClick={() => downloadFile(m.file!)}
-                                    >
-                                      <FileText size={25} />
-                                      <span>
-                                        <strong>{m.file.name}</strong>
-                                        <small>{bytes(m.file.size)} · Скачать</small>
-                                      </span>
-                                      <Download size={17} />
-                                    </button>
+                                  {m.reply && (
+                                    <blockquote className="message-quote">
+                                      <Reply size={14} />
+                                      <div>
+                                        <strong>{m.reply.sender.name}</strong>
+                                        <span>
+                                          {m.reply.body || m.reply.file_name || 'Сообщение'}
+                                        </span>
+                                      </div>
+                                    </blockquote>
                                   )}
-                                  {m.body && <p>{m.body}</p>}
+                                  {m.file && (
+                                    <MediaAttachment
+                                      file={m.file}
+                                      onDownload={() => void downloadFile(m.file!)}
+                                    />
+                                  )}
+                                  {m.body && <MessageText text={m.body} />}
                                   <span className="message-time">
+                                    {m.edited_at && (
+                                      <span
+                                        className="message-edited"
+                                        title={`Изменено ${time(m.edited_at)}`}
+                                      >
+                                        изменено
+                                      </span>
+                                    )}
                                     <time>{time(m.created_at)}</time>
-                                    {own && <Check size={14} aria-label="Сохранено на сервере" />}
+                                    {own &&
+                                      ((m.read_by || 0) > 0 ? (
+                                        <span
+                                          className="read-receipt"
+                                          title={
+                                            active.kind === 'direct'
+                                              ? 'Прочитано'
+                                              : `Прочитали: ${m.read_by}`
+                                          }
+                                          aria-label={
+                                            active.kind === 'direct'
+                                              ? 'Прочитано'
+                                              : `Прочитали: ${m.read_by}`
+                                          }
+                                        >
+                                          <CheckCheck size={15} />
+                                        </span>
+                                      ) : (
+                                        <Check size={14} aria-label="Отправлено" />
+                                      ))}
                                   </span>
                                 </div>
                                 {m.reactions.length > 0 && (
@@ -1256,7 +1891,11 @@ export default function App() {
                                   </div>
                                 )}
                               </div>
-                              <details className="message-menu">
+                              <details
+                                className="message-menu"
+                                name="message-actions"
+                                onToggle={(event) => positionMessageMenu(event.currentTarget)}
+                              >
                                 <summary aria-label="Действия с сообщением">
                                   <MoreHorizontal size={18} />
                                 </summary>
@@ -1278,11 +1917,41 @@ export default function App() {
                                       </button>
                                     ))}
                                   </div>
+                                  <button
+                                    className="message-action"
+                                    disabled={sending}
+                                    onClick={() => startReply(m)}
+                                  >
+                                    <Reply size={16} />
+                                    Ответить
+                                  </button>
+                                  <button
+                                    className="message-action"
+                                    onClick={() => void copyMessage(m)}
+                                  >
+                                    {copiedMessageId === m.id ? (
+                                      <Check size={16} />
+                                    ) : (
+                                      <Copy size={16} />
+                                    )}
+                                    {copiedMessageId === m.id ? 'Скопировано' : 'Копировать'}
+                                  </button>
+                                  {own && (
+                                    <button
+                                      className="message-action"
+                                      disabled={sending || savingEdit}
+                                      onClick={() => startEdit(m)}
+                                    >
+                                      <Pencil size={16} />
+                                      Редактировать
+                                    </button>
+                                  )}
                                   {own && (
                                     <button
                                       className="delete-action"
                                       onClick={() => {
                                         setDeleteId(m.id);
+                                        closeMenus();
                                         setModal('delete');
                                       }}
                                     >
@@ -1300,8 +1969,54 @@ export default function App() {
                     </>
                   )}
                 </div>
+                {awayFromBottom && !messageQuery && (
+                  <button
+                    type="button"
+                    className="jump-to-latest"
+                    onClick={jumpToLatest}
+                    aria-label="К последним сообщениям"
+                  >
+                    <ArrowDown size={18} />
+                    <span>К последним</span>
+                    {active.unread > 0 && <b>{active.unread}</b>}
+                  </button>
+                )}
                 <div className="composer-wrap">
-                  {attachment && (
+                  {(edit || reply) && (
+                    <div className={`composer-context ${edit ? 'editing' : ''}`}>
+                      <span className="composer-context-icon">
+                        {edit ? <Pencil size={19} /> : <Reply size={19} />}
+                      </span>
+                      <div>
+                        <strong>
+                          {edit ? 'Редактирование сообщения' : `Ответ для ${reply!.sender.name}`}
+                        </strong>
+                        <p>
+                          {edit
+                            ? edit.message.body || edit.message.file?.name
+                            : reply!.body || reply!.file?.name || 'Сообщение'}
+                        </p>
+                      </div>
+                      <IconButton
+                        label={edit ? 'Отменить редактирование' : 'Отменить ответ'}
+                        disabled={savingCurrentEdit || sending}
+                        onClick={() => {
+                          if (edit) setEditing(null);
+                          else if (activeId) {
+                            setReplies((previous) => {
+                              const next = { ...previous };
+                              delete next[activeId];
+                              return next;
+                            });
+                            delete nonces.current[activeId];
+                          }
+                        }}
+                      >
+                        <X size={18} />
+                      </IconButton>
+                    </div>
+                  )}
+                  {attachment && !edit && (
                     <div className="pending-file">
                       <FileText size={18} />
                       <span>
@@ -1311,9 +2026,13 @@ export default function App() {
                         label="Убрать файл"
                         disabled={sending}
                         onClick={() => {
-                          setAttachment(null);
-                          uploaded.current = null;
-                          nonce.current = null;
+                          if (!activeId) return;
+                          setAttachments((prev) => {
+                            const next = { ...prev };
+                            delete next[activeId];
+                            return next;
+                          });
+                          delete nonces.current[activeId];
                         }}
                       >
                         <X size={16} />
@@ -1327,39 +2046,36 @@ export default function App() {
                       hidden
                       onChange={(e) => {
                         const file = e.target.files?.[0];
-                        if (file) {
-                          if (file.size > 20 * 1024 * 1024)
-                            setError('Максимальный размер файла — 20 МБ.');
-                          else {
-                            setAttachment(file);
-                            uploaded.current = null;
-                            nonce.current = null;
-                          }
-                        }
+                        if (file) attachFile(file);
                         e.target.value = '';
                       }}
                     />
                     <IconButton
                       label="Прикрепить файл"
-                      disabled={sending}
+                      disabled={sending || Boolean(edit)}
                       onClick={() => fileInput.current?.click()}
                     >
                       <Paperclip size={21} />
                     </IconButton>
                     <textarea
                       ref={textarea}
+                      enterKeyHint="enter"
                       aria-label="Сообщение"
-                      placeholder="Сообщение…"
+                      placeholder={
+                        edit ? 'Измените сообщение…' : reply ? 'Написать ответ…' : 'Сообщение…'
+                      }
                       rows={1}
-                      value={draft}
+                      value={composerValue}
                       maxLength={8000}
-                      disabled={sending}
+                      readOnly={sending || savingCurrentEdit}
+                      aria-busy={sending || savingCurrentEdit}
                       onChange={(e) => changeDraft(e.target.value)}
                       onKeyDown={(e) => {
                         if (
                           e.key === 'Enter' &&
                           !e.shiftKey &&
                           !e.nativeEvent.isComposing &&
+                          e.nativeEvent.keyCode !== 229 &&
                           window.matchMedia('(pointer:fine)').matches
                         ) {
                           e.preventDefault();
@@ -1375,7 +2091,7 @@ export default function App() {
                               type="button"
                               key={emoji}
                               onClick={() => {
-                                changeDraft(draft + emoji);
+                                changeDraft(composerValue + emoji);
                                 setEmojiOpen(false);
                                 textarea.current?.focus();
                               }}
@@ -1387,24 +2103,42 @@ export default function App() {
                       )}
                       <IconButton
                         label="Добавить эмодзи"
-                        disabled={sending}
+                        disabled={sending || savingCurrentEdit}
                         onClick={() => setEmojiOpen((v) => !v)}
                       >
                         <Smile size={22} />
                       </IconButton>
                     </div>
-                    <button
-                      className="send-button"
-                      aria-label="Отправить сообщение"
-                      title="Отправить сообщение"
-                      disabled={sending || (!draft.trim() && !attachment)}
-                    >
-                      {sending ? (
-                        <LoaderCircle size={20} className="spin" />
-                      ) : (
-                        <ArrowUp size={22} />
-                      )}
-                    </button>
+                    {!edit && !draft.trim() && !attachment ? (
+                      <VoiceRecorder
+                        key={active.id}
+                        disabled={sending}
+                        onRecorded={attachFile}
+                        onError={setError}
+                      />
+                    ) : (
+                      <button
+                        className="send-button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        aria-label={edit ? 'Сохранить изменения' : 'Отправить сообщение'}
+                        title={edit ? 'Сохранить изменения' : 'Отправить сообщение'}
+                        disabled={
+                          sending ||
+                          savingCurrentEdit ||
+                          (edit
+                            ? !edit.body.trim() && !edit.message.file
+                            : !draft.trim() && !attachment)
+                        }
+                      >
+                        {sending || savingCurrentEdit ? (
+                          <LoaderCircle size={20} className="spin" />
+                        ) : edit ? (
+                          <Check size={22} />
+                        ) : (
+                          <ArrowUp size={22} />
+                        )}
+                      </button>
+                    )}
                   </form>
                   <div className="composer-foot">
                     <span className="desktop-hint">
@@ -1436,6 +2170,38 @@ export default function App() {
                       <button className="secondary" onClick={invite}>
                         <Link size={15} />
                         Пригласить друзей
+                      </button>
+                    )}
+                  </div>
+                  <div className="info-chat-preferences">
+                    <button
+                      type="button"
+                      disabled={preferenceBusy}
+                      onClick={() => void setChatPreference(active, { pinned: !active.pinned })}
+                    >
+                      {active.pinned ? <PinOff size={17} /> : <Pin size={17} />}
+                      {active.pinned ? 'Открепить чат' : 'Закрепить чат'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={preferenceBusy}
+                      onClick={() => void setChatPreference(active, { muted: !active.muted })}
+                    >
+                      {active.muted ? <Bell size={17} /> : <BellOff size={17} />}
+                      {active.muted ? 'Включить уведомления' : 'Без уведомлений'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={preferenceBusy}
+                      onClick={() => void setChatPreference(active, { archived: !active.archived })}
+                    >
+                      {active.archived ? <ArchiveRestore size={17} /> : <Archive size={17} />}
+                      {active.archived ? 'Вернуть из архива' : 'В архив'}
+                    </button>
+                    {active.kind === 'group' && (
+                      <button type="button" onClick={() => setModal('group')}>
+                        <Users size={17} />
+                        Управление группой
                       </button>
                     )}
                   </div>
@@ -1493,7 +2259,7 @@ export default function App() {
                   <div className="info-footer">
                     <Lock size={13} />
                     <span>
-                      На вашем сервере
+                      Ваша переписка
                       <br />
                       <small>Только для участников чата</small>
                     </span>
@@ -1513,7 +2279,7 @@ export default function App() {
             </button>
           </div>
         ) : section === 'modules' ? (
-          <div className="content-page">
+          <div className="content-page" key={section}>
             <button className="text-button mobile-page-back" onClick={() => setSection('chats')}>
               <ArrowLeft size={17} />К чатам
             </button>
@@ -1546,7 +2312,7 @@ export default function App() {
                 </h2>
                 <p>Подбросит монетку, выберет вариант или предложит план.</p>
                 <span className="module-disclosure">
-                  <Lock size={13} /> Работает на вашем сервере · без ИИ и внешних API
+                  <Lock size={13} /> Монетка, идеи и выбор из ваших вариантов
                 </span>
                 <div className="command-examples">
                   <code>@неля монетка</code>
@@ -1579,8 +2345,15 @@ export default function App() {
               </div>
             </section>
           </div>
+        ) : section === 'announcements' ? (
+          <div className="content-page" key={section}>
+            <button className="text-button mobile-page-back" onClick={() => setSection('chats')}>
+              <ArrowLeft size={17} />К чатам
+            </button>
+            <Announcements />
+          </div>
         ) : (
-          <div className="content-page settings-page">
+          <div className="content-page settings-page" key="settings">
             <button className="text-button mobile-page-back" onClick={() => setSection('chats')}>
               <ArrowLeft size={17} />К чатам
             </button>
@@ -1614,9 +2387,18 @@ export default function App() {
               <ThemePicker />
             </section>
             <NotificationSettings state={notifications} demo={demo} />
+            {me.role === 'admin' && !demo && (
+              <section className="settings-section">
+                <h3>Администрирование</h3>
+                <p>Пользователи, роли и объявления.</p>
+                <a className="secondary" href="/admin">
+                  Панель администратора
+                </a>
+              </section>
+            )}
             <section className="settings-section">
               <h3>Приложение</h3>
-              <p>Android, Windows и Linux</p>
+              <p>Для телефона и компьютера</p>
               <button className="primary" onClick={() => setModal('install')}>
                 <Download size={18} />
                 Установить Galinka
@@ -1637,7 +2419,12 @@ export default function App() {
               {demo ? 'Выйти из демоверсии' : 'Выйти из аккаунта'}
             </button>
             <section className="settings-section">
-              <Updates hasDraft={Object.values(drafts).some((v) => v.trim().length > 0)} />
+              <Updates
+                hasDraft={
+                  Object.values(drafts).some((v) => v.trim().length > 0) ||
+                  Object.keys(attachments).length > 0
+                }
+              />
             </section>
             <p className="settings-version">Galinka {__APP_VERSION__} · Сделано для своих</p>
           </div>
@@ -1646,6 +2433,7 @@ export default function App() {
       <nav className="mobile-nav" aria-label="Навигация на телефоне">
         <button
           className={section === 'chats' ? 'active' : ''}
+          aria-current={section === 'chats' ? 'page' : undefined}
           onClick={() => {
             setSection('chats');
             setActiveId(null);
@@ -1656,6 +2444,7 @@ export default function App() {
         </button>
         <button
           className={section === 'modules' ? 'active' : ''}
+          aria-current={section === 'modules' ? 'page' : undefined}
           onClick={() => setSection('modules')}
         >
           <Puzzle size={20} />
@@ -1663,10 +2452,19 @@ export default function App() {
         </button>
         <button
           className={section === 'settings' ? 'active' : ''}
+          aria-current={section === 'settings' ? 'page' : undefined}
           onClick={() => setSection('settings')}
         >
           <Settings size={20} />
           Настройки
+        </button>
+        <button
+          className={section === 'announcements' ? 'active' : ''}
+          aria-current={section === 'announcements' ? 'page' : undefined}
+          onClick={() => setSection('announcements')}
+        >
+          <Megaphone size={20} />
+          Объявления
         </button>
       </nav>
       {modal === 'new' && (
@@ -1676,6 +2474,29 @@ export default function App() {
             setModal(null);
             await refreshChats();
             select(id);
+          }}
+        />
+      )}
+      {modal === 'group' && active?.kind === 'group' && (
+        <GroupSettings
+          chat={active}
+          me={me}
+          members={members}
+          onClose={() => setModal(null)}
+          onUpdated={async () => {
+            const id = active.id;
+            await refreshChats();
+            const people = await api<Person[]>(`/chats/${id}/members`);
+            if (activeRef.current === id) setMembers(people);
+          }}
+          onLeft={async () => {
+            setModal(null);
+            setActiveId(null);
+            setMessages([]);
+            setMembers([]);
+            setInfoOpen(false);
+            setEditing(null);
+            await refreshChats();
           }}
         />
       )}
@@ -1760,7 +2581,7 @@ export default function App() {
         <Modal error={error} title="Пригласить в группу" onClose={() => setModal(null)}>
           <p className="muted">
             Ссылка добавит зарегистрированного друга в «{active?.title}». Действует 7 дней. Новому
-            участнику также понадобится код регистрации от владельца сервера.
+            участнику также понадобится код регистрации по приглашению.
           </p>
           {inviteUrl ? (
             <>

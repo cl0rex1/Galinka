@@ -1,6 +1,6 @@
 {
   "name": "galinka",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,6 +16,7 @@
     "test": "tsx --env-file-if-exists=.env --test tests/*.test.ts",
     "test:e2e": "playwright test",
     "setup": "node scripts/setup.mjs",
+    "admin:grant": "node --env-file-if-exists=.env scripts/grant-admin.mjs",
     "desktop:dev": "node scripts/build-web.mjs --desktop && electron .",
     "desktop:build": "node scripts/build-desktop.mjs",
     "android:build": "node scripts/build-android.mjs",

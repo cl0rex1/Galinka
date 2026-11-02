@@ -342,6 +342,228 @@ test(
         body: JSON.stringify({ kind: 'group', title: 'bad', userIds: [] }),
       });
       assert.equal(csrf.status, 403);
+      // Administration is checked by the API, including current roles, revocation and draft visibility.
+      assert.equal((await request('/admin/users')).status, 401);
+      assert.equal((await request('/admin/users', 'GET', undefined, bob.cookie)).status, 403);
+      const attempts = await request('/auth/register', 'POST', {
+        username: 'role' + suffix,
+        name: 'No escalation',
+        password: 'test-password-strong',
+        invite,
+        role: 'admin',
+      });
+      accounts.push(attempts.data.id);
+      assert.equal(attempts.data.role, 'user');
+      await db.query("UPDATE users SET role='admin' WHERE id=$1", [alice.data.id]);
+      const adminUsers = await request('/admin/users?q=bob', 'GET', undefined, alice.cookie);
+      assert.equal(adminUsers.status, 200);
+      assert.ok(adminUsers.data.items.some((u: any) => u.id === bob.data.id));
+      assert.ok(adminUsers.data.items.every((u: any) => !('password' in u)));
+      assert.equal(
+        (await request(`/admin/users/${alice.data.id}`, 'PATCH', { blocked: true }, alice.cookie))
+          .status,
+        409,
+      );
+      assert.equal(
+        (await request(`/admin/users/${alice.data.id}`, 'PATCH', { role: 'user' }, alice.cookie))
+          .status,
+        409,
+      );
+      const added = await request(
+        '/admin/users',
+        'POST',
+        {
+          username: 'managed' + suffix,
+          name: 'Managed account',
+          password: 'original-password',
+          role: 'user',
+        },
+        alice.cookie,
+      );
+      assert.equal(added.status, 201);
+      accounts.push(added.data.id);
+      assert.equal(
+        (
+          await request(
+            '/chats',
+            'GET',
+            undefined,
+            (
+              await request('/auth/login', 'POST', {
+                username: added.data.username,
+                password: 'original-password',
+              })
+            ).cookie,
+          )
+        ).data.length,
+        1,
+      );
+      assert.equal(
+        (
+          await request(
+            `/admin/users/${added.data.id}`,
+            'PATCH',
+            { name: 'Edited', password: 'updated-password' },
+            alice.cookie,
+          )
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await request('/auth/login', 'POST', {
+            username: added.data.username,
+            password: 'original-password',
+          })
+        ).status,
+        401,
+      );
+      assert.equal(
+        (
+          await request('/auth/login', 'POST', {
+            username: added.data.username,
+            password: 'updated-password',
+          })
+        ).status,
+        200,
+      );
+      // Verify open SSE streams on the other replica are closed on block, and push tokens cascade away.
+      const revokeController = new AbortController();
+      const revokeStream = await fetch('http://localhost:3009/api/events', {
+        headers: { Cookie: bob.cookie },
+        signal: revokeController.signal,
+      });
+      const revokeReader = revokeStream.body!.getReader();
+      await revokeReader.read();
+      assert.equal(
+        (await request(`/admin/users/${bob.data.id}`, 'PATCH', { blocked: true }, alice.cookie))
+          .status,
+        200,
+      );
+      await Promise.race([
+        (async () => {
+          while (!(await revokeReader.read()).done) {}
+        })(),
+        new Promise((_, reject) => {
+          const timer = setTimeout(() => reject(Error('Blocked SSE stream stayed open')), 4000);
+          timer.unref();
+        }),
+      ]);
+      revokeController.abort();
+      assert.equal((await request('/me', 'GET', undefined, bob.cookie)).status, 401);
+      assert.equal(
+        (
+          await request('/auth/login', 'POST', {
+            username: 'bob' + suffix,
+            password: 'test-password-strong',
+          })
+        ).status,
+        403,
+      );
+      assert.equal(
+        (await request(`/admin/users/${bob.data.id}`, 'PATCH', { blocked: false }, alice.cookie))
+          .status,
+        200,
+      );
+      assert.equal((await request('/me', 'GET', undefined, bob.cookie)).status, 401);
+      const post = await request(
+        '/admin/announcements',
+        'POST',
+        { title: 'Course news', body: 'Draft text' },
+        alice.cookie,
+      );
+      assert.equal(post.status, 201);
+      const postId = post.data.id;
+      assert.equal(
+        (await request('/announcements', 'GET', undefined, eve.cookie)).data.items.some(
+          (p: any) => p.id === postId,
+        ),
+        false,
+      );
+      assert.equal(
+        (await request('/admin/announcements', 'POST', { title: 'No', body: 'No' }, eve.cookie))
+          .status,
+        403,
+      );
+      assert.equal(
+        (
+          await request(
+            `/admin/announcements/${postId}`,
+            'PATCH',
+            { published: true },
+            alice.cookie,
+          )
+        ).status,
+        200,
+      );
+      const edited = await request(
+        `/admin/announcements/${postId}`,
+        'PATCH',
+        { body: 'Published text' },
+        alice.cookie,
+      );
+      assert.equal(edited.data.published, true, 'Editing text preserves publication status');
+      assert.equal(
+        (await request('/announcements', 'GET', undefined, eve.cookie)).data.items.find(
+          (p: any) => p.id === postId,
+        ).body,
+        'Published text',
+      );
+      assert.equal(
+        (await request(`/admin/announcements/${postId}`, 'DELETE', undefined, eve.cookie)).status,
+        403,
+      );
+      await request(`/admin/announcements/${postId}`, 'PATCH', { published: false }, alice.cookie);
+      assert.equal(
+        (await request('/announcements', 'GET', undefined, eve.cookie)).data.items.some(
+          (p: any) => p.id === postId,
+        ),
+        false,
+      );
+      assert.equal(
+        (await request(`/admin/announcements/${postId}`, 'DELETE', undefined, alice.cookie)).status,
+        200,
+      );
+      assert.equal(
+        (
+          await request(
+            `/admin/announcements/${postId}`,
+            'PATCH',
+            { title: 'Missing' },
+            alice.cookie,
+          )
+        ).status,
+        404,
+      );
+      assert.equal(
+        (await request('/admin/users?page=0', 'GET', undefined, alice.cookie)).status,
+        400,
+      );
+      // Concurrent attempts to demote both administrators leave exactly one active admin.
+      await db.query("UPDATE users SET role='admin' WHERE id=$1", [eve.data.id]);
+      const concurrent = await Promise.all([
+        request(`/admin/users/${eve.data.id}`, 'PATCH', { role: 'user' }, alice.cookie),
+        request(`/admin/users/${alice.data.id}`, 'PATCH', { role: 'user' }, eve.cookie),
+      ]);
+      assert.equal(concurrent.filter((r) => r.status === 200).length, 1);
+      assert.equal(
+        (
+          await db.query(
+            "SELECT count(*)::int AS n FROM users WHERE id=ANY($1::uuid[]) AND role='admin' AND NOT blocked",
+            [accounts],
+          )
+        ).rows[0].n,
+        1,
+      );
+      // Restore this test account's session to exercise the existing logout/device cleanup below.
+      await db.query(
+        "INSERT INTO sessions(token,user_id,expires_at) VALUES($1,$2,now()+interval '1 day') ON CONFLICT DO NOTHING",
+        [deviceSession, alice.data.id],
+      );
+      await db.query(
+        'INSERT INTO push_devices(token,user_id,session_token) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+        [deviceToken, alice.data.id, deviceSession],
+      );
       await request('/auth/logout', 'POST', {}, alice.cookie);
       assert.equal(
         (await db.query('SELECT token FROM push_devices WHERE token=$1', [deviceToken])).rowCount,
@@ -360,6 +582,7 @@ test(
         ),
       );
       if (accounts.length) {
+        await db.query('DELETE FROM announcements WHERE author_id=ANY($1::uuid[])', [accounts]);
         await db.query('DELETE FROM chats WHERE owner_id=ANY($1::uuid[])', [accounts]);
         await db.query('DELETE FROM users WHERE id=ANY($1::uuid[])', [accounts]);
       }

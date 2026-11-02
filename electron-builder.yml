@@ -18,7 +18,11 @@ mac:
     - target: zip
       arch: [arm64, x64]
   category: public.app-category.social-networking
+  entitlements: desktop/entitlements.mac.plist
+  entitlementsInherit: desktop/entitlements.mac.plist
   icon: public/icon-512.png
+  extendInfo:
+    NSMicrophoneUsageDescription: Galinka использует микрофон для записи голосовых сообщений по вашему нажатию.
 win:
   target:
     - target: nsis

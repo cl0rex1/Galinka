@@ -16,6 +16,7 @@ import path from 'node:path';
 
 const built = spawnSync(process.execPath, ['scripts/build-desktop.mjs', '--stage-only'], {
   stdio: 'inherit',
+  env: { ...process.env, GALINKA_PACKAGE_FORMAT: 'arch' },
 });
 if (built.status !== 0) process.exit(built.status ?? 1);
 const { version } = JSON.parse(readFileSync('package.json', 'utf8'));

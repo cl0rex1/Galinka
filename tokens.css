@@ -64,7 +64,17 @@
   --dur-fast: 100ms;
   --dur-short: 180ms;
   --dur-medium: 280ms;
+  --dur-enter: 220ms;
+  --touch-target: 44px;
   --rule-thin: 1px;
+  --color-navigation: oklch(29% 0.035 156);
+  --color-navigation-ink: oklch(96% 0.014 148);
+  --color-navigation-muted: oklch(78% 0.028 148);
+  --color-navigation-selected: oklch(42% 0.045 151);
+  --color-conversation: oklch(97% 0.012 130);
+  --color-selection-rule: oklch(83% 0.048 151);
+  --color-quote: oklch(95% 0.026 151);
+  --color-recording: oklch(50% 0.17 29);
 }
 
 :root {
@@ -106,4 +116,12 @@
   --color-overlay: #0009;
   --color-shadow: #0002;
   --color-shadow-deep: #0005;
+  --color-navigation: oklch(18% 0.022 156);
+  --color-navigation-ink: oklch(94% 0.018 148);
+  --color-navigation-muted: oklch(74% 0.032 148);
+  --color-navigation-selected: oklch(34% 0.045 151);
+  --color-conversation: oklch(20% 0.022 150);
+  --color-selection-rule: oklch(44% 0.055 151);
+  --color-quote: oklch(32% 0.035 151);
+  --color-recording: oklch(77% 0.13 29);
 }

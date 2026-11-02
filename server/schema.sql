@@ -6,6 +6,16 @@ CREATE TABLE IF NOT EXISTS sessions (
  token text PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  expires_at timestamptz NOT NULL
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role text NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user'));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS announcements (
+ id uuid PRIMARY KEY, title text NOT NULL CHECK(length(title) BETWEEN 1 AND 120),
+ body text NOT NULL CHECK(length(body) BETWEEN 1 AND 10000),
+ published boolean NOT NULL DEFAULT false,
+ author_id uuid NOT NULL REFERENCES users(id),
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS announcements_published ON announcements(updated_at DESC,id DESC) WHERE published;
 CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
 CREATE TABLE IF NOT EXISTS chats (
  id uuid PRIMARY KEY, kind text NOT NULL CHECK (kind IN ('direct','group','saved')),
@@ -17,6 +27,10 @@ CREATE TABLE IF NOT EXISTS members (
  read_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(chat_id,user_id)
 );
 CREATE INDEX IF NOT EXISTS members_user ON members(user_id);
+ALTER TABLE members ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS muted boolean NOT NULL DEFAULT false;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS receipt_at timestamptz;
 CREATE TABLE IF NOT EXISTS files (
  id uuid PRIMARY KEY, chat_id uuid NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
  user_id uuid NOT NULL REFERENCES users(id), name text NOT NULL, size integer NOT NULL,
@@ -28,6 +42,10 @@ CREATE TABLE IF NOT EXISTS messages (
  file_id uuid REFERENCES files(id), nonce uuid NOT NULL, created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  UNIQUE(sender_id,nonce)
 );
+ALTER TABLE files ADD COLUMN IF NOT EXISTS mime text NOT NULL DEFAULT 'application/octet-stream';
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at timestamptz;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id uuid REFERENCES messages(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS messages_reply_to ON messages(reply_to_id) WHERE reply_to_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_chat_time ON messages(chat_id,created_at DESC,id DESC);
 CREATE TABLE IF NOT EXISTS reactions (
  message_id uuid REFERENCES messages(id) ON DELETE CASCADE, user_id uuid REFERENCES users(id) ON DELETE CASCADE,

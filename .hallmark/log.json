@@ -1,1 +1,37 @@
-[{"date":"2026-10-20","macrostructure":"Workbench","theme":"Coral · forest","enrichment":"CSS botanical and Nelya character","brief":"Warm private messenger for friends; conversation first"}]
+[
+  {
+    "date": "2026-11-02",
+    "macrostructure": "Download desk",
+    "theme": "Existing Galinka forest",
+    "enrichment": "Real messenger screenshot",
+    "brief": "Device-aware downloads, iPhone installation, release-aware application updates"
+  },
+  {
+    "date": "2026-11-02",
+    "macrostructure": "Conversation workspace",
+    "theme": "Existing Galinka forest",
+    "enrichment": "User-shared photos and audio",
+    "brief": "Expanded messenger: compact mobile navigation, deep forest desktop rail, reply/edit actions, groups, archive and rich media"
+  },
+  {
+    "date": "2026-11-02",
+    "macrostructure": "Workbench",
+    "theme": "Existing Galinka forest",
+    "enrichment": "none",
+    "brief": "Mobile conversations, touch actions and accessible motion using existing Galinka identity"
+  },
+  {
+    "date": "2026-11-02",
+    "macrostructure": "Workspace",
+    "theme": "Existing Galinka forest",
+    "enrichment": "none",
+    "brief": "Coursework administration panel using existing Galinka tokens"
+  },
+  {
+    "date": "2026-10-20",
+    "macrostructure": "Workbench",
+    "theme": "Coral · forest",
+    "enrichment": "CSS botanical and Nelya character",
+    "brief": "Warm private messenger for friends; conversation first"
+  }
+]

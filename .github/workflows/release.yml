@@ -18,6 +18,7 @@ jobs:
             target: win
           - os: macos-latest
             target: mac
+            args: --arm64 --x64
           - os: ubuntu-latest
             target: linux
     runs-on: ${{ matrix.os }}
@@ -29,9 +30,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: npm run desktop:build -- --${{ matrix.target }}
+      - run: npm run desktop:build -- --${{ matrix.target }} ${{ matrix.args }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          GALINKA_MAC_SIGNED: ${{ secrets.MAC_CSC_LINK != '' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       - if: matrix.target == 'win'
         run: node tests/desktop/smoke.cjs
       - if: matrix.target == 'linux'
@@ -78,10 +85,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --verify-tag --title "Galinka $RELEASE_TAG" --notes-file docs/RELEASE.md
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --draft --verify-tag --title "Galinka $RELEASE_TAG" --notes-file docs/RELEASE.md
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[].name' > /tmp/galinka-assets.txt
           for artifact in release/*; do
             if ! grep -Fxq "$(basename "$artifact")" /tmp/galinka-assets.txt; then
               gh release upload "$RELEASE_TAG" "$artifact"
             fi
           done
+          gh release edit "$RELEASE_TAG" --draft=false --latest

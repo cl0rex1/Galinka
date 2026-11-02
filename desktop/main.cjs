@@ -1,12 +1,40 @@
-const { app, BrowserWindow, ipcMain, shell, Menu, protocol, net } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  shell,
+  Menu,
+  protocol,
+  net,
+  dialog,
+  systemPreferences,
+} = require('electron');
 const { readFile, stat } = require('node:fs/promises');
 const { existsSync } = require('node:fs');
 const { autoUpdater } = require('electron-updater');
 const path = require('node:path');
 const APP_URL = 'https://mess.quiby.me/app';
 const RELEASES = 'https://github.com/cl0rex1/Galinka/releases/latest';
+const buildInfo = (() => {
+  try {
+    return require('./build-info.json');
+  } catch {
+    return {};
+  }
+})();
+const signedMac = (() => {
+  try {
+    return require('./build-info.json').macSigned === true;
+  } catch {
+    return false;
+  }
+})();
+const manualUpdates =
+  (process.platform === 'darwin' && !signedMac) ||
+  (process.platform === 'linux' && !process.env.APPIMAGE);
+const updateMode = manualUpdates ? 'manual' : 'automatic';
 let window,
-  state = { phase: 'idle', version: app.getVersion() },
+  state = { phase: 'idle', version: app.getVersion(), mode: updateMode },
   busy = false;
 async function serveBundledApp() {
   const root = path.resolve(
@@ -45,7 +73,7 @@ async function serveBundledApp() {
         headers: {
           'Content-Type': types[path.extname(file)] || 'application/octet-stream',
           'Content-Security-Policy':
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
         },
       });
     } catch {
@@ -67,16 +95,8 @@ function trusted(event) {
 const external = (url) => {
   try {
     const u = new URL(url);
-    if (
-      u.protocol === 'https:' &&
-      [
-        'mess.quiby.me',
-        'api.quiby.me',
-        'github.com',
-        'objects.githubusercontent.com',
-        'release-assets.githubusercontent.com',
-      ].includes(u.hostname)
-    )
+    // Message links open in the system browser; executable/local URL schemes stay blocked.
+    if (['https:', 'http:'].includes(u.protocol) && !u.username && !u.password)
       return shell.openExternal(url);
   } catch {}
   return Promise.resolve();
@@ -103,11 +123,43 @@ ipcMain.handle('updates:status', (event) => {
 ipcMain.handle('updates:check', async (event) => {
   trusted(event);
   if (busy) return state;
-  if (!app.isPackaged) return { phase: 'current', version: app.getVersion() };
+  if (!app.isPackaged) return { phase: 'current', version: app.getVersion(), mode: updateMode };
   busy = true;
   try {
-    await autoUpdater.checkForUpdates();
+    if (manualUpdates) {
+      send({ phase: 'checking', error: undefined });
+      const response = await net.fetch(
+        'https://api.github.com/repos/cl0rex1/Galinka/releases/latest',
+        {
+          headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Galinka' },
+          signal: AbortSignal.timeout(15000),
+        },
+      );
+      if (!response.ok) throw Error('Update check failed');
+      const release = await response.json();
+      const version = release.tag_name.replace(/^v/, '');
+      const valid = /^\d+\.\d+\.\d+$/.test(version);
+      const newer =
+        valid && version.localeCompare(app.getVersion(), undefined, { numeric: true }) > 0;
+      const suffix =
+        process.platform === 'darwin'
+          ? `-mac-${process.arch}.dmg`
+          : buildInfo.packageFormat === 'arch'
+            ? '.pkg.tar.zst'
+            : '.deb';
+      const file =
+        release.assets.find((asset) => asset.name.endsWith(suffix)) ||
+        (process.platform === 'linux'
+          ? release.assets.find((asset) => asset.name.endsWith('.deb'))
+          : undefined);
+      send({
+        phase: newer && file ? 'available' : 'current',
+        version,
+        url: file?.browser_download_url,
+      });
+    } else await autoUpdater.checkForUpdates();
   } catch {
+    send({ phase: 'error', error: 'Не удалось проверить обновления. Попробуйте позже.' });
   } finally {
     busy = false;
   }
@@ -116,6 +168,10 @@ ipcMain.handle('updates:check', async (event) => {
 ipcMain.handle('updates:download', async (event) => {
   trusted(event);
   if (busy || state.phase !== 'available') return state;
+  if (manualUpdates) {
+    await external(state.url || 'https://mess.quiby.me/#download');
+    return state;
+  }
   busy = true;
   try {
     await autoUpdater.downloadUpdate();
@@ -161,8 +217,65 @@ function createWindow() {
       void external(url);
     }
   });
-  window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
-    callback(false),
+  let microphoneAllowed = false;
+  const trustedMediaFrame = (contents, url, isMainFrame) => {
+    try {
+      return (
+        contents === window?.webContents &&
+        isMainFrame === true &&
+        new URL(url).origin === new URL(APP_URL).origin
+      );
+    } catch {
+      return false;
+    }
+  };
+  window.webContents.session.setPermissionCheckHandler(
+    (contents, permission, origin, details) =>
+      trustedMediaFrame(contents, origin, details.isMainFrame) &&
+      (permission === 'clipboard-sanitized-write' ||
+        (permission === 'media' && details.mediaType === 'audio' && microphoneAllowed)),
+  );
+  window.webContents.session.setPermissionRequestHandler(
+    async (contents, permission, callback, details) => {
+      if (
+        permission === 'clipboard-sanitized-write' &&
+        trustedMediaFrame(contents, details.requestingUrl, details.isMainFrame)
+      ) {
+        callback(true);
+        return;
+      }
+      if (
+        permission !== 'media' ||
+        !trustedMediaFrame(contents, details.requestingUrl, details.isMainFrame) ||
+        details.mediaTypes?.length !== 1 ||
+        details.mediaTypes[0] !== 'audio'
+      ) {
+        callback(false);
+        return;
+      }
+      try {
+        if (!microphoneAllowed) {
+          microphoneAllowed =
+            process.platform === 'darwin'
+              ? await systemPreferences.askForMediaAccess('microphone')
+              : (
+                  await dialog.showMessageBox(window, {
+                    type: 'question',
+                    title: 'Микрофон Galinka',
+                    message: 'Разрешить запись голосовых сообщений?',
+                    detail:
+                      'Микрофон используется только во время записи, которую вы запускаете кнопкой в чате.',
+                    buttons: ['Разрешить', 'Не сейчас'],
+                    defaultId: 0,
+                    cancelId: 1,
+                  })
+                ).response === 0;
+        }
+        callback(microphoneAllowed && !contents.isDestroyed());
+      } catch {
+        callback(false);
+      }
+    },
   );
   window.webContents.on('did-fail-load', (_event, code) => {
     if (code === -3) return;

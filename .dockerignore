@@ -8,6 +8,7 @@ uploads
 test-results
 playwright-report
 docs/screenshots
+docs/coursework
 *.log
 
 release

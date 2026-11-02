@@ -52,8 +52,9 @@ export function startPushWorker(pool: Pool) {
       try {
         const { rows } = await db.query(
           `SELECT DISTINCT d.token, m.chat_id FROM messages m
-          JOIN members member ON member.chat_id=m.chat_id AND member.user_id<>m.sender_id AND member.read_at<m.created_at
+          JOIN members member ON member.chat_id=m.chat_id AND member.user_id<>m.sender_id AND member.read_at<m.created_at AND NOT member.muted
           JOIN push_devices d ON d.user_id=member.user_id
+          JOIN users recipient ON recipient.id=d.user_id AND NOT recipient.blocked
           JOIN sessions s ON s.token=d.session_token AND s.expires_at>now()
           WHERE m.id=$1`,
           [job.message_id],

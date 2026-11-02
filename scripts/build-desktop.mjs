@@ -8,6 +8,13 @@ function run(file, args, cwd = '.') {
 run('scripts/build-web.mjs', ['--desktop']);
 mkdirSync('dist-desktop/public', { recursive: true });
 cpSync('desktop', 'dist-desktop/desktop', { recursive: true });
+writeFileSync(
+  'dist-desktop/desktop/build-info.json',
+  JSON.stringify({
+    macSigned: process.env.GALINKA_MAC_SIGNED === 'true',
+    packageFormat: process.env.GALINKA_PACKAGE_FORMAT || 'desktop',
+  }),
+);
 cpSync('public/icon-512.png', 'dist-desktop/public/icon-512.png');
 const updaterVersion = JSON.parse(
   readFileSync('node_modules/electron-updater/package.json', 'utf8'),
