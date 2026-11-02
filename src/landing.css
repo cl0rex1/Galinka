@@ -369,3 +369,25 @@
     animation: none;
   }
 }
+/* A compact feature index keeps the real conversation preview in focus. */
+.release-features {
+  display: block;
+}
+.release-features > div {
+  display: grid;
+  grid-template-columns: 24px minmax(160px, 1fr) minmax(0, 2fr);
+  align-items: start;
+  gap: 24px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--color-rule);
+}
+.release-features h3 {
+  margin: 0;
+}
+@media (max-width: 680px) {
+  .release-features > div {
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 8px 16px;
+    padding: 16px 0;
+  }
+}
