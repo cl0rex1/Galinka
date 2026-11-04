@@ -391,3 +391,299 @@
     padding: 16px 0;
   }
 }
+
+/* Galinka download desk · quiby.core typography and surfaces, real release assets. */
+.release-site {
+  max-width: 1344px;
+  padding-inline: 56px;
+}
+.release-site .landing-nav {
+  padding-block: 26px;
+  border-bottom: 1px solid var(--color-rule);
+}
+.release-site .landing-nav .brand {
+  font-size: 25px;
+  letter-spacing: -0.055em;
+}
+.release-site .landing-nav nav {
+  gap: 28px;
+}
+.release-site .landing-nav nav > a {
+  font-size: 13px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.release-hero {
+  grid-template-columns: minmax(0, 1.06fr) minmax(0, 1fr);
+  gap: 64px;
+  padding: 72px 0 80px;
+}
+.release-intro {
+  animation: galinka-section-arrive var(--dur-section) var(--ease-out);
+}
+.release-site .landing-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--color-muted);
+}
+.release-intro h1 {
+  font-weight: 600;
+  font-size: clamp(44px, 4.7vw, 64px);
+  letter-spacing: -0.055em;
+  line-height: 1.18;
+  margin: 26px 0;
+}
+.release-intro > p {
+  font-size: 17px;
+  max-width: 390px;
+  line-height: 1.7;
+}
+.release-web-link {
+  margin-block: 30px 34px;
+  font-size: 14px;
+  color: var(--color-accent);
+}
+.release-platforms {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  gap: 7px;
+}
+.release-picker {
+  padding: 28px;
+  border-radius: 18px;
+  box-shadow: 0 8px 32px var(--color-shadow);
+  animation: galinka-section-arrive var(--dur-section) var(--ease-out);
+}
+.release-picker h2 {
+  font-size: 23px;
+  line-height: 1.45;
+  letter-spacing: -0.04em;
+}
+.release-picker .version {
+  padding: 5px 8px;
+  border: 1px solid var(--color-rule);
+  border-radius: 6px;
+  background: var(--color-paper-2);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.release-device {
+  color: var(--color-accent);
+  font-size: 12px;
+  margin-top: 22px;
+}
+.release-site .release-tabs {
+  gap: 6px;
+  padding-bottom: 22px;
+}
+.release-site .release-tabs button {
+  min-height: 44px;
+  border-radius: 9px;
+  background: var(--color-paper);
+  border-color: var(--color-rule);
+  transition:
+    background-color var(--dur-short) var(--ease-out),
+    border-color var(--dur-short) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.release-site .release-tabs button.selected {
+  background: var(--color-mint);
+  border-color: var(--color-selection-rule);
+  color: var(--color-accent);
+}
+.release-os-icon {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-paper-2);
+  border: 1px solid var(--color-rule);
+  border-radius: 12px;
+  color: var(--color-ink);
+}
+.release-os-icon svg {
+  width: 23px;
+  height: 23px;
+}
+.release-platform-body h3 {
+  font-size: 19px;
+  line-height: 1.45;
+}
+.release-platform-body > p {
+  line-height: 1.7;
+}
+.release-files :is(.primary, .secondary) {
+  border-radius: 10px;
+  min-height: 50px;
+}
+.release-files .primary small {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.release-story {
+  padding-block: 64px;
+}
+.release-story-heading {
+  align-items: flex-start;
+  gap: 48px;
+}
+.release-story h2 {
+  max-width: 580px;
+  font-size: clamp(27px, 3.4vw, 42px);
+  line-height: 1.3;
+}
+.release-story-heading > p {
+  font-size: 15px;
+  padding-top: 5px;
+}
+.release-preview {
+  border-radius: 12px;
+}
+.release-features {
+  margin-top: 24px;
+}
+.release-features > div {
+  padding-block: 24px;
+  gap: 24px;
+}
+.release-features h3 {
+  font-family: var(--font-body);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.release-site .landing-footer {
+  padding-block: 28px;
+  color: var(--color-muted);
+}
+.release-site .landing-footer .brand {
+  font-size: 21px;
+}
+@media (max-width: 1080px) {
+  .release-site {
+    padding-inline: 32px;
+  }
+  .release-hero {
+    gap: 36px;
+  }
+  .release-intro h1 {
+    font-size: 47px;
+  }
+  .release-picker {
+    padding: 24px;
+  }
+  .release-picker h2 {
+    font-size: 20px;
+  }
+}
+@media (max-width: 860px) {
+  .release-hero {
+    grid-template-columns: minmax(0, 1fr);
+    padding-block: 48px;
+    gap: 36px;
+  }
+  .release-intro h1 {
+    font-size: clamp(38px, 7.2vw, 60px);
+    max-width: 700px;
+  }
+  .release-intro > p {
+    max-width: 510px;
+  }
+  .release-web-link {
+    margin-block: 20px 12px;
+  }
+  .release-platforms {
+    display: none;
+  }
+  .release-picker {
+    width: 100%;
+    max-width: 590px;
+  }
+  .release-story-heading {
+    flex-direction: column;
+    gap: 20px;
+  }
+  .release-story-heading > p {
+    max-width: 490px;
+  }
+}
+@media (max-width: 680px) {
+  .release-site {
+    padding-inline: 20px;
+  }
+  .release-site .landing-nav {
+    padding-block: 18px;
+  }
+  .release-site .landing-nav .brand {
+    font-size: 21px;
+  }
+  .release-site .landing-nav nav {
+    gap: 12px;
+  }
+  .release-site .landing-nav nav > a[href='#download'] {
+    display: none;
+  }
+  .release-hero {
+    padding-block: 34px 44px;
+    gap: 28px;
+  }
+  .release-intro h1 {
+    font-size: clamp(34px, 8vw, 50px);
+    margin-block: 20px;
+    line-height: 1.2;
+  }
+  .release-intro > p {
+    font-size: 15px;
+  }
+  .release-web-link {
+    font-size: 13px;
+    margin-block: 16px 0;
+  }
+  .release-picker {
+    padding: 22px;
+    border-radius: 16px;
+  }
+  .release-picker h2 {
+    font-size: 21px;
+  }
+  .release-story {
+    padding-block: 40px;
+  }
+  .release-story h2 {
+    font-size: clamp(25px, 6vw, 36px);
+  }
+  .release-features > div {
+    gap: 8px 14px;
+    padding-block: 20px;
+  }
+}
+@media (max-width: 360px) {
+  .release-site {
+    padding-inline: 16px;
+  }
+  .release-site .landing-nav .brand {
+    font-size: 19px;
+  }
+  .release-intro h1 {
+    font-size: 31px;
+  }
+  .release-picker {
+    padding: 18px;
+  }
+  .release-picker h2 {
+    font-size: 18px;
+  }
+  .release-site .release-tabs button {
+    font-size: 11px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.release-intro, .release-picker, .release-platform-body) {
+    animation: none;
+  }
+}

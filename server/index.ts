@@ -9,7 +9,15 @@ import path from 'node:path';
 import { z, ZodError } from 'zod';
 import { digest, hashPassword, verifyPassword, readCookie } from './security.js';
 import { nelyaReply } from './nelya.js';
-import { pushEnabled, startPushWorker } from './push.js';
+import {
+  pushEnabled,
+  anyPushEnabled,
+  browserPushAvailable,
+  webPushPublicKey,
+  webPushEndpointSchema,
+  webPushSubscriptionSchema,
+  startPushWorker,
+} from './push.js';
 
 const production = process.env.NODE_ENV === 'production';
 const origin = process.env.APP_ORIGIN || 'http://localhost:5173';
@@ -207,9 +215,15 @@ async function notify(
   chatId: string,
   deletedId?: string,
   removedUserId?: string,
+  createdMessage?: { messageId: string; senderId: string },
 ) {
   await db.query("SELECT pg_notify('galinka', $1)", [
-    JSON.stringify({ chatId, deletedId, removedUserId }),
+    JSON.stringify({
+      chatId,
+      deletedId,
+      removedUserId,
+      ...(createdMessage ? { event: 'message.created', ...createdMessage } : {}),
+    }),
   ]);
 }
 const secure =
@@ -233,7 +247,13 @@ app.get('/api/health', async (_req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/version', (_req, res) => res.json(buildInfo));
-app.get('/api/push/status', auth, (_req, res) => res.json({ enabled: pushEnabled }));
+app.get('/api/push/status', auth, (_req, res) =>
+  res.json({
+    enabled: pushEnabled,
+    browserAvailable: browserPushAvailable,
+    publicKey: webPushPublicKey,
+  }),
+);
 const pushToken = z.object({
   token: z
     .string()
@@ -261,6 +281,50 @@ app.post('/api/push/devices', auth, async (req, res) => {
 app.delete('/api/push/devices', auth, async (req, res) => {
   const { token } = pushToken.parse(req.body);
   await pool.query('DELETE FROM push_devices WHERE token=$1 AND user_id=$2', [token, user(req).id]);
+  res.json({ ok: true });
+});
+app.post('/api/push/subscriptions', auth, async (req, res) => {
+  requireValue(browserPushAvailable, 503, 'Уведомления пока недоступны.');
+  const subscription = webPushSubscriptionSchema.parse(req.body);
+  requireValue(
+    !subscription.expirationTime || subscription.expirationTime > Date.now(),
+    400,
+    'Подписка истекла. Включите уведомления ещё раз.',
+  );
+  await transaction(async (db) => {
+    await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user(req).id]);
+    const { rowCount } = await db.query(
+      'SELECT token FROM sessions WHERE token=$1 AND user_id=$2 AND expires_at>now() FOR SHARE',
+      [(req as AuthedRequest).sessionToken, user(req).id],
+    );
+    requireValue(rowCount, 401, 'Войдите в Galinka.');
+    await db.query(
+      `INSERT INTO web_push_subscriptions(endpoint,user_id,session_token,p256dh,auth,expires_at)
+       VALUES($1,$2,$3,$4,$5,$6)
+       ON CONFLICT(endpoint) DO UPDATE SET user_id=$2,session_token=$3,p256dh=$4,auth=$5,expires_at=$6,updated_at=now()`,
+      [
+        subscription.endpoint,
+        user(req).id,
+        (req as AuthedRequest).sessionToken,
+        subscription.keys.p256dh,
+        subscription.keys.auth,
+        subscription.expirationTime ? new Date(subscription.expirationTime) : null,
+      ],
+    );
+    await db.query(
+      `DELETE FROM web_push_subscriptions WHERE user_id=$1 AND endpoint IN
+       (SELECT endpoint FROM web_push_subscriptions WHERE user_id=$1 ORDER BY updated_at DESC,endpoint OFFSET 12)`,
+      [user(req).id],
+    );
+  });
+  res.json({ ok: true });
+});
+app.delete('/api/push/subscriptions', auth, async (req, res) => {
+  const { endpoint } = z.object({ endpoint: webPushEndpointSchema }).parse(req.body);
+  await pool.query('DELETE FROM web_push_subscriptions WHERE endpoint=$1 AND user_id=$2', [
+    endpoint,
+    user(req).id,
+  ]);
   res.json({ ok: true });
 });
 let releaseCache: { expires: number; value: unknown } | undefined;
@@ -791,7 +855,8 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       [randomUUID(), chat.id, user(req).id, data.body, data.fileId, data.nonce, data.replyTo],
     );
     if (rows[0]) {
-      if (pushEnabled) await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [rows[0].id]);
+      if (anyPushEnabled)
+        await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [rows[0].id]);
       const reply = chat.nelya ? nelyaReply(data.body) : null;
       if (reply)
         await db.query('INSERT INTO messages(id,chat_id,body,nonce) VALUES($1,$2,$3,$4)', [
@@ -800,7 +865,10 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
           reply,
           randomUUID(),
         ]);
-      await notify(db, chat.id);
+      await notify(db, chat.id, undefined, undefined, {
+        messageId: rows[0].id,
+        senderId: user(req).id,
+      });
       return rows[0].id;
     }
     const retried = await db.query(
@@ -1036,6 +1104,9 @@ async function listen() {
         deletedId?: string;
         revokedUserId?: string;
         removedUserId?: string;
+        event?: 'message.created';
+        messageId?: string;
+        senderId?: string;
       };
       if (change.revokedUserId) {
         for (const [res, info] of streams) if (info.userId === change.revokedUserId) res.end();

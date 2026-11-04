@@ -64,7 +64,23 @@ CREATE TABLE IF NOT EXISTS push_devices (
  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS push_devices_user ON push_devices(user_id);
+CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+ endpoint text PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ session_token text NOT NULL REFERENCES sessions(token) ON DELETE CASCADE,
+ p256dh text NOT NULL, auth text NOT NULL, expires_at timestamptz,
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS web_push_subscriptions_user ON web_push_subscriptions(user_id);
+CREATE INDEX IF NOT EXISTS web_push_subscriptions_expiry ON web_push_subscriptions(expires_at) WHERE expires_at IS NOT NULL;
 CREATE TABLE IF NOT EXISTS push_jobs (
  message_id uuid PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
  attempts integer NOT NULL DEFAULT 0, available_at timestamptz NOT NULL DEFAULT now()
+);
+-- A retry only sends to destinations that have not already accepted this message.
+-- Deleting the job also removes its short-lived delivery receipts.
+CREATE TABLE IF NOT EXISTS push_deliveries (
+ message_id uuid REFERENCES push_jobs(message_id) ON DELETE CASCADE,
+ transport text NOT NULL CHECK(transport IN ('android','browser')),
+ destination text NOT NULL,
+ PRIMARY KEY(message_id,transport,destination)
 );

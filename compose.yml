@@ -19,6 +19,9 @@ services:
       TRUST_PROXY: ${TRUST_PROXY:-1}
       NODE_ENV: production
       UPLOAD_DIR: /app/uploads
+      WEB_PUSH_PUBLIC_KEY: ${WEB_PUSH_PUBLIC_KEY:-}
+      WEB_PUSH_PRIVATE_KEY: ${WEB_PUSH_PRIVATE_KEY:-}
+      WEB_PUSH_SUBJECT: ${WEB_PUSH_SUBJECT:-}
     volumes:
       - uploads:/app/uploads
     depends_on:

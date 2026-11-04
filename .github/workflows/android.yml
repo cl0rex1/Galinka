@@ -53,7 +53,7 @@ jobs:
           arch: x86_64
           target: google_apis
           profile: pixel_2
-          script: cd android && ./gradlew :app:connectedDebugAndroidTest --no-daemon
+          script: cd android && ./gradlew :app:testDebugUnitTest :app:connectedDebugAndroidTest --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk

@@ -21,7 +21,7 @@ function apply() {
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
   document
     .querySelector('meta[name="theme-color"]')
-    ?.setAttribute('content', dark ? '#111817' : '#f5f7f6');
+    ?.setAttribute('content', dark ? '#0c0c0d' : '#f7f7f8');
   listeners.forEach((listener) => listener());
 }
 media.addEventListener('change', apply);

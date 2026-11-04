@@ -53,6 +53,7 @@ import {
   ArrowDown,
   Megaphone,
 } from 'lucide-react';
+import { useConversationGestures } from './gestures';
 import { GroupSettings } from './GroupSettings';
 import { MediaAttachment } from './MediaAttachment';
 import { VoiceRecorder } from './VoiceRecorder';
@@ -61,6 +62,7 @@ import { getDemoFileUrl } from './demo';
 import { Announcements } from './Announcements';
 import { api, ApiError, isDemo, API_BASE } from './api';
 import { Updates, useUpdates } from './updates';
+import { MotionSettings } from './motion';
 import { ThemePicker, ThemeToggle } from './theme';
 import { NotificationSettings, useNotifications, isNative, clearPushDevice } from './notifications';
 import { App as NativeApp } from '@capacitor/app';
@@ -71,8 +73,8 @@ type InstallEvent = Event & {
   userChoice: Promise<{ outcome: string }>;
 };
 type ModalKind = 'new' | 'install' | 'profile' | 'invite' | 'delete' | 'group' | null;
-const time = (date: string) =>
-  new Date(date).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+const timeFormatter = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' });
+const time = (date: string) => timeFormatter.format(new Date(date));
 const bytes = (n: number) =>
   n < 1024 * 1024
     ? `${Math.max(1, Math.round(n / 1024))} КБ`
@@ -662,6 +664,36 @@ export default function App() {
     setSearchOpen(false);
     setMessageQuery('');
   });
+  const notificationRef = useRef(notifications);
+  notificationRef.current = notifications;
+  const chatsRef = useRef(chats);
+  chatsRef.current = chats;
+  const gestures = useConversationGestures({
+    enabled: Boolean(activeId && !sending && !modal && !editing && !searchOpen),
+    chatId: activeId,
+    onReply: (id) => {
+      const message = messagesRef.current.find((item) => item.id === id);
+      if (message) startReply(message);
+    },
+    onBack: () => {
+      setActiveId(null);
+      setInfoOpen(false);
+    },
+  });
+  const unreadCount = chats
+    .filter((chat) => !chat.muted)
+    .reduce((total, chat) => total + chat.unread, 0);
+  useEffect(() => {
+    document.title = unreadCount ? `(${unreadCount}) Galinka` : 'Galinka';
+    const badge = navigator as Navigator & {
+      setAppBadge?: (count: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    if (!demo) {
+      const result = unreadCount ? badge.setAppBadge?.(unreadCount) : badge.clearAppBadge?.();
+      void result?.catch(() => {});
+    }
+  }, [unreadCount, demo]);
   useEffect(() => {
     if (!isNative) return;
     const back = NativeApp.addListener('backButton', () => {
@@ -832,9 +864,34 @@ export default function App() {
         const change = JSON.parse(event.data) as {
           type: string;
           chatId?: string;
+          event?: string;
+          senderId?: string;
+          messageId?: string;
           deletedId?: string;
           removedUserId?: string;
         };
+        if (change.event === 'message.created' && change.chatId && change.senderId !== me.id) {
+          const target = chatsRef.current.find((chat) => chat.id === change.chatId);
+          const notifyIncoming = (chat: Chat | undefined) => {
+            if (
+              live &&
+              chat &&
+              !chat.muted &&
+              !(
+                document.visibilityState === 'visible' &&
+                document.hasFocus() &&
+                activeRef.current === chat.id &&
+                sectionRef.current === 'chats'
+              )
+            )
+              notificationRef.current.notify(chat.id);
+          };
+          if (target) notifyIncoming(target);
+          else if (window.galinkaDesktop)
+            void refreshChats()
+              .then((items) => notifyIncoming(items.find((chat) => chat.id === change.chatId)))
+              .catch(reportLive);
+        }
         if (change.removedUserId === me.id && change.chatId) {
           const removedId = change.chatId;
           ++chatRequestEpoch.current;
@@ -1728,6 +1785,7 @@ export default function App() {
                 <div
                   className="messages"
                   ref={scroller}
+                  {...gestures}
                   onWheel={() => {
                     jumpingToLatest.current = false;
                   }}
@@ -1808,8 +1866,12 @@ export default function App() {
                               </div>
                             )}
                             <article
+                              data-message-id={m.id}
                               className={`message-row ${newMessageIds.includes(m.id) ? 'is-new' : ''} ${own ? 'own' : ''} ${bot ? 'bot' : ''} ${same && !newDay ? 'continued' : ''}`}
                             >
+                              <span className="swipe-reply-indicator" aria-hidden="true">
+                                <Reply size={17} />
+                              </span>
                               {!own && (
                                 <div className="message-avatar">
                                   {(!next || next.sender_id !== m.sender_id || newDay) && (
@@ -2386,7 +2448,18 @@ export default function App() {
               <h3>Оформление</h3>
               <ThemePicker />
             </section>
+            <MotionSettings />
             <NotificationSettings state={notifications} demo={demo} />
+            <section className="settings-section gesture-note">
+              <Reply size={22} />
+              <div>
+                <h3>Быстрее одним жестом</h3>
+                <p>
+                  Смахните сообщение вправо, чтобы ответить. На телефоне свайп от левого края
+                  возвращает к списку чатов.
+                </p>
+              </div>
+            </section>
             {me.role === 'admin' && !demo && (
               <section className="settings-section">
                 <h3>Администрирование</h3>
@@ -2421,8 +2494,7 @@ export default function App() {
             <section className="settings-section">
               <Updates
                 hasDraft={
-                  Object.values(drafts).some((v) => v.trim().length > 0) ||
-                  Object.keys(attachments).length > 0
+                  Object.keys(attachments).length > 0 || Boolean(editing) || sendingIds.length > 0
                 }
               />
             </section>

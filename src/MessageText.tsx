@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 
 // Render text as text; only explicit HTTP(S) addresses become links.
-export function MessageText({ text }: { text: string }) {
+export const MessageText = memo(function MessageText({ text }: { text: string }) {
   const parts: ReactNode[] = [];
   let position = 0;
   for (const match of text.matchAll(/https?:\/\/[^\s<>"']+/gi)) {
@@ -31,4 +31,4 @@ export function MessageText({ text }: { text: string }) {
   }
   parts.push(text.slice(position));
   return <p className="message-text">{parts}</p>;
-}
+});

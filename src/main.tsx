@@ -1,12 +1,16 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import '@fontsource-variable/manrope';
+import '@fontsource-variable/unbounded';
+import '@fontsource/ibm-plex-mono/500.css';
 import '@fontsource-variable/golos-text';
-import App from './App';
-import Landing from './Landing';
-import Admin from './Admin';
+const App = React.lazy(() => import('./App'));
+const Landing = React.lazy(() => import('./Landing'));
+const Admin = React.lazy(() => import('./Admin'));
 import './styles.css';
+import './experience.css';
+import './gestures.css';
 import './theme';
+import './motion';
 import { Capacitor } from '@capacitor/core';
 import { UpdateProvider } from './updates';
 import { trackViewport } from './viewport';
@@ -14,17 +18,26 @@ const stopTrackingViewport = trackViewport();
 if (import.meta.hot) import.meta.hot.dispose(stopTrackingViewport);
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {location.pathname === '/admin' || location.pathname.startsWith('/admin/') ? (
-      <Admin />
-    ) : !Capacitor.isNativePlatform() &&
-      location.pathname === '/' &&
-      !location.search.includes('demo=1') ? (
-      <Landing />
-    ) : (
-      <UpdateProvider>
-        <App />
-      </UpdateProvider>
-    )}
+    <React.Suspense
+      fallback={
+        <div className="app-loading" role="status">
+          <img src="/icon.svg" width="48" height="48" alt="" />
+          <span>Galinka</span>
+        </div>
+      }
+    >
+      {location.pathname === '/admin' || location.pathname.startsWith('/admin/') ? (
+        <Admin />
+      ) : !Capacitor.isNativePlatform() &&
+        location.pathname === '/' &&
+        !location.search.includes('demo=1') ? (
+        <Landing />
+      ) : (
+        <UpdateProvider>
+          <App />
+        </UpdateProvider>
+      )}
+    </React.Suspense>
   </React.StrictMode>,
 );
 if (

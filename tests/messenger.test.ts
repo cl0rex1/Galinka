@@ -35,6 +35,8 @@ test(
           UPLOAD_DIR: directory,
           NODE_ENV: 'test',
           PUSH_ENABLED: 'false',
+          WEB_PUSH_PUBLIC_KEY: '',
+          WEB_PUSH_PRIVATE_KEY: '',
           COOKIE_SECURE: 'false',
         },
         stdio: 'pipe',

@@ -7,7 +7,7 @@ const config: CapacitorConfig = {
   appName: 'Galinka',
   webDir: 'dist-android',
   server: { hostname: 'mess.quiby.me', androidScheme: 'https' },
-  android: { backgroundColor: '#111817' },
+  android: { backgroundColor: '#0c0c0d' },
   plugins: { PushNotifications: { presentationOptions: ['badge', 'sound', 'alert'] } },
 };
 export default config;

@@ -30,6 +30,8 @@ test(
           UPLOAD_DIR: directory,
           NODE_ENV: 'test',
           PUSH_ENABLED: 'false',
+          WEB_PUSH_PUBLIC_KEY: '',
+          WEB_PUSH_PRIVATE_KEY: '',
         },
         stdio: 'pipe',
       });
@@ -143,6 +145,8 @@ test(
       assert.equal((await request('/push/status')).status, 401);
       assert.deepEqual((await request('/push/status', 'GET', undefined, alice.cookie)).data, {
         enabled: false,
+        browserAvailable: false,
+        publicKey: null,
       });
       assert.equal(
         (
