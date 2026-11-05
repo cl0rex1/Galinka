@@ -49,12 +49,12 @@
 
 Скачайте установщик в [GitHub Releases](https://github.com/cl0rex1/Galinka/releases/latest):
 
-- **Android 7+:** `Galinka-0.5.1-android-release.apk`.
-- **Windows x64:** `Galinka-0.5.1-win-x64.exe` (NSIS, без сертификата Microsoft).
+- **Android 7+:** `Galinka-0.5.2-android-release.apk`.
+- **Windows x64:** `Galinka-0.5.2-win-x64.exe` (NSIS, без сертификата Microsoft).
 - **Arch Linux x64:** пакет `.pkg.tar.zst`:
 
 ```sh
-sudo pacman -U ./Galinka-0.5.1-arch-x64.pkg.tar.zst
+sudo pacman -U ./Galinka-0.5.2-arch-x64.pkg.tar.zst
 ```
 
 Arch использует `electron44` из репозитория; обновления приложения устанавливаются через pacman. Рецепт makepkg — [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD). Linux AppImage/DEB и macOS DMG/ZIP собирает workflow Desktop release. На iPhone доступна PWA: Safari → «Поделиться» → «На экран Домой».

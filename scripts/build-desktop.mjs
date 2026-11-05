@@ -57,6 +57,15 @@ const electronVersion = JSON.parse(
   readFileSync('node_modules/electron/package.json', 'utf8'),
 ).version;
 if (process.argv.includes('--stage-only')) process.exit(0);
+// Electron's linker signature does not seal the app bundle after packaging.
+// Without a distribution identity, seal it with a local ad hoc signature.
+const macAdHoc =
+  process.platform === 'darwin' &&
+  !process.env.CSC_LINK &&
+  !process.env.CSC_NAME &&
+  process.env.GALINKA_MAC_SIGNED !== 'true'
+    ? ['--config.mac.identity=-']
+    : [];
 run('node_modules/electron-builder/cli.js', [
   '--projectDir',
   'dist-desktop',
@@ -65,5 +74,6 @@ run('node_modules/electron-builder/cli.js', [
   `--config.electronVersion=${electronVersion}`,
   '--publish',
   'never',
+  ...macAdHoc,
   ...process.argv.slice(2),
 ]);

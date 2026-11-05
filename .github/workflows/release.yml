@@ -39,6 +39,19 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - if: matrix.target == 'mac'
+        name: Verify both macOS app signatures
+        run: |
+          for arch in arm64 x64; do
+            dmg="release/Galinka-$(node -p 'require("./package.json").version')-mac-${arch}.dmg"
+            mount_dir=$(mktemp -d)
+            hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_dir"
+            status=0
+            codesign --verify --deep --strict --verbose=2 "$mount_dir/Galinka.app" || status=$?
+            hdiutil detach "$mount_dir"
+            rmdir "$mount_dir"
+            test "$status" -eq 0
+          done
       - if: matrix.target == 'win'
         run: node tests/desktop/smoke.cjs
       - if: matrix.target == 'linux'
