@@ -84,3 +84,6 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
  destination text NOT NULL,
  PRIMARY KEY(message_id,transport,destination)
 );
+
+-- Marks AAC/MP4 files validated by the audio normalization pipeline. Legacy originals remain untouched.
+ALTER TABLE files ADD COLUMN IF NOT EXISTS audio_ready boolean NOT NULL DEFAULT false;

@@ -206,13 +206,15 @@ test('real messenger features synchronize replies, edits, media and group permis
     await alice.getByRole('button', { name: 'Записать голосовое сообщение', exact: true }).click();
     await expect(alice.locator('.recording-time')).toHaveText('00:01', { timeout: 10000 });
     await alice.getByRole('button', { name: 'Завершить запись', exact: true }).click();
-    await expect(alice.locator('.pending-file')).toContainText('Голосовое-');
+    await expect(alice.locator('.pending-file')).toContainText('Голосовое сообщение');
     await alice.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
     const voice = bob.locator('.audio-attachment audio');
-    await expect(voice).toBeVisible();
+    await expect(bob.locator('.audio-attachment .voice-play')).toBeVisible();
+    await bob.locator('.audio-attachment .voice-play').click();
     await expect
       .poll(() => voice.evaluate((element) => element.readyState))
       .toBeGreaterThanOrEqual(1);
+    await expect.poll(() => voice.evaluate((element) => element.currentTime)).toBeGreaterThan(0.1);
     expect(
       await alice.evaluate(
         () => (window as unknown as { testStreams: MediaStream[] }).testStreams.length,

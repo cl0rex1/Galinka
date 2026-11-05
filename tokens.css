@@ -59,6 +59,7 @@
   --radius-md: 12px;
   --radius-lg: 20px;
   --radius-pill: 999px;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
@@ -72,7 +73,10 @@
   --color-navigation-ink: #242428;
   --color-navigation-muted: #6b6b75;
   --color-navigation-selected: #e5d8f5;
-  --color-conversation: #f5f5f7;
+  --color-conversation: #eeedf3;
+  --color-message: #ffffff;
+  --color-date-surface: #dfdde7;
+  --color-composer-rule: #e1dfe8;
   --color-selection-rule: #cab0e9;
   --color-quote: #eee7f6;
   --color-recording: oklch(50% 0.17 29);
@@ -84,7 +88,7 @@
   --color-preview-line: #a1a1a6;
   --color-preview-message: #e3d1f7;
   --radius-panel: 16px;
-  --dur-section: 360ms;
+  --dur-section: 180ms;
   --ease-settle: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -108,7 +112,7 @@
   --color-accent-ink: #0c0c0d;
   --color-mint: #28222f;
   --color-mint-deep: #39294b;
-  --color-outgoing: #362449;
+  --color-outgoing: #49305c;
   --color-rule: #2c2c30;
   --color-focus: #d7b6ff;
   --color-error: #ffaaa3;
@@ -131,7 +135,10 @@
   --color-navigation-ink: #f4f4f5;
   --color-navigation-muted: #a1a1a6;
   --color-navigation-selected: #302639;
-  --color-conversation: #0c0c0d;
+  --color-conversation: #111015;
+  --color-message: #222127;
+  --color-date-surface: #2b2932;
+  --color-composer-rule: #34303a;
   --color-selection-rule: #62437d;
   --color-quote: #2c2237;
   --color-recording: oklch(77% 0.13 29);

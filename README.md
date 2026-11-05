@@ -6,6 +6,14 @@
 
 ![Тёмная тема](docs/screenshots/desktop-dark.png)
 
+## Версия 0.5.1
+
+- Более спокойная переписка: компактные сообщения, удобный ввод, адаптация к узким и альбомным экранам, меньше лишних анимаций.
+- Набор текста не перерисовывает ленту. Возврат в недавно открытый чат восстанавливает загруженную историю и место чтения.
+- Действия с сообщением открываются удержанием на телефоне или правой кнопкой мыши; свайп для ответа сохранён.
+- Голосовое можно прослушать перед отправкой. Загрузка показывает прогресс, а повтор после ошибки сохраняет запись и не загружает уже принятый файл заново.
+- Аудиоплеер с перемоткой, скоростью 1×/1,5×/2× и повтором загрузки. Сервер подготавливает AAC/M4A для совместимости голосовых с iPhone и остальными клиентами; исходники прежних записей сохраняются.
+
 ## Версия 0.5
 
 - Новый интерфейс в стиле quiby.core: Onyx, фиолетовый акцент, светлая тема и анимации с настройкой уменьшения движения.
@@ -41,12 +49,12 @@
 
 Скачайте установщик в [GitHub Releases](https://github.com/cl0rex1/Galinka/releases/latest):
 
-- **Android 7+:** `Galinka-0.5.0-android-release.apk`.
-- **Windows x64:** `Galinka-0.5.0-win-x64.exe` (NSIS, без сертификата Microsoft).
+- **Android 7+:** `Galinka-0.5.1-android-release.apk`.
+- **Windows x64:** `Galinka-0.5.1-win-x64.exe` (NSIS, без сертификата Microsoft).
 - **Arch Linux x64:** пакет `.pkg.tar.zst`:
 
 ```sh
-sudo pacman -U ./Galinka-0.5.0-arch-x64.pkg.tar.zst
+sudo pacman -U ./Galinka-0.5.1-arch-x64.pkg.tar.zst
 ```
 
 Arch использует `electron44` из репозитория; обновления приложения устанавливаются через pacman. Рецепт makepkg — [packaging/arch/PKGBUILD](packaging/arch/PKGBUILD). Linux AppImage/DEB и macOS DMG/ZIP собирает workflow Desktop release. На iPhone доступна PWA: Safari → «Поделиться» → «На экран Домой».
@@ -56,6 +64,8 @@ Arch использует `electron44` из репозитория; обновл
 ## Сервер
 
 React 19 · TypeScript · Vite · Node.js 24 · Express 5 · PostgreSQL · Docker Compose.
+
+Для обработки голосовых сервер использует FFmpeg и FFprobe; Docker-образ уже содержит их. При запуске Node.js вне Docker установите эти программы в `PATH` или укажите `FFMPEG_PATH` и `FFPROBE_PATH`. Для прежних записей создаётся удаляемый AAC-кэш до 128 МБ внутри каталога загрузок.
 
 Установка на CasaOS, HTTPS, резервные копии и обновление — [docs/DEPLOY.md](docs/DEPLOY.md). Для Quiby используется `compose.edge.yml`; для Firebase добавьте `compose.push.yml` после настройки ключа.
 
@@ -79,7 +89,9 @@ npm run test:e2e
 
 Веб: `http://localhost:5173`. Полные API-проверки и браузерные сценарии с реальными аккаунтами запускаются только с `TEST_DATABASE_URL`, указывающим на отдельную тестовую базу. Без неё такие проверки явно пропускаются. Перед ними выполните `npm run build`. Проверяются переписка между аккаунтами, права участников, ответы и правки, медиа, архив, темы, черновики и размеры 320/375/414/768 px. Голосовые тестируются настоящим браузерным кодировщиком с синтетическим сигналом; микрофон пользователя не включается.
 
-Для проверки движка Safari: `npx playwright install webkit`, затем `npx playwright test tests/browser/media.spec.ts tests/browser/mobile.spec.ts --browser=webkit`.
+Регрессии переписки и загрузки: `npx playwright test tests/browser/conversation.spec.ts tests/browser/upload.spec.ts`. Они проверяют отсутствие рендера ленты при наборе, восстановление прокрутки, жесты, сохранение голосового при ошибке и повтор с прежним идентификатором отправки.
+
+Для проверки движка Safari: `npx playwright install webkit`, затем `npx playwright test tests/browser/media.spec.ts tests/browser/mobile.spec.ts --browser=webkit`. WebKit на компьютере не заменяет проверку микрофона и воспроизведения на физическом iPhone.
 
 ```sh
 npm run desktop:build -- --win

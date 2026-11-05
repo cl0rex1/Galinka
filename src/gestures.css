@@ -1,6 +1,21 @@
 .messages {
   touch-action: pan-y pinch-zoom;
 }
+/* Touch messages use the hold menu; native text callouts otherwise compete with it. */
+@media (hover: none) and (pointer: coarse) {
+  .message-row {
+    -webkit-touch-callout: none;
+  }
+  .message-row :is(.bubble, .sender-name) {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .message-text a {
+    -webkit-touch-callout: default;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
 .message-row {
   --swipe-distance: 0px;
   --swipe-progress: 0;

@@ -9,6 +9,7 @@ COPY . .
 RUN npm run build && npm prune --omit=dev
 
 FROM node:24-alpine
+RUN apk add --no-cache ffmpeg
 ARG BUILD_SHA=0.2.0
 ENV NODE_ENV=production PORT=3001 BUILD_SHA=$BUILD_SHA
 WORKDIR /app

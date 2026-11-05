@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
@@ -291,11 +291,16 @@ test(
         const media = new FormData();
         media.append('file', new Blob([mp4Container], { type: declared }), 'container.mp4');
         const uploaded = await request(`/chats/${chat}/files`, 'POST', media, alice.cookie);
-        assert.equal(uploaded.status, 201);
-        assert.equal(
-          uploaded.data.mime,
-          declared === 'audio/mp4' ? 'audio/mp4' : 'application/octet-stream',
-        );
+        if (declared === 'audio/mp4') {
+          assert.equal(
+            uploaded.status,
+            422,
+            'A container header without decodable audio is rejected',
+          );
+        } else {
+          assert.equal(uploaded.status, 201);
+          assert.equal(uploaded.data.mime, 'application/octet-stream');
+        }
       }
       const fakeAudio = new FormData();
       fakeAudio.append(
@@ -306,6 +311,42 @@ test(
       assert.equal(
         (await request(`/chats/${chat}/files`, 'POST', fakeAudio, alice.cookie)).data.mime,
         'application/octet-stream',
+      );
+      // This is a real Chromium MediaRecorder recording with no WebM duration.
+      // Existing uploads must remain downloadable unchanged while private inline
+      // playback uses a seekable AAC derivative, including range requests.
+      const voiceBytes = await readFile('tests/fixtures/voice-chromium.webm');
+      const legacyId = randomUUID();
+      await writeFile(path.join(directory, legacyId), voiceBytes);
+      await db.query(
+        'INSERT INTO files(id,chat_id,user_id,name,size,mime) VALUES($1,$2,$3,$4,$5,$6)',
+        [legacyId, chat, a, 'legacy.webm', voiceBytes.length, 'audio/webm'],
+      );
+      const legacyUrl = `${base}/api/files/${legacyId}?inline=1`;
+      assert.equal((await fetch(legacyUrl)).status, 401);
+      assert.equal((await fetch(legacyUrl, { headers: { Cookie: carol.cookie } })).status, 404);
+      const legacyInline = await fetch(legacyUrl, {
+        headers: { Cookie: bob.cookie, Range: 'bytes=0-31' },
+      });
+      assert.equal(legacyInline.status, 206, logs);
+      assert.equal(legacyInline.headers.get('content-type'), 'audio/mp4');
+      assert.match(legacyInline.headers.get('content-range')!, /^bytes 0-31\//);
+      assert.equal((await legacyInline.arrayBuffer()).byteLength, 32);
+      const legacyDownload = await fetch(`${base}/api/files/${legacyId}`, {
+        headers: { Cookie: bob.cookie },
+      });
+      assert.deepEqual(Buffer.from(await legacyDownload.arrayBuffer()), voiceBytes);
+      assert.deepEqual(await readFile(path.join(directory, legacyId)), voiceBytes);
+      const newVoice = new FormData();
+      newVoice.append('file', new Blob([voiceBytes], { type: 'audio/webm' }), 'new-voice.webm');
+      const normalizedVoice = await request(`/chats/${chat}/files`, 'POST', newVoice, alice.cookie);
+      assert.equal(normalizedVoice.status, 201);
+      assert.equal(normalizedVoice.data.mime, 'audio/mp4');
+      assert.equal(normalizedVoice.data.name, 'new-voice.m4a');
+      assert.equal(
+        (await db.query('SELECT audio_ready FROM files WHERE id=$1', [normalizedVoice.data.id]))
+          .rows[0].audio_ready,
+        true,
       );
       const photoMessage = await request(
         `/chats/${chat}/messages`,
@@ -412,6 +453,7 @@ test(
         (await request(`/files/${file.data.id}?inline=1`, 'GET', undefined, alice.cookie)).status,
         404,
       );
+      assert.equal((await fetch(legacyUrl, { headers: { Cookie: alice.cookie } })).status, 404);
       assert.equal(
         (await request('/join', 'POST', { token: inviteToken }, alice.cookie)).status,
         404,

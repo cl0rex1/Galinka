@@ -6,6 +6,7 @@ type Recording = {
   recorder?: MediaRecorder;
   stream?: MediaStream;
   timer?: ReturnType<typeof setInterval>;
+  stopTimer?: ReturnType<typeof setTimeout>;
   discard: boolean;
 };
 const maxSeconds = 300;
@@ -31,16 +32,28 @@ export function VoiceRecorder({
   function finish(discard: boolean) {
     const session = current.current;
     if (!session) return;
-    session.discard = discard;
+    session.discard ||= discard;
     clearInterval(session.timer);
     if (session.recorder?.state === 'recording') {
       if (alive.current) setPhase('finishing');
       session.recorder.stop();
-    } else {
+      // Let the encoder flush its final chunk before releasing a successful
+      // recording. Always release the microphone if a browser misses onstop.
+      session.stopTimer = setTimeout(() => {
+        session.stream?.getTracks().forEach((track) => track.stop());
+        if (current.current !== session) return;
+        current.current = null;
+        if (alive.current) {
+          setPhase('idle');
+          if (!session.discard)
+            callbacks.current.onError('Не удалось завершить запись. Попробуйте ещё раз.');
+        }
+      }, 5000);
+    } else if (!session.recorder) {
       current.current = null;
       if (alive.current) setPhase('idle');
     }
-    session.stream?.getTracks().forEach((track) => track.stop());
+    if (session.discard) session.stream?.getTracks().forEach((track) => track.stop());
   }
   useEffect(() => {
     alive.current = true;
@@ -83,10 +96,30 @@ export function VoiceRecorder({
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
-      const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find((type) =>
-        MediaRecorder.isTypeSupported(type),
-      );
-      const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      // A codec can be advertised yet unavailable to the actual device encoder.
+      // Try recording, not only isTypeSupported, before choosing the format.
+      const candidates: (string | undefined)[] = [
+        'audio/mp4;codecs=mp4a.40.2',
+        'audio/mp4',
+        'audio/webm;codecs=opus',
+        'audio/ogg;codecs=opus',
+      ].filter((type) => MediaRecorder.isTypeSupported(type));
+      candidates.push(undefined);
+      let recorder: MediaRecorder | undefined;
+      for (const mime of candidates) {
+        try {
+          const candidate = new MediaRecorder(stream, {
+            ...(mime ? { mimeType: mime } : {}),
+            audioBitsPerSecond: 64000,
+          });
+          candidate.start(1000);
+          recorder = candidate;
+          break;
+        } catch {
+          /* Fall back to the next real encoder without closing the stream. */
+        }
+      }
+      if (!recorder) throw new DOMException('No working audio encoder', 'NotSupportedError');
       session.recorder = recorder;
       const chunks: Blob[] = [];
       let bytes = 0;
@@ -96,12 +129,13 @@ export function VoiceRecorder({
           bytes += event.data.size;
           chunks.push(event.data);
         }
-        if (bytes > maxBytes && !session.discard) {
+        if (bytes > maxBytes && !session.discard && current.current === session) {
           finish(true);
           if (alive.current) callbacks.current.onError('Запись слишком большая. Максимум — 20 МБ.');
         }
       };
       recorder.onerror = () => {
+        if (current.current !== session) return;
         finish(true);
         if (alive.current)
           callbacks.current.onError(
@@ -110,6 +144,7 @@ export function VoiceRecorder({
       };
       recorder.onstop = () => {
         clearInterval(session.timer);
+        clearTimeout(session.stopTimer);
         stream.getTracks().forEach((track) => track.stop());
         if (current.current !== session) return;
         current.current = null;
@@ -131,7 +166,6 @@ export function VoiceRecorder({
           ),
         );
       };
-      recorder.start(1000);
       setPhase('recording');
       session.timer = setInterval(() => {
         const elapsed = Math.floor((Date.now() - started) / 1000);
@@ -147,9 +181,11 @@ export function VoiceRecorder({
       callbacks.current.onError(
         name === 'NotAllowedError'
           ? 'Разрешите доступ к микрофону в настройках браузера или приложения.'
-          : name === 'NotFoundError'
-            ? 'Микрофон не найден. Подключите его и попробуйте снова.'
-            : 'Не удалось включить микрофон. Возможно, он занят другим приложением.',
+          : name === 'NotSupportedError'
+            ? 'Устройство не поддерживает запись голосовых. Прикрепите готовый аудиофайл или попробуйте другой браузер.'
+            : name === 'NotFoundError'
+              ? 'Микрофон не найден. Подключите его и попробуйте снова.'
+              : 'Не удалось включить микрофон. Возможно, он занят другим приложением.',
       );
     }
   }

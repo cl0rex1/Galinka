@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useCallback,
+  useMemo,
   useId,
   Fragment,
   type ReactNode,
@@ -26,7 +27,6 @@ import {
   Paperclip,
   Smile,
   Check,
-  CheckCheck,
   Reply,
   Pencil,
   Pin,
@@ -41,10 +41,8 @@ import {
   Leaf,
   Lock,
   MoreHorizontal,
-  FileText,
   Copy,
   Link,
-  Trash2,
   LoaderCircle,
   WifiOff,
   Compass,
@@ -54,13 +52,14 @@ import {
   Megaphone,
 } from 'lucide-react';
 import { useConversationGestures } from './gestures';
+import { Avatar } from './Avatar';
+import { MessageList, type MessageActions } from './MessageList';
+import { AttachmentPreview, type Transfer } from './AttachmentPreview';
 import { GroupSettings } from './GroupSettings';
-import { MediaAttachment } from './MediaAttachment';
 import { VoiceRecorder } from './VoiceRecorder';
-import { MessageText } from './MessageText';
 import { getDemoFileUrl } from './demo';
 import { Announcements } from './Announcements';
-import { api, ApiError, isDemo, API_BASE } from './api';
+import { api, upload, ApiError, isDemo, API_BASE } from './api';
 import { Updates, useUpdates } from './updates';
 import { MotionSettings } from './motion';
 import { ThemePicker, ThemeToggle } from './theme';
@@ -75,46 +74,30 @@ type InstallEvent = Event & {
 type ModalKind = 'new' | 'install' | 'profile' | 'invite' | 'delete' | 'group' | null;
 const timeFormatter = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' });
 const time = (date: string) => timeFormatter.format(new Date(date));
-const bytes = (n: number) =>
-  n < 1024 * 1024
-    ? `${Math.max(1, Math.round(n / 1024))} КБ`
-    : `${(n / 1024 / 1024).toFixed(1)} МБ`;
+// Reuse unchanged API objects so receipts/polling do not repaint every message.
+function reconcileMessages(previous: Message[], incoming: Message[]) {
+  const byId = new Map(previous.map((message) => [message.id, message]));
+  const next = incoming.map((message) => {
+    const old = byId.get(message.id);
+    return old && JSON.stringify(old) === JSON.stringify(message) ? old : message;
+  });
+  return next.length === previous.length &&
+    next.every((message, index) => message === previous[index])
+    ? previous
+    : next;
+}
+type CachedConversation = {
+  messages: Message[];
+  hasOlder: boolean;
+  top: number;
+  following: boolean;
+};
 const plural = (n: number) =>
   n % 10 === 1 && n % 100 !== 11
     ? 'участник'
     : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14)
       ? 'участника'
       : 'участников';
-function Avatar({
-  person,
-  chat,
-  size = 'normal',
-}: {
-  person?: Person | null;
-  chat?: Chat;
-  size?: 'small' | 'normal' | 'large';
-}) {
-  return (
-    <span
-      className={`avatar ${size} tone-${chat?.kind === 'saved' ? 0 : (person?.color ?? (chat?.id === 'weekend' ? 0 : 2))} ${chat?.kind === 'group' ? 'group-avatar' : ''}`}
-      aria-hidden="true"
-    >
-      {chat?.kind === 'saved' ? (
-        <Bookmark size={size === 'large' ? 28 : 20} />
-      ) : chat?.kind === 'group' ? (
-        <Users size={size === 'large' ? 30 : 22} />
-      ) : person?.id === 'nelya' ? (
-        <Sparkles size={20} />
-      ) : (
-        person?.name
-          .split(' ')
-          .map((s) => s[0])
-          .slice(0, 2)
-          .join('') || 'G'
-      )}
-    </span>
-  );
-}
 function IconButton({
   label,
   children,
@@ -549,6 +532,7 @@ export default function App() {
     [copiedMessageId, setCopiedMessageId] = useState<string | null>(null),
     [preferenceBusy, setPreferenceBusy] = useState(false),
     [sendingIds, setSendingIds] = useState<string[]>([]),
+    [transfers, setTransfers] = useState<Record<string, Transfer>>({}),
     [attachments, setAttachments] = useState<Record<string, { file: File; uploaded?: Attachment }>>(
       {},
     ),
@@ -567,6 +551,16 @@ export default function App() {
     [emojiOpen, setEmojiOpen] = useState(false),
     [working, setWorking] = useState(false);
   const initialized = useRef(false);
+  const conversationCache = useRef(new Map<string, CachedConversation>());
+  const cacheOwner = useRef<string | null>(null);
+  const cachedScroll = useRef<{
+    id: string;
+    top: number;
+    following: boolean;
+    messages: Message[];
+  } | null>(null);
+  const draftSnapshot = useRef<{ id: string; drafts: Record<string, string> } | null>(null);
+  if (me) draftSnapshot.current = { id: me.id, drafts };
   const sectionRef = useRef(section);
   sectionRef.current = section;
   const activeRef = useRef(activeId),
@@ -603,6 +597,7 @@ export default function App() {
       ++requestEpoch.current;
       ++chatRequestEpoch.current;
       initialized.current = false;
+      conversationCache.current.clear();
       lastRead.current = {};
       nonces.current = {};
       setMe(null);
@@ -611,6 +606,7 @@ export default function App() {
       setMessages([]);
       setMembers([]);
       setAttachments({});
+      setTransfers({});
       setDrafts({});
       setReplies({});
       setEditing(null);
@@ -627,6 +623,8 @@ export default function App() {
     setError((e as Error).message || 'Не удалось выполнить действие.');
   }, []);
   const handleLogin = useCallback((person: Person) => {
+    if (cacheOwner.current !== person.id) conversationCache.current.clear();
+    cacheOwner.current = person.id;
     let saved: Record<string, string> = {};
     try {
       const value = JSON.parse(localStorage.getItem(`galinka-drafts:${person.id}`) || '{}');
@@ -645,19 +643,39 @@ export default function App() {
     setDrafts(saved);
     setMe(person);
   }, []);
-  useEffect(() => {
-    if (!me) return;
+  const persistDrafts = useCallback(() => {
+    const snapshot = draftSnapshot.current;
+    if (!snapshot) return;
     try {
       const saved = Object.fromEntries(
-        Object.entries(drafts).filter(([, text]) => text.length > 0),
+        Object.entries(snapshot.drafts).filter(([, value]) => value.length > 0),
       );
       if (Object.keys(saved).length)
-        localStorage.setItem(`galinka-drafts:${me.id}`, JSON.stringify(saved));
-      else localStorage.removeItem(`galinka-drafts:${me.id}`);
+        localStorage.setItem(`galinka-drafts:${snapshot.id}`, JSON.stringify(saved));
+      else localStorage.removeItem(`galinka-drafts:${snapshot.id}`);
     } catch {
-      /* Sending remains available when storage is full or unavailable. */
+      /* Storage limits must not interrupt typing or sending. */
     }
-  }, [drafts, me?.id]);
+  }, []);
+  useEffect(() => {
+    if (!me) {
+      persistDrafts();
+      return;
+    }
+    const timer = setTimeout(persistDrafts, 200);
+    return () => clearTimeout(timer);
+  }, [drafts, me?.id, persistDrafts]);
+  useEffect(() => {
+    const hidden = () => {
+      if (document.hidden) persistDrafts();
+    };
+    window.addEventListener('pagehide', persistDrafts);
+    document.addEventListener('visibilitychange', hidden);
+    return () => {
+      window.removeEventListener('pagehide', persistDrafts);
+      document.removeEventListener('visibilitychange', hidden);
+    };
+  }, [persistDrafts]);
   const notifications = useNotifications(me?.id, demo, (id) => {
     setActiveId(id);
     setSection('chats');
@@ -793,7 +811,7 @@ export default function App() {
         return;
       const previous = messagesRef.current;
       const latest = previous.at(-1);
-      setNewMessageIds(
+      const freshIds =
         !reset && !q && latest
           ? data
               .filter(
@@ -801,13 +819,18 @@ export default function App() {
                   !previous.some((old) => old.id === m.id) && m.created_at >= latest.created_at,
               )
               .map((m) => m.id)
-          : [],
+          : [];
+      setNewMessageIds((previousIds) =>
+        previousIds.length === freshIds.length &&
+        previousIds.every((messageId, index) => messageId === freshIds[index])
+          ? previousIds
+          : freshIds,
       );
       const boundary = data.length ? previous.findIndex((m) => m.id === data[0].id) : -1;
       setMessages((prev) => {
-        if (reset || q || data.length < 60) return data;
+        if (reset || q || data.length < 60) return reconcileMessages(prev, data);
         const overlap = prev.findIndex((m) => m.id === data[0].id);
-        return overlap > 0 ? [...prev.slice(0, overlap), ...data] : data;
+        return reconcileMessages(prev, overlap > 0 ? [...prev.slice(0, overlap), ...data] : data);
       });
       // A non-overlapping window means over 60 new messages arrived while offline.
       // Expose older history again; retaining the old "fully loaded" flag would hide it.
@@ -894,6 +917,7 @@ export default function App() {
         }
         if (change.removedUserId === me.id && change.chatId) {
           const removedId = change.chatId;
+          conversationCache.current.delete(removedId);
           ++chatRequestEpoch.current;
           setChats((previous) => previous.filter((chat) => chat.id !== removedId));
           if (activeRef.current === removedId) {
@@ -971,19 +995,24 @@ export default function App() {
   useLayoutEffect(() => {
     if (!activeId || !me) return;
     let valid = true;
-    setLoading(true);
+    const cached = !messageQuery ? conversationCache.current.get(activeId) : undefined;
+    setLoading(!cached);
     setPaging(false);
-    setAwayFromBottom(false);
+    setAwayFromBottom(cached ? !cached.following : false);
     setNewMessageIds([]);
     jumpingToLatest.current = false;
     scrollRestore.current = null;
-    setMessages([]);
+    cachedScroll.current = cached
+      ? { id: activeId, top: cached.top, following: cached.following, messages: cached.messages }
+      : null;
+    setMessages(cached?.messages || []);
+    setHasOlder(cached?.hasOlder || false);
     setMembers([]);
-    followBottom.current = true;
+    followBottom.current = cached?.following ?? true;
     const timer = setTimeout(
       () => {
         Promise.all([
-          loadMessages(activeId, true),
+          loadMessages(activeId, !cached),
           api<Person[]>(`/chats/${activeId}/members`).then((data) => {
             if (valid) setMembers(data);
           }),
@@ -992,7 +1021,12 @@ export default function App() {
             if (valid) refreshChats().catch(() => {});
           })
           .catch((e) => {
-            if (valid) report(e);
+            if (!valid) return;
+            if (e instanceof ApiError && [403, 404].includes(e.status)) {
+              conversationCache.current.delete(activeId);
+              setMessages([]);
+            }
+            report(e);
           })
           .finally(() => {
             if (valid) setLoading(false);
@@ -1009,6 +1043,14 @@ export default function App() {
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
+    const cached = cachedScroll.current;
+    if (cached && cached.id === activeId) {
+      // The chat-change effect queues its messages first; wait for that DOM to commit.
+      if (messages !== cached.messages) return;
+      el.scrollTop = cached.following ? el.scrollHeight : cached.top;
+      cachedScroll.current = null;
+      return;
+    }
     const restore = scrollRestore.current;
     if (restore && restore.id === activeId) {
       el.scrollTop = restore.top + el.scrollHeight - restore.height;
@@ -1017,6 +1059,32 @@ export default function App() {
       el.scrollTop = el.scrollHeight;
     }
   }, [messages, messageQuery, loading, section, activeId, reply?.id, edit?.message.id, attachment]);
+  useEffect(() => {
+    if (
+      !activeId ||
+      messageQuery ||
+      loading ||
+      messages.some((message) => message.chat_id !== activeId)
+    )
+      return;
+    const cache = conversationCache.current;
+    cache.delete(activeId);
+    cache.set(activeId, {
+      messages,
+      hasOlder,
+      top: scroller.current?.scrollTop ?? 0,
+      following: followBottom.current,
+    });
+    let retained = [...cache.values()].reduce(
+      (total, conversation) => total + conversation.messages.length,
+      0,
+    );
+    while (cache.size > 20 || (cache.size > 1 && retained > 1000)) {
+      const oldest = cache.keys().next().value!;
+      retained -= cache.get(oldest)!.messages.length;
+      cache.delete(oldest);
+    }
+  }, [activeId, messageQuery, messages, hasOlder, loading]);
   useEffect(() => {
     const dismiss = (event: PointerEvent) => {
       const target = event.target as Element;
@@ -1054,9 +1122,11 @@ export default function App() {
     jumpingToLatest.current = !!el && el.scrollHeight - el.scrollTop - el.clientHeight >= 80;
     el?.scrollTo({
       top: el.scrollHeight,
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        ? 'instant'
-        : 'smooth',
+      behavior:
+        document.documentElement.dataset.motion === 'reduced' ||
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+          ? 'instant'
+          : 'smooth',
     });
     const latest = messages.at(-1);
     if (!jumpingToLatest.current && activeId && latest) void markRead(activeId, latest.id);
@@ -1068,8 +1138,10 @@ export default function App() {
       if (followBottom.current && !queryRef.current) el.scrollTop = el.scrollHeight;
     });
     observer.observe(el);
+    const content = el.querySelector('.message-list');
+    if (content) observer.observe(content);
     return () => observer.disconnect();
-  }, [activeId, section, ready, me?.id]);
+  }, [activeId, section, ready, me?.id, loading]);
   function select(id: string) {
     if (window.innerWidth <= 1080) setInfoOpen(false);
     setActiveId(id);
@@ -1167,6 +1239,11 @@ export default function App() {
       return;
     }
     setAttachments((previous) => ({ ...previous, [activeId]: { file } }));
+    setTransfers((previous) => {
+      const next = { ...previous };
+      delete next[activeId];
+      return next;
+    });
     delete nonces.current[activeId];
   }
   async function setChatPreference(
@@ -1207,24 +1284,35 @@ export default function App() {
     sendingChats.current.add(id);
     setSendingIds([...sendingChats.current]);
     setError('');
+    let delivered = false;
     try {
       let file = fileDraft?.uploaded;
       if (fileDraft && !file) {
         const form = new FormData();
         form.append('file', fileDraft.file);
-        file = await api<Attachment>(`/chats/${id}/files`, 'POST', form);
+        setTransfers((previous) => ({ ...previous, [id]: { phase: 'uploading', progress: 0 } }));
+        file = await upload<Attachment>(`/chats/${id}/files`, form, (progress) => {
+          setTransfers((previous) => ({ ...previous, [id]: { phase: 'uploading', progress } }));
+        });
         setAttachments((prev) =>
           prev[id]?.file === fileDraft.file
             ? { ...prev, [id]: { ...fileDraft, uploaded: file } }
             : prev,
         );
       }
+      setTransfers((previous) => ({ ...previous, [id]: { phase: 'sending', progress: 100 } }));
       await api(`/chats/${id}/messages`, 'POST', {
         body: text,
         nonce: messageNonce,
         fileId: file?.id,
         demoFile: demo ? file : undefined,
         replyTo: replyDraft?.id,
+      });
+      delivered = true;
+      setTransfers((previous) => {
+        const next = { ...previous };
+        delete next[id];
+        return next;
       });
       setDrafts((prev) => (prev[id] === originalDraft ? { ...prev, [id]: '' } : prev));
       setReplies((previous) => {
@@ -1252,8 +1340,12 @@ export default function App() {
         report(e);
         return;
       }
+      if (!delivered)
+        setTransfers((previous) => ({ ...previous, [id]: { phase: 'error', progress: 0 } }));
       setError(
-        `${activeRef.current === id ? '' : `Чат «${chats.find((chat) => chat.id === id)?.title || 'Переписка'}»: `}${(e as Error).message}`,
+        delivered
+          ? 'Сообщение отправлено. Переписка обновится после восстановления соединения.'
+          : `${activeRef.current === id ? '' : `Чат «${chats.find((chat) => chat.id === id)?.title || 'Переписка'}»: `}${(e as Error).message}`,
       );
     } finally {
       sendingChats.current.delete(id);
@@ -1303,6 +1395,7 @@ export default function App() {
     try {
       if (!demo) await clearPushDevice().catch(() => {});
       if (!demo) await api('/auth/logout', 'POST');
+      draftSnapshot.current = null;
       try {
         if (me) localStorage.removeItem(`galinka-drafts:${me.id}`);
       } catch {
@@ -1411,6 +1504,33 @@ export default function App() {
   const unread = chats
     .filter((chat) => !chat.muted && !chat.archived)
     .reduce((n, c) => n + c.unread, 0);
+  const latestMessageActions = useRef<MessageActions>(null!);
+  latestMessageActions.current = {
+    reply: startReply,
+    edit: startEdit,
+    copy: copyMessage,
+    react,
+    download: downloadFile,
+    menu: positionMessageMenu,
+    remove: (message) => {
+      setDeleteId(message.id);
+      closeMenus();
+      setModal('delete');
+    },
+  };
+  // Keep the timeline independent from composer keystrokes while callbacks see current state.
+  const messageActions = useMemo<MessageActions>(
+    () => ({
+      reply: (message) => latestMessageActions.current.reply(message),
+      edit: (message) => latestMessageActions.current.edit(message),
+      copy: (message) => latestMessageActions.current.copy(message),
+      react: (message, emoji) => latestMessageActions.current.react(message, emoji),
+      download: (file) => latestMessageActions.current.download(file),
+      menu: (details) => latestMessageActions.current.menu(details),
+      remove: (message) => latestMessageActions.current.remove(message),
+    }),
+    [],
+  );
   if (!ready)
     return (
       <div className="boot">
@@ -1552,24 +1672,26 @@ export default function App() {
             <SlidersHorizontal size={16} />
           </IconButton>
         </div>
-        <div className="sidebar-tools">
-          <button
-            className={filter === 'Архив' ? 'archive-link selected' : 'archive-link'}
-            aria-pressed={filter === 'Архив'}
-            onClick={() => setFilter(filter === 'Архив' ? 'Все' : 'Архив')}
-          >
-            {filter === 'Архив' ? <ArrowLeft size={16} /> : <Archive size={16} />}
-            {filter === 'Архив' ? 'Все чаты' : 'Архив'}
-            <span>{archivedCount}</span>
-          </button>
-          <span>
-            {filter === 'Непрочитанные'
-              ? 'Непрочитанные'
-              : filter === 'Архив'
-                ? 'Скрытые разговоры'
-                : 'Ваши разговоры'}
-          </span>
-        </div>
+        {(archivedCount > 0 || filter === 'Архив') && (
+          <div className="sidebar-tools">
+            <button
+              className={filter === 'Архив' ? 'archive-link selected' : 'archive-link'}
+              aria-pressed={filter === 'Архив'}
+              onClick={() => setFilter(filter === 'Архив' ? 'Все' : 'Архив')}
+            >
+              {filter === 'Архив' ? <ArrowLeft size={16} /> : <Archive size={16} />}
+              {filter === 'Архив' ? 'Все чаты' : 'Архив'}
+              <span>{archivedCount}</span>
+            </button>
+            <span>
+              {filter === 'Непрочитанные'
+                ? 'Непрочитанные'
+                : filter === 'Архив'
+                  ? 'Скрытые разговоры'
+                  : 'Ваши разговоры'}
+            </span>
+          </div>
+        )}
         <div className="chat-list">
           {filtered.map((c, index) => (
             <Fragment key={c.id}>
@@ -1603,7 +1725,12 @@ export default function App() {
                             <Check size={13} aria-label="Отправлено" />
                           )}{' '}
                           {c.last_message?.body ||
-                            (c.last_message?.file_id ? 'Файл' : 'Нет сообщений')}
+                            (c.last_message?.file?.mime?.startsWith('audio/')
+                              ? 'Голосовое сообщение'
+                              : c.last_message?.file?.mime?.startsWith('image/')
+                                ? 'Фотография'
+                                : c.last_message?.file?.name ||
+                                  (c.last_message?.file_id ? 'Файл' : 'Нет сообщений'))}
                         </>
                       )}
                     </span>
@@ -1798,6 +1925,11 @@ export default function App() {
                     if (jumpingToLatest.current && !atBottom) return;
                     jumpingToLatest.current = false;
                     followBottom.current = atBottom;
+                    const cached = activeId ? conversationCache.current.get(activeId) : undefined;
+                    if (cached) {
+                      cached.top = el.scrollTop;
+                      cached.following = atBottom;
+                    }
                     setAwayFromBottom(!atBottom);
                     const latest = messages.at(-1);
                     if (followBottom.current && activeId && latest)
@@ -1836,197 +1968,16 @@ export default function App() {
                           )}
                         </div>
                       )}
-                      {messages.map((m, i) => {
-                        const own = m.sender_id === me.id,
-                          bot = !m.sender_id,
-                          previous = messages[i - 1],
-                          next = messages[i + 1],
-                          same =
-                            previous?.sender_id === m.sender_id &&
-                            new Date(m.created_at).getTime() -
-                              new Date(previous.created_at).getTime() <
-                              300000,
-                          newDay =
-                            !previous ||
-                            new Date(previous.created_at).toDateString() !==
-                              new Date(m.created_at).toDateString();
-                        return (
-                          <div key={m.id}>
-                            {newDay && (
-                              <div className="date-divider">
-                                <span>
-                                  {new Date(m.created_at).toDateString() ===
-                                  new Date().toDateString()
-                                    ? 'Сегодня'
-                                    : new Date(m.created_at).toLocaleDateString('ru', {
-                                        day: 'numeric',
-                                        month: 'long',
-                                      })}
-                                </span>
-                              </div>
-                            )}
-                            <article
-                              data-message-id={m.id}
-                              className={`message-row ${newMessageIds.includes(m.id) ? 'is-new' : ''} ${own ? 'own' : ''} ${bot ? 'bot' : ''} ${same && !newDay ? 'continued' : ''}`}
-                            >
-                              <span className="swipe-reply-indicator" aria-hidden="true">
-                                <Reply size={17} />
-                              </span>
-                              {!own && (
-                                <div className="message-avatar">
-                                  {(!next || next.sender_id !== m.sender_id || newDay) && (
-                                    <Avatar person={m.sender} size="small" />
-                                  )}
-                                </div>
-                              )}
-                              <div className="message-content">
-                                {!own && (!same || newDay) && (
-                                  <div className="sender-name">
-                                    {m.sender.name}
-                                    {bot && <span className="bot-tag">модуль</span>}
-                                  </div>
-                                )}
-                                <div className="bubble">
-                                  {m.reply && (
-                                    <blockquote className="message-quote">
-                                      <Reply size={14} />
-                                      <div>
-                                        <strong>{m.reply.sender.name}</strong>
-                                        <span>
-                                          {m.reply.body || m.reply.file_name || 'Сообщение'}
-                                        </span>
-                                      </div>
-                                    </blockquote>
-                                  )}
-                                  {m.file && (
-                                    <MediaAttachment
-                                      file={m.file}
-                                      onDownload={() => void downloadFile(m.file!)}
-                                    />
-                                  )}
-                                  {m.body && <MessageText text={m.body} />}
-                                  <span className="message-time">
-                                    {m.edited_at && (
-                                      <span
-                                        className="message-edited"
-                                        title={`Изменено ${time(m.edited_at)}`}
-                                      >
-                                        изменено
-                                      </span>
-                                    )}
-                                    <time>{time(m.created_at)}</time>
-                                    {own &&
-                                      ((m.read_by || 0) > 0 ? (
-                                        <span
-                                          className="read-receipt"
-                                          title={
-                                            active.kind === 'direct'
-                                              ? 'Прочитано'
-                                              : `Прочитали: ${m.read_by}`
-                                          }
-                                          aria-label={
-                                            active.kind === 'direct'
-                                              ? 'Прочитано'
-                                              : `Прочитали: ${m.read_by}`
-                                          }
-                                        >
-                                          <CheckCheck size={15} />
-                                        </span>
-                                      ) : (
-                                        <Check size={14} aria-label="Отправлено" />
-                                      ))}
-                                  </span>
-                                </div>
-                                {m.reactions.length > 0 && (
-                                  <div className="reactions">
-                                    {m.reactions.map((r) => (
-                                      <button
-                                        key={r.emoji}
-                                        className={r.mine ? 'mine' : ''}
-                                        aria-label={`${r.emoji}: ${r.count}, ${r.mine ? 'убрать' : 'добавить'} реакцию`}
-                                        onClick={() => react(m, r.emoji)}
-                                      >
-                                        {r.emoji}
-                                        <span>{r.count}</span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                              <details
-                                className="message-menu"
-                                name="message-actions"
-                                onToggle={(event) => positionMessageMenu(event.currentTarget)}
-                              >
-                                <summary aria-label="Действия с сообщением">
-                                  <MoreHorizontal size={18} />
-                                </summary>
-                                <div className="message-menu-content">
-                                  <span>Реакция</span>
-                                  <div>
-                                    {['❤', '👍', '😂', '🔥'].map((emoji) => (
-                                      <button
-                                        key={emoji}
-                                        aria-label={`Реакция ${emoji}`}
-                                        onClick={(e) => {
-                                          react(m, emoji);
-                                          e.currentTarget
-                                            .closest('details')
-                                            ?.removeAttribute('open');
-                                        }}
-                                      >
-                                        {emoji}
-                                      </button>
-                                    ))}
-                                  </div>
-                                  <button
-                                    className="message-action"
-                                    disabled={sending}
-                                    onClick={() => startReply(m)}
-                                  >
-                                    <Reply size={16} />
-                                    Ответить
-                                  </button>
-                                  <button
-                                    className="message-action"
-                                    onClick={() => void copyMessage(m)}
-                                  >
-                                    {copiedMessageId === m.id ? (
-                                      <Check size={16} />
-                                    ) : (
-                                      <Copy size={16} />
-                                    )}
-                                    {copiedMessageId === m.id ? 'Скопировано' : 'Копировать'}
-                                  </button>
-                                  {own && (
-                                    <button
-                                      className="message-action"
-                                      disabled={sending || savingEdit}
-                                      onClick={() => startEdit(m)}
-                                    >
-                                      <Pencil size={16} />
-                                      Редактировать
-                                    </button>
-                                  )}
-                                  {own && (
-                                    <button
-                                      className="delete-action"
-                                      onClick={() => {
-                                        setDeleteId(m.id);
-                                        closeMenus();
-                                        setModal('delete');
-                                      }}
-                                    >
-                                      <Trash2 size={15} />
-                                      Удалить
-                                    </button>
-                                  )}
-                                </div>
-                              </details>
-                            </article>
-                          </div>
-                        );
-                      })}
+                      <MessageList
+                        messages={messages}
+                        meId={me.id}
+                        kind={active.kind}
+                        newMessageIds={newMessageIds}
+                        copiedId={copiedMessageId}
+                        sending={sending}
+                        savingEdit={savingEdit}
+                        actions={messageActions}
+                      />
                       <div ref={bottomRef} />
                     </>
                   )}
@@ -2079,27 +2030,25 @@ export default function App() {
                     </div>
                   )}
                   {attachment && !edit && (
-                    <div className="pending-file">
-                      <FileText size={18} />
-                      <span>
-                        {attachment.name} · {bytes(attachment.size)}
-                      </span>
-                      <IconButton
-                        label="Убрать файл"
-                        disabled={sending}
-                        onClick={() => {
-                          if (!activeId) return;
-                          setAttachments((prev) => {
-                            const next = { ...prev };
-                            delete next[activeId];
-                            return next;
-                          });
-                          delete nonces.current[activeId];
-                        }}
-                      >
-                        <X size={16} />
-                      </IconButton>
-                    </div>
+                    <AttachmentPreview
+                      file={attachment}
+                      transfer={activeId ? transfers[activeId] : undefined}
+                      onRetry={() => void send()}
+                      onRemove={() => {
+                        if (!activeId) return;
+                        setAttachments((previous) => {
+                          const next = { ...previous };
+                          delete next[activeId];
+                          return next;
+                        });
+                        setTransfers((previous) => {
+                          const next = { ...previous };
+                          delete next[activeId];
+                          return next;
+                        });
+                        delete nonces.current[activeId];
+                      }}
+                    />
                   )}
                   <form className="composer" onSubmit={send}>
                     <input
@@ -2455,8 +2404,8 @@ export default function App() {
               <div>
                 <h3>Быстрее одним жестом</h3>
                 <p>
-                  Смахните сообщение вправо, чтобы ответить. На телефоне свайп от левого края
-                  возвращает к списку чатов.
+                  Смахните сообщение вправо, чтобы ответить. Удерживайте сообщение или нажмите
+                  правой кнопкой для действий. Свайп от левого края возвращает к чатам.
                 </p>
               </div>
             </section>

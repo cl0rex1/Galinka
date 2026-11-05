@@ -54,5 +54,6 @@ export type Chat = {
     created_at: string;
     sender_id: string | null;
     file_id?: string;
+    file?: Attachment | null;
   } | null;
 };

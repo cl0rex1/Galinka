@@ -9,6 +9,7 @@ import path from 'node:path';
 import { z, ZodError } from 'zod';
 import { digest, hashPassword, verifyPassword, readCookie } from './security.js';
 import { nelyaReply } from './nelya.js';
+import { AudioError, normalizeUploadedAudio, audioPreview, removeAudioPreview, isRecordedAudio } from './audio.js';
 import {
   pushEnabled,
   anyPushEnabled,
@@ -555,7 +556,12 @@ app.get('/api/chats', auth, async (req, res) => {
  CASE WHEN c.kind='direct' THEN (SELECT u.name FROM members mm JOIN users u ON u.id=mm.user_id WHERE mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) ELSE c.title END AS title,
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
  (SELECT row_to_json(u) FROM (SELECT u.id,u.name,u.username,u.color FROM members mm JOIN users u ON u.id=mm.user_id WHERE mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) u) AS peer,
- (SELECT row_to_json(msg) FROM (SELECT body,created_at,sender_id,file_id FROM messages WHERE chat_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) msg) AS last_message,
+ (SELECT row_to_json(msg) FROM (
+   SELECT m.body,m.created_at,m.sender_id,m.file_id,
+    CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file
+   FROM messages m LEFT JOIN files f ON f.id=m.file_id WHERE m.chat_id=c.id
+   ORDER BY m.created_at DESC,m.id DESC LIMIT 1
+ ) msg) AS last_message,
  (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread
  FROM chats c JOIN members m ON m.chat_id=c.id WHERE m.user_id=$1 ORDER BY m.pinned DESC,COALESCE((SELECT max(created_at) FROM messages WHERE chat_id=c.id),c.created_at) DESC,c.id`,
     [user(req).id],
@@ -724,7 +730,13 @@ app.delete('/api/chats/:id/members/:userId', auth, async (req, res) => {
     await notify(db, chat.id, undefined, targetId);
     return [];
   });
-  await Promise.all(removedFiles.map((id) => unlink(path.join(directory, id)).catch(() => {})));
+  await Promise.all(removedFiles.map(async (id) => {
+    const filename = path.join(directory, id);
+    await unlink(filename).catch(() => {});
+    // Deletion should not wait for an already-running decoder, but its output
+    // must be discarded when it finishes as well.
+    void removeAudioPreview(filename);
+  }));
   res.json({ ok: true });
 });
 app.post('/api/chats/:id/read', auth, async (req, res) => {
@@ -1000,15 +1012,27 @@ app.post(
     requireValue(req.file, 400, 'Выберите файл.');
     const file = req.file!;
     try {
-      const mime = await mediaType(file.path, file.mimetype);
-      const name =
+      let mime = await mediaType(file.path, file.mimetype);
+      let name =
         Buffer.from(file.originalname, 'latin1')
           .toString('utf8')
           .replace(/[\x00-\x1f\x7f/\\]/g, '_')
           .slice(0, 180) || 'Файл';
+      const normalized = await normalizeUploadedAudio(file.path, mime);
+      if (normalized) {
+        mime = 'audio/mp4';
+        name = name.replace(/\.[^.]+$/, '') + '.m4a';
+        file.size = normalized.size;
+      }
       const record = await transaction(async (db) => {
         await lockedMember(String(req.params.id), user(req).id, db);
-        await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user(req).id]);
+        const account = await db.query('SELECT id,blocked FROM users WHERE id=$1 FOR UPDATE', [user(req).id]);
+        requireValue(account.rows[0] && !account.rows[0].blocked, 401, 'Войдите в Galinka снова.');
+        const session = await db.query(
+          'SELECT token FROM sessions WHERE token=$1 AND user_id=$2 AND expires_at>now() FOR SHARE',
+          [(req as AuthedRequest).sessionToken, user(req).id],
+        );
+        requireValue(session.rowCount, 401, 'Войдите в Galinka снова.');
         const usage = await db.query(
           'SELECT COALESCE(sum(size),0)::bigint AS total FROM files WHERE user_id=$1',
           [user(req).id],
@@ -1019,8 +1043,8 @@ app.post(
           'Лимит файлов аккаунта — 500 МБ. Свяжитесь с владельцем сервера.',
         );
         const { rows } = await db.query(
-          'INSERT INTO files(id,chat_id,user_id,name,size,mime) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,size,mime',
-          [file.filename, req.params.id, user(req).id, name, file.size, mime],
+          'INSERT INTO files(id,chat_id,user_id,name,size,mime,audio_ready) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,name,size,mime',
+          [file.filename, req.params.id, user(req).id, name, file.size, mime, Boolean(normalized)],
         );
         return rows[0];
       });
@@ -1038,13 +1062,34 @@ app.get('/api/files/:id', auth, async (req, res) => {
   );
   requireValue(rows[0], 404, 'Файл не найден.');
   if (req.query.inline === '1' && inlineMediaTypes.has(rows[0].mime)) {
-    res.setHeader('Content-Type', rows[0].mime);
+    const original = path.join(directory, rows[0].id);
+    const preview =
+      isRecordedAudio(rows[0].mime) && !rows[0].audio_ready
+        ? await audioPreview(original, rows[0].mime)
+        : undefined;
+    if (preview) {
+      if (res.destroyed) {
+        preview.release();
+        return;
+      }
+      res.once('finish', preview.release);
+      res.once('close', preview.release);
+      res.once('error', preview.release);
+      const access = await pool.query(
+        'SELECT 1 FROM members m JOIN sessions s ON s.user_id=m.user_id JOIN users u ON u.id=m.user_id WHERE m.chat_id=$1 AND m.user_id=$2 AND s.token=$3 AND s.expires_at>now() AND NOT u.blocked',
+        [rows[0].chat_id, user(req).id, (req as AuthedRequest).sessionToken],
+      );
+      requireValue(access.rowCount, 404, 'Файл недоступен.');
+    }
+    res.setHeader('Content-Type', preview ? 'audio/mp4' : rows[0].mime);
     res.setHeader('Content-Disposition', 'inline');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     if (publicApiOrigin && publicApiOrigin !== origin)
       res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
-    res.sendFile(path.join(directory, rows[0].id));
+    // The derived file lives in a private dot-directory; Express otherwise
+    // rejects it before opening. Both paths are resolved from validated IDs.
+    res.sendFile(preview?.path || original, { dotfiles: preview ? 'allow' : 'ignore' });
     return;
   }
   res.setHeader('Content-Type', 'application/octet-stream');
@@ -1164,7 +1209,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     });
     return;
   }
-  if (error instanceof HttpError) {
+  if (error instanceof HttpError || error instanceof AudioError) {
     res.status(error.status).json({ error: error.message });
     return;
   }

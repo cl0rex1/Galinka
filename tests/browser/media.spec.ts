@@ -82,12 +82,16 @@ test('voice recording produces playable audio; cancelling and changing chat rele
     animations: 'disabled',
   });
   await page.getByRole('button', { name: 'Завершить запись', exact: true }).click();
-  await expect(page.locator('.pending-file')).toContainText('Голосовое-');
+  await expect(page.locator('.pending-file')).toContainText('Голосовое сообщение');
   await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
-  await expect(page.locator('.audio-attachment audio')).toBeVisible();
+  await expect(page.locator('.audio-attachment .voice-play')).toBeVisible();
+  await page.locator('.audio-attachment .voice-play').click();
   await expect
     .poll(() => page.locator('audio').evaluate((element) => element.readyState))
     .toBeGreaterThanOrEqual(1);
+  await expect
+    .poll(() => page.locator('.audio-attachment audio').evaluate((element) => element.currentTime))
+    .toBeGreaterThan(0.1);
   await page.getByRole('button', { name: 'Записать голосовое сообщение', exact: true }).click();
   await expect(page.locator('.recording-time')).toBeVisible();
   await page.getByRole('button', { name: 'Отменить запись', exact: true }).click();
@@ -134,4 +138,35 @@ test('microphone denial gives a recoverable error without losing a text draft', 
   await page.getByRole('textbox', { name: 'Сообщение', exact: true }).fill('Тогда напишу текстом');
   await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
   await expect(page.locator('.bubble').last()).toContainText('Тогда напишу текстом');
+});
+
+test('a recording shorter than the first chunk interval still flushes a playable preview', async ({
+  page,
+}) => {
+  await syntheticMicrophone(page);
+  await chat(page);
+  await page.getByRole('button', { name: 'Записать голосовое сообщение', exact: true }).click();
+  await expect(page.locator('.recording-time')).toBeVisible();
+  await page.waitForTimeout(300);
+  await page.getByRole('button', { name: 'Завершить запись', exact: true }).click();
+  await expect(page.locator('.pending-voice')).toContainText('Голосовое сообщение');
+  const audio = page.locator('.pending-voice audio');
+  await expect
+    .poll(() => audio.evaluate((element) => element.readyState))
+    .toBeGreaterThanOrEqual(1);
+  expect(
+    await audio.evaluate((element) => Number.isFinite(element.duration) && element.duration > 0),
+  ).toBe(true);
+  expect(
+    await audio.evaluate(async (element) => (await (await fetch(element.src)).blob()).size),
+  ).toBeGreaterThan(100);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as unknown as { testStreams: MediaStream[] }).testStreams.every((stream) =>
+          stream.getTracks().every((track) => track.readyState === 'ended'),
+        ),
+      ),
+    )
+    .toBe(true);
 });

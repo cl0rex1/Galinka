@@ -20,13 +20,14 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm ci
       - run: npm run build
       - run: npm run test:desktop
       - run: npm test
         env:
           TEST_DATABASE_URL: postgres://galinka:test-only-password@localhost:5432/galinka_test
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e
         env:
           TEST_DATABASE_URL: postgres://galinka:test-only-password@localhost:5432/galinka_test

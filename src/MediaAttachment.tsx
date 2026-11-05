@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, FileText, X, Headphones, Expand } from 'lucide-react';
+import { Download, FileText, X, Expand } from 'lucide-react';
 import { API_BASE, isDemo } from './api';
 import { getDemoFileUrl } from './demo';
 import type { Attachment } from './types';
+import { AudioPlayer } from './AudioPlayer';
 
 const size = (bytes: number) =>
   bytes < 1048576
@@ -23,14 +24,26 @@ export function MediaAttachment({
     ? getDemoFileUrl(file.id)
     : `${API_BASE}/files/${encodeURIComponent(file.id)}?inline=1`;
   const image = /^(image\/(png|jpeg|gif|webp))$/.test(file.mime || '') && url && !failed;
-  const audio = /^(audio\/(webm|ogg|mp4))$/.test(file.mime || '') && url && !failed;
+  const audio = /^(audio\/(webm|ogg|mp4|mpeg|wav|x-wav))$/.test(file.mime || '') && url;
   useEffect(() => {
     if (!expanded || !dialog.current) return;
     const element = dialog.current;
     element.showModal();
     return () => element.close();
   }, [expanded]);
-  if (!image && !audio)
+  if (audio && url)
+    return (
+      <div className="media-attachment audio-attachment">
+        <AudioPlayer
+          src={url}
+          name={file.name}
+          size={file.size}
+          mime={file.mime}
+          onDownload={onDownload}
+        />
+      </div>
+    );
+  if (!image)
     return (
       <button type="button" className="file-attachment" onClick={onDownload}>
         <FileText size={25} />
@@ -42,7 +55,7 @@ export function MediaAttachment({
       </button>
     );
   return (
-    <div className={`media-attachment ${audio ? 'audio-attachment' : 'image-attachment'}`}>
+    <div className="media-attachment image-attachment">
       {image && (
         <button
           type="button"
@@ -56,19 +69,9 @@ export function MediaAttachment({
           </span>
         </button>
       )}
-      {audio && (
-        <audio
-          controls
-          preload="metadata"
-          src={url}
-          aria-label={`Аудиосообщение ${file.name}`}
-          onError={() => setFailed(true)}
-        />
-      )}
       <div className="media-meta">
-        {audio && <Headphones size={18} />}
         <span>
-          <strong>{audio ? 'Аудиосообщение' : file.name}</strong>
+          <strong>{file.name}</strong>
           <small>{size(file.size)}</small>
         </span>
         <button

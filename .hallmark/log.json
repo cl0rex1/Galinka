@@ -1,6 +1,13 @@
 [
   {
     "date": "2026-11-04",
+    "macrostructure": "Conversation workspace",
+    "theme": "quiby.core Onyx",
+    "enrichment": "Real messenger screenshots and audio controls",
+    "brief": "Conversation density, inline timestamps, touch hold actions, restrained motion and compact voice preview/player; reviewed light/dark layouts and upload retry states on Chromium and WebKit."
+  },
+  {
+    "date": "2026-11-04",
     "macrostructure": "Conversation workspace / Download desk",
     "theme": "quiby.core Onyx",
     "enrichment": "Real messenger screenshot",

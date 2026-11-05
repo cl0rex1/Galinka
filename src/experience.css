@@ -1,7 +1,6 @@
 /* Hallmark · macrostructure: Conversation workspace · tone: calm · anchor hue: violet · theme: quiby.core Onyx */
 /* Hallmark · macrostructure: Conversation workspace · theme: quiby.core family
  * Onyx surfaces / violet actions / Unbounded + Golos Text
- * Pre-emit critique: P5 H5 E5 S5 R5 V4
  * Motion explains selection, new content and navigation; reading surfaces stay still.
  */
 
@@ -50,254 +49,605 @@ body {
   background: var(--color-online);
 }
 
-/* A quiet rail, a readable inbox and a dedicated conversation plane. */
+/* Conversation geometry is stable: selection changes color, never row size. */
+@media (min-width: 1181px) {
+  .app-shell.app-shell {
+    grid-template-columns: 68px 320px minmax(0, 1fr);
+  }
+}
 .app-shell .rail {
   border-right: 1px solid var(--color-rule);
-  padding-top: 22px;
-  gap: 30px;
+  padding: 16px 10px;
+  gap: 24px;
 }
 .app-shell .rail-logo {
-  background: var(--color-transparent);
+  width: 44px;
+  height: 44px;
+  background: transparent;
   border-radius: 14px;
 }
 .app-shell .rail-logo img {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
 }
 .app-shell .rail .icon-button {
-  width: 46px;
-  height: 46px;
-  border-radius: 12px;
-  transition:
-    background-color var(--dur-short) var(--ease-out),
-    color var(--dur-short) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
 }
 .app-shell .rail .icon-button.active {
   background: var(--color-navigation-selected);
   color: var(--color-accent);
 }
 .app-shell .rail .icon-button.active::before {
-  content: '';
-  position: absolute;
-  inset: 14px auto 14px -14px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: var(--color-accent);
+  content: none;
 }
 .app-shell .rail-dot {
   background: var(--color-accent);
 }
+.app-shell .sidebar {
+  background: var(--color-surface);
+}
 .app-shell .sidebar-brand {
-  min-height: 90px;
-  padding: 24px 24px 20px;
+  min-height: 66px;
+  padding: 18px 20px 10px;
 }
 .app-shell .sidebar-brand .brand {
-  font-size: 24px;
+  font-size: 22px;
   letter-spacing: -0.055em;
 }
 .app-shell .sidebar-heading {
-  padding: 0 20px 18px 24px;
+  padding: 8px 16px 12px 20px;
 }
 .app-shell .sidebar-heading h1 {
   font-family: var(--font-body);
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 650;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.025em;
 }
 .app-shell .sidebar-heading h1 > span {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  border-radius: 6px;
+  height: 21px;
+  min-width: 21px;
+  font-size: 11px;
   background: var(--color-paper-2);
+  border-radius: 50%;
 }
 .app-shell .new-chat {
   width: 40px;
   height: 40px;
-  border-radius: 11px;
+  border-radius: 50%;
 }
 .app-shell .search-field {
-  border: 1px solid var(--color-rule);
-  border-radius: 10px;
-  background: var(--color-paper);
-  margin-inline: 18px;
+  margin-inline: 14px;
+  border: 1px solid transparent;
+  border-radius: 22px;
+  background: var(--color-paper-2);
 }
 .app-shell .search-field:focus-within {
-  border-color: var(--color-accent);
+  border-color: var(--color-selection-rule);
 }
 .app-shell .search-field input {
-  font-size: 13px;
+  font-size: 14px;
+  min-height: 42px;
+  height: 42px;
 }
 .app-shell .chat-filters {
-  padding: 12px 18px 10px;
-  gap: 4px;
+  padding: 8px 14px 4px;
+  gap: 2px;
 }
 .app-shell .chat-filters > button {
-  min-height: 36px;
-  border-radius: 8px;
-  font-size: 12px;
+  min-height: 38px;
+  border-radius: 9px;
+  font-size: 13px;
+  padding-inline: 12px;
 }
 .app-shell .chat-filters > button.selected {
-  background: var(--color-mint);
   color: var(--color-accent);
+  background: var(--color-mint);
 }
 .app-shell .chat-list {
-  padding-inline: 10px;
+  padding: 0 6px 12px;
   scrollbar-gutter: stable;
 }
 .app-shell .chat-item {
-  min-height: 84px;
-  padding: 13px 12px;
-  border-radius: 12px;
-  margin-block: 3px;
-  transition:
-    background-color var(--dur-short) var(--ease-out),
-    border-color var(--dur-short) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
+  min-height: 74px;
+  padding: 10px 10px;
+  gap: 12px;
+  border: 0;
+  border-radius: 10px;
+  margin: 1px 0;
+  transition: background-color 120ms var(--ease-standard);
 }
 .app-shell .chat-item.selected {
-  background: var(--color-subtle-accent);
-  border-color: var(--color-selection-rule);
+  background: var(--color-mint);
 }
 .app-shell .chat-item .avatar {
-  border-radius: 16px;
-  width: 48px;
-  height: 48px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
 }
 .app-shell .chat-item-title strong {
-  font-size: 14px;
+  font-size: 15px;
+  line-height: 1.3;
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.015em;
 }
 .app-shell .chat-item-title time {
-  font-family: var(--font-mono);
-  font-size: 9px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.app-shell .chat-item-preview {
+  margin-top: 4px;
 }
 .app-shell .chat-item-preview > span {
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.35;
 }
 .app-shell .chat-list-label {
-  padding-top: 20px;
-  font-family: var(--font-mono);
-  font-size: 10px;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  padding: 0;
+  margin: -1px;
+}
+.app-shell .sidebar-tools {
+  padding: 0 14px 4px;
 }
 .app-shell .sidebar-tools > button {
-  border-radius: 9px;
+  min-height: 36px;
+  border-radius: 8px;
+  padding: 6px 10px;
 }
 .app-shell .unread {
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 11px;
   min-width: 21px;
   height: 21px;
 }
 .app-shell .chat-header {
-  min-height: 82px;
-  padding: 15px 28px;
+  min-height: 64px;
+  padding: 10px 22px;
+  gap: 12px;
   background: var(--color-surface);
 }
 .app-shell .chat-heading h2 {
   font-family: var(--font-body);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 650;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.015em;
 }
 .app-shell .chat-heading p {
-  font-size: 11px;
+  font-size: 12px;
+  margin-top: 2px;
 }
 .app-shell .chat-header > .avatar {
-  width: 42px;
-  height: 42px;
-  border-radius: 14px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
 }
 .app-shell .header-actions :is(.icon-button, .chat-actions > summary) {
-  border-radius: 10px;
+  border-radius: 50%;
 }
 .app-shell .conversation {
   background: var(--color-conversation);
 }
 .app-shell .messages {
-  padding: 16px max(28px, calc((100% - 850px) / 2)) 28px;
+  padding: 12px max(28px, calc((100% - 760px) / 2)) 16px;
   scrollbar-gutter: stable;
+  overflow-anchor: none;
+}
+.app-shell .date-divider {
+  padding: 12px 0 16px;
 }
 .app-shell .date-divider span {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  background: var(--color-transparent);
-  padding: 5px 0;
-}
-.app-shell .bubble {
-  border-radius: 16px 16px 16px 5px;
-  box-shadow: none;
-  padding: 11px 14px 8px;
-}
-.app-shell .own .bubble {
-  border-radius: 16px 16px 5px 16px;
-  border-color: var(--color-transparent);
-}
-.app-shell .bubble p {
-  font-size: 15px;
-  line-height: 1.53;
-}
-.app-shell .message-time {
+  padding: 4px 10px;
   font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 14px;
+  background: var(--color-date-surface);
+  color: var(--color-ink-2);
+}
+.app-shell .message-row {
+  margin-top: 9px;
+  gap: 7px;
+  position: relative;
+}
+.app-shell .message-row.continued {
+  margin-top: 3px;
+}
+.app-shell .message-avatar {
+  width: 28px;
+}
+.app-shell .message-avatar .avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
   font-size: 10px;
-  opacity: 1;
+}
+.app-shell .message-row:has(.reactions) .message-avatar {
+  margin-bottom: 31px;
+}
+.app-shell .message-content {
+  max-width: min(80%, 540px);
 }
 .app-shell .sender-name {
+  font-size: 12px;
   font-weight: 600;
+  padding: 0 10px 3px;
+  color: var(--color-accent);
+  line-height: 1.25;
+}
+.app-shell .bubble {
+  min-width: 76px;
+  padding: 8px 11px 7px;
+  border: 0;
+  border-radius: 15px 15px 15px 5px;
+  background: var(--color-message);
+  box-shadow: 0 1px 1px var(--color-shadow);
+}
+.app-shell .own .bubble {
+  background: var(--color-outgoing);
+  border-radius: 15px 15px 5px 15px;
+}
+.app-shell .bot .bubble {
+  background: var(--color-bot-bubble);
+}
+.app-shell .bubble > .message-text {
+  display: inline;
+  font-size: 15px;
+  line-height: 1.45;
+}
+.app-shell .message-time {
+  float: right;
+  display: inline-flex;
+  margin: 5px -2px -2px 12px;
+  min-height: 14px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 1;
+}
+.app-shell .bubble:has(.media-attachment) > .message-time {
+  display: flex;
+  float: none;
+  margin-top: 5px;
+  margin-left: 0;
+}
+.app-shell .message-edited {
+  font-size: 9px;
+}
+.app-shell .reactions {
+  gap: 4px;
+  padding-top: 4px;
 }
 .app-shell .reactions button {
-  border-radius: 9px;
-  border-color: var(--color-rule);
+  min-height: 27px;
+  min-width: 34px;
+  padding: 3px 8px;
+  border-radius: 14px;
+  border-color: transparent;
+  background: var(--color-message);
 }
-.app-shell .reactions button.reacted {
+.app-shell .reactions button.mine {
   border-color: var(--color-selection-rule);
   background: var(--color-mint);
 }
 .app-shell .message-quote {
-  border-radius: 7px;
-  border-left-width: 3px;
+  margin: -1px -4px 6px;
+  border: 0;
+  border-left: 3px solid var(--color-accent);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.app-shell .message-menu {
+  align-self: center;
+}
+.app-shell .message-menu summary {
+  opacity: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  transition:
+    opacity 100ms var(--ease-standard),
+    background-color 100ms var(--ease-standard);
+}
+.app-shell .message-row:focus-within .message-menu summary,
+.app-shell .message-menu[open] summary {
+  opacity: 1;
+}
+.app-shell :is(.message-menu-content, .chat-actions-menu, .emoji-picker) {
+  border-radius: 14px;
+  box-shadow: 0 8px 28px var(--color-shadow-deep);
+}
+.app-shell .message-menu-content {
+  padding: 6px;
+}
+.app-shell .message-menu-content > button {
+  min-height: 40px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.app-shell .message-menu-content > div {
+  gap: 4px;
+  padding: 2px 2px 6px;
+}
+.app-shell .message-menu-content > span {
+  display: none;
 }
 .app-shell .composer-wrap {
-  padding: 12px 24px max(18px, env(safe-area-inset-bottom));
+  padding: 8px 24px max(12px, env(safe-area-inset-bottom));
+  background: var(--color-conversation);
 }
 .app-shell .composer {
-  border-radius: 16px;
-  padding: 7px;
+  max-width: 760px;
+  min-height: 54px;
+  padding: 4px;
+  gap: 2px;
+  border: 1px solid var(--color-composer-rule);
+  border-radius: 24px;
   background: var(--color-surface);
-  box-shadow: 0 4px 16px var(--color-shadow);
+  box-shadow: 0 2px 6px var(--color-shadow);
 }
 .app-shell .composer:focus-within {
   border-color: var(--color-selection-rule);
-  box-shadow: 0 4px 16px var(--color-shadow);
+  box-shadow: 0 2px 6px var(--color-shadow);
+}
+.app-shell .composer textarea {
+  font-size: 15px;
+  line-height: 21px;
+  padding: 11px 6px;
+  min-height: 44px;
 }
 .app-shell .composer :is(.icon-button, .send-button) {
-  border-radius: 10px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
 }
-.app-shell .composer-context {
-  border-radius: 12px;
+.app-shell .composer .send-button {
+  box-shadow: none;
+}
+.app-shell .composer-context,
+.app-shell .pending-file {
+  max-width: 760px;
+  border-radius: 14px;
+  margin-bottom: 6px;
 }
 .app-shell .composer-foot {
-  color: var(--color-faint);
-  font-size: 10px;
-}
-.app-shell :is(.chat-actions-menu, .message-menu-content, .emoji-picker) {
-  border-radius: 14px;
-  box-shadow: 0 12px 36px var(--color-shadow-deep);
+  display: none;
 }
 .app-shell .chat-info {
   background: var(--color-surface);
 }
 .app-shell .info-profile h3 {
-  font-size: 18px;
-  line-height: 1.5;
+  font-family: var(--font-body);
+  font-size: 20px;
+  line-height: 1.35;
 }
 .app-shell .info-profile > .avatar {
-  width: 76px;
-  height: 76px;
-  border-radius: 24px;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
 }
 
+.app-shell .audio-attachment:has(.voice-player) {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  gap: 0;
+}
+.app-shell .voice-player audio {
+  display: none;
+}
+/* Native audio controls vary across WebViews; this seek bar is explicit and usable. */
+.app-shell .message-content:has(.voice-player) {
+  width: min(350px, 80%);
+}
+.app-shell .voice-player {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 0 0;
+}
+.voice-player-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.voice-play {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+}
+.voice-player-track {
+  flex: 1;
+  min-width: 0;
+}
+.voice-timeline {
+  display: block;
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  accent-color: var(--color-accent);
+  appearance: none;
+  cursor: pointer;
+}
+.voice-timeline::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-muted) 35%, transparent);
+}
+.voice-timeline::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5.5px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+.voice-timeline::-moz-range-track {
+  height: 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-muted) 35%, transparent);
+}
+.voice-timeline::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+.voice-timeline:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.voice-player-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 17px;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+.voice-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.voice-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voice-speed,
+.voice-download {
+  flex: 0 0 44px;
+  min-height: 44px;
+  min-width: 44px;
+  align-self: center;
+  padding: 4px;
+  border-radius: 50%;
+  color: var(--color-accent);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.voice-download {
+  display: grid;
+  place-items: center;
+}
+.voice-player:has(.voice-download):is(
+    [data-state='idle'],
+    [data-state='ready'],
+    [data-state='playing']
+  )
+  .voice-status {
+  display: none;
+}
+.app-shell .voice-error {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-error);
+}
+.app-shell .voice-recording {
+  border-radius: 24px;
+}
+.app-shell .voice-finish {
+  border-radius: 20px;
+}
+
+/* The attachment is a review step, with visible transfer progress and retry. */
+.app-shell .pending-file {
+  align-items: center;
+  padding: 8px 8px 8px 12px;
+  gap: 10px;
+}
+.pending-file-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pending-file-content > strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+.pending-thumbnail {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.pending-file-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-muted);
+}
+.pending-file-status svg {
+  flex-shrink: 0;
+}
+.pending-file.has-error .pending-file-status {
+  color: var(--color-error);
+}
+.pending-file-content progress {
+  display: block;
+  width: 100%;
+  height: 4px;
+  border: 0;
+  accent-color: var(--color-accent);
+}
+.app-shell .pending-voice {
+  position: relative;
+  padding: 9px 12px;
+}
+.pending-voice .pending-file-content > strong {
+  padding-right: 44px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+}
+.pending-voice.has-error .pending-file-content > strong {
+  padding-right: 88px;
+}
+.app-shell .pending-voice > .icon-button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 44px;
+  height: 44px;
+}
+.app-shell .pending-voice > .icon-button[aria-label='Повторить отправку'] {
+  right: 44px;
+}
+.voice-player-compact {
+  padding-top: 2px;
+}
 /* Secondary screens use the same controls, rhythm and palette as the inbox. */
 .content-page {
   padding: 36px clamp(24px, 4vw, 56px) 48px;
@@ -469,53 +819,72 @@ body {
   border-radius: 13px;
 }
 
-/* Brief arrivals and tactile feedback, with no animated backdrop. */
-:is(.content-page, .auth-form-wrap) {
-  animation: galinka-section-arrive var(--dur-section) var(--ease-out);
+/* Never transform a row or scrolling surface: fixed menus and scroll anchors stay stable. */
+.app-shell :is(button, summary):active:not(:disabled) {
+  transform: none;
+}
+.app-shell :is(button, summary) {
+  transition:
+    background-color 120ms var(--ease-standard),
+    color 120ms var(--ease-standard),
+    opacity 120ms var(--ease-standard);
+}
+.app-shell .send-button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.app-shell .send-button {
+  transition:
+    transform 100ms var(--ease-out),
+    background-color 120ms var(--ease-standard);
+}
+:is(.content-page, .auth-form-wrap, .message-search, .pending-file, .jump-to-latest) {
+  animation: galinka-crossfade 150ms var(--ease-standard);
 }
 :is(.modal[open], .chat-info) {
-  animation: galinka-panel-arrive var(--dur-medium) var(--ease-out);
+  animation: galinka-panel-arrive 180ms var(--ease-out);
 }
 .app-shell .message-row.is-new {
-  animation: galinka-message-arrive var(--dur-enter) var(--ease-out);
-}
-.app-shell .message-row.is-new.own {
-  transform-origin: bottom right;
-}
-.app-shell .message-row.is-new:has(details[open]) {
   animation: none;
 }
-@keyframes galinka-section-arrive {
+.app-shell .message-row.is-new > .message-content {
+  animation: galinka-message-arrive 160ms var(--ease-out);
+}
+.app-shell .message-row.is-new:has(details[open]) > .message-content {
+  animation: none;
+}
+.app-shell :is(.message-menu-content, .chat-actions-menu, .emoji-picker) {
+  animation: galinka-crossfade 120ms var(--ease-standard);
+}
+@keyframes galinka-crossfade {
   from {
     opacity: 0;
-    transform: translateY(9px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 @keyframes galinka-panel-arrive {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.985);
+    translate: 0 6px;
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    translate: 0 0;
   }
 }
 @keyframes galinka-message-arrive {
   from {
-    opacity: 0;
-    transform: translateY(6px);
+    opacity: 0.45;
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 @media (hover: hover) and (pointer: fine) {
+  .app-shell .message-row:hover .message-menu summary {
+    opacity: 1;
+  }
   .primary:hover:not(:disabled) {
     background: var(--color-accent-hover);
   }
@@ -537,15 +906,15 @@ body {
 /* The mobile surface keeps full-size controls and a single conversation pane. */
 @media (max-width: 800px), (max-width: 960px) and (max-height: 500px) and (pointer: coarse) {
   .app-shell .sidebar-brand {
-    min-height: 86px;
-    padding: 23px 22px 19px;
+    min-height: 68px;
+    padding: 19px 18px 14px;
   }
   .app-shell .sidebar-brand .brand {
-    font-size: 25px;
+    font-size: 23px;
   }
   .app-shell .sidebar-heading {
-    top: 22px;
-    right: 18px;
+    top: 13px;
+    right: 14px;
     padding: 0;
   }
   .app-shell .new-chat {
@@ -553,56 +922,65 @@ body {
     height: 44px;
   }
   .app-shell .search-field {
-    margin-inline: 18px;
+    margin-inline: 12px;
   }
   .app-shell .search-field input {
     font-size: 16px;
+    min-height: 42px;
+    height: 42px;
   }
   .app-shell .chat-filters {
-    padding: 10px 18px 8px;
+    padding: 6px 12px 3px;
   }
   .app-shell .chat-filters > button {
     min-height: 44px;
+    font-size: 13px;
+  }
+  .app-shell .chat-list {
+    padding-inline: 4px;
   }
   .app-shell .chat-item {
-    min-height: 83px;
-    border-radius: 12px;
-    padding: 12px 10px;
+    min-height: 76px;
+    padding: 10px 12px;
+    gap: 12px;
+    margin: 0;
+    border-radius: 10px;
   }
   .app-shell .chat-item-title strong {
-    font-size: 15px;
+    font-size: 16px;
+  }
+  .app-shell .chat-item-preview > span {
+    font-size: 14px;
   }
   .app-shell .chat-item .avatar {
-    width: 50px;
-    height: 50px;
-    border-radius: 17px;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
   }
   .app-shell .mobile-nav {
     background: var(--color-surface);
-    padding-inline: max(12px, env(safe-area-inset-left));
-    gap: 6px;
+    padding: 4px max(10px, env(safe-area-inset-left)) max(5px, env(safe-area-inset-bottom));
+    gap: 4px;
   }
   .app-shell .mobile-nav button {
-    border-radius: 11px;
+    border-radius: 14px;
     font-size: 10px;
-    transition:
-      background-color var(--dur-short) var(--ease-out),
-      color var(--dur-short) var(--ease-out),
-      transform var(--dur-fast) var(--ease-out);
+    gap: 4px;
+    min-height: 52px;
   }
   .app-shell .mobile-nav button.active {
     background: var(--color-mint);
     color: var(--color-accent);
   }
   .app-shell .chat-header {
-    padding: 10px 8px;
-    min-height: 72px;
+    min-height: 60px;
+    padding: 6px 8px;
     gap: 6px;
   }
   .app-shell .chat-header > .avatar {
     width: 36px;
     height: 36px;
-    border-radius: 12px;
+    border-radius: 50%;
   }
   .app-shell .chat-heading h2 {
     font-size: 16px;
@@ -611,26 +989,92 @@ body {
     font-size: 11px;
   }
   .app-shell .messages {
-    padding: 8px 10px 22px;
+    padding: 8px 10px 12px;
     scrollbar-gutter: auto;
   }
+  .app-shell .message-row {
+    gap: 0;
+    margin-top: 8px;
+  }
+  .app-shell .message-row.continued {
+    margin-top: 3px;
+  }
+  .app-shell .message-content {
+    max-width: calc(100% - 34px);
+  }
+  .app-shell .message-content:has(.image-preview) {
+    width: min(340px, calc(100% - 34px));
+  }
+  .app-shell .message-content:has(.voice-player) {
+    width: min(340px, calc(100% - 34px));
+  }
   .app-shell .bubble {
-    padding: 10px 12px 6px;
+    padding: 8px 11px 6px;
   }
-  .app-shell .bubble p {
+  .app-shell .bubble > .message-text {
     font-size: 15px;
-    line-height: 1.5;
+    line-height: 1.45;
   }
-  .app-shell .composer-wrap {
-    padding: 8px 8px max(8px, env(safe-area-inset-bottom));
+  .app-shell .sender-name {
+    padding-inline: 10px;
+    font-size: 12px;
   }
-  .app-shell .composer {
-    padding: 5px;
-    border-radius: 15px;
+  .app-shell .message-time {
+    font-size: 10px;
+  }
+  .app-shell .message-menu {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    margin-top: -22px;
+  }
+  .app-shell .own .message-menu {
+    right: auto;
+    left: 0;
+  }
+  .app-shell .message-menu summary {
+    opacity: 0;
+    width: 34px;
+    height: 44px;
+  }
+  .app-shell .message-row:hover .message-menu summary {
+    opacity: 0;
+  }
+  .app-shell .message-row:focus-within .message-menu summary,
+  .app-shell .message-menu[open] summary {
+    opacity: 1;
   }
   .app-shell .message-menu-content,
   .app-shell .own .message-menu-content {
     border-radius: 18px;
+  }
+  .app-shell .reactions {
+    padding-top: 3px;
+  }
+  .app-shell .reactions button {
+    min-height: 32px;
+    min-width: 36px;
+  }
+  .app-shell .composer-wrap {
+    padding: 6px 8px max(6px, env(safe-area-inset-bottom));
+  }
+  .app-shell .composer {
+    padding: 3px;
+    border-radius: 25px;
+    min-height: 52px;
+  }
+  .app-shell .composer textarea {
+    min-height: 44px;
+    font-size: 16px;
+    padding: 11px 3px;
+  }
+  .app-shell .composer :is(.icon-button, .send-button) {
+    width: 44px;
+    height: 44px;
+  }
+  .app-shell .voice-play {
+    width: 44px;
+    height: 44px;
   }
   .content-page {
     padding: 20px 18px 30px;
@@ -683,7 +1127,7 @@ body {
 }
 @media (max-width: 360px) {
   .app-shell .sidebar-brand {
-    padding-left: 20px;
+    padding-left: 18px;
   }
   .app-shell .sidebar-brand .brand {
     font-size: 23px;
