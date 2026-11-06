@@ -58,6 +58,9 @@ async function launch(options = {}) {
     loadURL() {
       return Promise.resolve();
     }
+    setMenuBarVisibility(visible) {
+      this.menuBarVisible = visible;
+    }
     isDestroyed() {
       return this.destroyed;
     }
@@ -217,6 +220,8 @@ test('desktop IPC only accepts the trusted main frame and constrained notificati
     assert.equal(app.window.config.webPreferences.sandbox, true);
     assert.equal(app.window.config.webPreferences.contextIsolation, true);
     assert.equal(app.window.config.webPreferences.nodeIntegration, false);
+    assert.equal(app.window.menuBarVisible, false);
+    assert.notEqual(app.window.config.autoHideMenuBar, true);
     assert.throws(() => app.untrusted('notifications:status', { url: origin }), /Untrusted caller/);
     app.window.webContents.mainFrame.url = 'https://example.org';
     assert.throws(() => app.invoke('updates:auto-download', true), /Untrusted caller/);

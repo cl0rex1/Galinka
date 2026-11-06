@@ -406,7 +406,6 @@ function createWindow() {
     title: 'Galinka',
     backgroundColor: '#18191b',
     show: false,
-    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -415,6 +414,7 @@ function createWindow() {
       webSecurity: true,
     },
   });
+  if (process.platform !== 'darwin') window.setMenuBarVisibility(false);
   window.webContents.setWindowOpenHandler(({ url }) => {
     void external(url);
     return { action: 'deny' };

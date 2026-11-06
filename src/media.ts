@@ -1,12 +1,12 @@
 /** Voice and video preferences, kept on this device: chosen microphone, camera, noise filter. */
-export type MediaPrefs = { mic?: string; camera?: string; noise: boolean };
+export type MediaPrefs = { mic?: string; camera?: string; noise: boolean; mirror: boolean };
 const key = 'galinka-media';
 
 export function mediaPrefs(): MediaPrefs {
   try {
-    return { noise: true, ...JSON.parse(localStorage.getItem(key) || '{}') };
+    return { noise: true, mirror: false, ...JSON.parse(localStorage.getItem(key) || '{}') };
   } catch {
-    return { noise: true };
+    return { noise: true, mirror: false };
   }
 }
 export function saveMediaPrefs(prefs: MediaPrefs) {

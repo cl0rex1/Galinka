@@ -113,7 +113,7 @@ export function AudioPlayer({
               : 'Не удалось загрузить голосовое. Попробуйте ещё раз.',
         );
       const contentType = (response.headers.get('content-type') || mime || '').split(';')[0];
-      if (!/^audio\/(mp4|webm|ogg|mpeg|wav|x-wav)$/.test(contentType))
+      if (!/^audio\/(mp4|webm|ogg|mpeg|wav|x-wav|flac|aac)$/.test(contentType))
         throw Error('Сервер вернул неподдерживаемый аудиофайл. Его можно скачать отдельно.');
       const length = Number(response.headers.get('content-length')) || size || 0;
       if (length > maxBytes) throw Error('Голосовое превышает допустимые 20 МБ.');

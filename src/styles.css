@@ -989,6 +989,8 @@ form.stack > :not(:last-child, .fold),
   position: relative;
 }
 .avatar > img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   border-radius: inherit;
@@ -997,9 +999,9 @@ form.stack > :not(:last-child, .fold),
 .avatar.online::after {
   content: '';
   position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 26%;
+  right: 2px;
+  bottom: 2px;
+  width: 10px;
   aspect-ratio: 1;
   min-width: 9px;
   border-radius: 50%;
@@ -1907,7 +1909,7 @@ form.stack > :not(:last-child, .fold),
   display: flex;
   align-items: center;
   gap: 11px;
-  min-width: 230px;
+  width: min(260px, 62vw);
   max-width: 100%;
   padding: 4px 4px 4px 0;
   text-align: left;
@@ -1938,7 +1940,15 @@ form.stack > :not(:last-child, .fold),
   opacity: 0.7;
 }
 .file-attachment > svg:last-child {
+  flex-shrink: 0;
   opacity: 0.6;
+}
+.audio-file-name {
+  margin: 2px 4px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
 }
 .file-attachment + .message-text {
   display: block;
@@ -1946,10 +1956,11 @@ form.stack > :not(:last-child, .fold),
 }
 .media-dialog {
   /* 100vw would count the page's scrollbar and make the viewer scroll; fill the screen instead. */
+  position: fixed;
   inset: 0;
   width: 100%;
   max-width: none;
-  height: 100%;
+  height: 100dvh;
   max-height: none;
   margin: 0;
   overflow: hidden;
@@ -1987,13 +1998,17 @@ form.stack > :not(:last-child, .fold),
   }
 }
 .media-dialog-head {
+  flex: none;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: max(8px, env(safe-area-inset-top)) 8px 8px 16px;
+  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 8px
+    max(16px, env(safe-area-inset-left));
 }
 .media-dialog-head h2 {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2002,6 +2017,7 @@ form.stack > :not(:last-child, .fold),
 }
 .media-dialog .icon-button {
   color: #fff;
+  flex-shrink: 0;
 }
 .media-dialog .icon-button:hover {
   background: rgb(255 255 255 / 12%);
@@ -2033,14 +2049,409 @@ form.stack > :not(:last-child, .fold),
   will-change: transform;
 }
 
-/* ---- Video: framed like a photo; a round video sits without a bubble ---- */
-.video-attachment video {
+/* ---- Video player: in a bubble only a play button and a progress line over the picture;
+   full screen dark, controls floating over the picture and hiding while it plays ---- */
+.video-player-slot {
+  width: min(380px, 70vw);
+  max-width: 100%;
+}
+.video-player-slot.compact {
+  width: 100%;
+}
+.video-player {
+  position: relative;
   display: block;
-  width: min(380px, 100%);
-  max-height: 420px;
-  border-radius: 12px;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  color: #fff;
   background: #000;
 }
+.video-stage {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  background: #000;
+}
+.video-stage video {
+  display: block;
+  width: 100%;
+  max-height: min(420px, 55dvh);
+  object-fit: contain;
+}
+.video-player.compact:not(:modal) video {
+  max-height: min(180px, 28dvh);
+}
+
+/* Sliders: a thin line that thickens a little and shows its knob under the pointer. */
+.video-player input[type='range'] {
+  --fill: 0%;
+  --buffered: 0%;
+  --line: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  min-height: 0;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  touch-action: none;
+}
+.video-player input[type='range']:disabled {
+  cursor: default;
+}
+.video-player input[type='range']::-webkit-slider-runnable-track {
+  height: var(--line);
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--video-fill, #fff) var(--fill),
+    rgb(255 255 255 / 42%) var(--fill) max(var(--fill), var(--buffered)),
+    rgb(255 255 255 / 22%) max(var(--fill), var(--buffered))
+  );
+}
+.video-player input[type='range']::-moz-range-track {
+  height: var(--line);
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--video-fill, #fff) var(--fill),
+    rgb(255 255 255 / 42%) var(--fill) max(var(--fill), var(--buffered)),
+    rgb(255 255 255 / 22%) max(var(--fill), var(--buffered))
+  );
+}
+.video-player input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: calc((var(--line) - 14px) / 2);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 40%);
+  transform: scale(0);
+  transition: transform 140ms var(--ease-out);
+}
+.video-player input[type='range']::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  transform: scale(0);
+  transition: transform 140ms var(--ease-out);
+}
+.video-player input[type='range']:is(:hover, :focus-visible, :active)::-webkit-slider-thumb {
+  transform: scale(1);
+}
+.video-player input[type='range']:is(:hover, :focus-visible, :active)::-moz-range-thumb {
+  transform: scale(1);
+}
+.video-progress {
+  --video-fill: var(--color-accent);
+}
+
+/* In a bubble. */
+.video-inline {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.video-inline > * {
+  pointer-events: auto;
+}
+.video-big-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(0 0 0 / 46%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition:
+    opacity 200ms ease,
+    scale var(--dur-press) var(--ease-out),
+    background var(--dur-fast);
+}
+.video-big-play svg {
+  margin-left: 2px;
+}
+.video-player.playing .video-big-play svg {
+  margin-left: 0;
+}
+.video-big-play:hover {
+  background: rgb(0 0 0 / 62%);
+}
+.video-big-play:active {
+  scale: 0.92;
+}
+/* While it plays the button steps aside; it returns under the pointer. */
+.video-player.playing .video-big-play {
+  opacity: 0;
+}
+.video-player.playing:hover .video-big-play,
+.video-big-play:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .video-player.playing .video-big-play {
+    opacity: 0.75;
+    scale: 0.8;
+  }
+}
+.video-time-pill {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: rgb(0 0 0 / 46%);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none !important;
+}
+.video-inline .video-progress {
+  --line: 3px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 16px;
+  background: linear-gradient(transparent, rgb(0 0 0 / 30%));
+}
+
+/* Full screen. */
+.video-player:modal {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  animation: video-open 260ms var(--ease-out);
+}
+@keyframes video-open {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+.video-player:modal::backdrop {
+  background: #000;
+}
+.video-player.leaving {
+  opacity: 0;
+  scale: 0.97;
+  transition:
+    opacity 170ms ease-in,
+    scale 170ms ease-in;
+}
+.video-player:modal .video-stage {
+  position: absolute;
+  inset: 0;
+}
+.video-player:modal video {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+}
+.video-viewer-head {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: max(10px, env(safe-area-inset-top)) 10px 34px 18px;
+  background: linear-gradient(rgb(0 0 0 / 62%), transparent);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: opacity 280ms ease;
+}
+.video-viewer-head span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.video-viewer-head .icon-button {
+  color: #fff;
+}
+.video-viewer-head .icon-button:hover {
+  background: rgb(255 255 255 / 14%);
+}
+.video-controls {
+  position: absolute;
+  inset: auto 0 0;
+  display: grid;
+  gap: 4px;
+  padding: 40px max(14px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom))
+    max(14px, env(safe-area-inset-left));
+  background: linear-gradient(transparent, rgb(0 0 0 / 74%));
+  transition:
+    opacity 280ms ease,
+    translate 280ms var(--ease-out);
+}
+/* Playing and untouched for a moment: everything fades away, the cursor too. */
+.video-player.idle :is(.video-controls, .video-viewer-head) {
+  opacity: 0;
+  pointer-events: none;
+}
+.video-player.idle .video-controls {
+  translate: 0 10px;
+}
+.video-player.idle {
+  cursor: none;
+}
+.video-seek {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.video-seek .video-progress {
+  flex: 1;
+  min-width: 0;
+}
+.video-seek .video-progress:hover {
+  --line: 6px;
+}
+.video-buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.video-control {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  color: #fff;
+  transition:
+    background var(--dur-fast),
+    scale var(--dur-press) var(--ease-out);
+}
+.video-control:hover {
+  background: rgb(255 255 255 / 14%);
+}
+.video-control:active {
+  scale: 0.9;
+}
+/* Volume grows out of its button. */
+.video-volume-group {
+  display: flex;
+  align-items: center;
+}
+.video-volume {
+  width: 0;
+  opacity: 0;
+  transition:
+    width 220ms var(--ease-out),
+    opacity 160ms ease,
+    margin 220ms var(--ease-out);
+}
+.video-volume-group:is(:hover, :focus-within) .video-volume {
+  width: 96px;
+  margin: 0 8px 0 2px;
+  opacity: 1;
+}
+@media (hover: none) {
+  .video-volume {
+    width: 84px;
+    margin: 0 8px 0 2px;
+    opacity: 1;
+  }
+}
+.video-spacer {
+  flex: 1;
+}
+.video-speed select {
+  width: auto;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  appearance: none;
+  color: #fff;
+  background: rgb(255 255 255 / 16%);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.video-speed select:hover {
+  background: rgb(255 255 255 / 24%);
+}
+.video-speed option {
+  color: var(--color-ink);
+  background: var(--color-surface);
+}
+.video-center-play,
+.video-flash {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(0 0 0 / 46%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.video-center-play {
+  width: 78px;
+  height: 78px;
+  animation: icon-in var(--dur-short) var(--ease-out);
+  transition: scale var(--dur-press) var(--ease-out);
+}
+.video-center-play svg {
+  margin-left: 4px;
+}
+.video-center-play:active {
+  scale: 0.92;
+}
+.video-flash {
+  width: 72px;
+  height: 72px;
+  pointer-events: none;
+  animation: video-flash 600ms var(--ease-out) forwards;
+}
+@keyframes video-flash {
+  from {
+    opacity: 0.95;
+    scale: 0.8;
+  }
+  to {
+    opacity: 0;
+    scale: 1.3;
+  }
+}
+@media (max-width: 640px) {
+  .video-control {
+    width: 38px;
+    height: 38px;
+  }
+}
+
 .bubble:has(> .video-attachment):has(.message-text) {
   padding-top: 3px;
 }
@@ -2162,6 +2573,9 @@ form.stack > :not(:last-child, .fold),
   object-fit: cover;
   scale: -1 1;
   background: #000;
+}
+.camera-mirrored {
+  transform: scaleX(-1);
 }
 .video-note-stage .video-note-ring circle {
   stroke: var(--color-recording);
@@ -2381,6 +2795,7 @@ form.stack > :not(:last-child, .fold),
   font-size: 14px;
 }
 .pending-thumbnail {
+  flex: 0 0 auto;
   width: 48px;
   height: 48px;
   border-radius: 10px;
@@ -2394,7 +2809,62 @@ form.stack > :not(:last-child, .fold),
   flex: 1;
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
+}
+.pending-file > button {
+  flex-shrink: 0;
+}
+.mention-options {
+  position: absolute;
+  z-index: 2;
+  inset: auto 48px calc(100% + 6px) 0;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--color-surface);
+  box-shadow: var(--float-shadow);
+  max-height: min(240px, 40dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform-origin: bottom left;
+  transition:
+    opacity 160ms var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+.mention-options[data-closing] {
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+}
+@starting-style {
+  .mention-options:not([data-closing]) {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+.mention-options button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: 10px;
+  text-align: left;
+  transition: background var(--dur-fast) ease;
+}
+.mention-options button:hover,
+.mention-options button.selected {
+  background: var(--color-selected);
+}
+.mention-options small {
+  color: var(--color-muted);
+}
+.attachment-menu .chat-actions-menu {
+  z-index: 3;
+  inset: auto auto calc(100% + 8px) 0;
+  transform-origin: bottom left;
+}
+.message-text .message-mention {
+  font-weight: 600;
 }
 .pending-file-content strong {
   overflow: hidden;
@@ -2691,6 +3161,8 @@ form.stack > :not(:last-child, .fold),
 .hero-avatar .avatar {
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   border-radius: inherit;
   font-size: 34px;
   transition: font-size var(--hero-time) var(--hero-ease);
@@ -2749,6 +3221,9 @@ form.stack > :not(:last-child, .fold),
 .hero-text p {
   font-size: var(--text-base);
   color: var(--color-muted);
+}
+.hero-text p.is-online {
+  color: var(--color-accent);
 }
 .profile-hero > .text-button {
   margin-top: 8px;

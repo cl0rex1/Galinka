@@ -1231,6 +1231,10 @@ const inlineMediaTypes = new Set([
   'audio/webm',
   'audio/ogg',
   'audio/mp4',
+  'audio/mpeg',
+  'audio/wav',
+  'audio/flac',
+  'audio/aac',
   'video/mp4',
   'video/webm',
   'video/quicktime',
@@ -1248,6 +1252,24 @@ async function mediaType(filename: string, declaredType: string) {
     if (['GIF87a', 'GIF89a'].includes(bytes.toString('ascii', 0, 6))) return 'image/gif';
     if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP')
       return 'image/webp';
+    if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WAVE')
+      return 'audio/wav';
+    if (bytes.toString('ascii', 0, 4) === 'fLaC') return 'audio/flac';
+    const frame = bytes.length >= 7 && bytes[0] === 0xff;
+    if (frame && (bytes[1] & 0xf6) === 0xf0 && (bytes[2] & 0x3c) < 0x34) return 'audio/aac';
+    if (
+      (bytes.length >= 10 &&
+        bytes.toString('ascii', 0, 3) === 'ID3' &&
+        [2, 3, 4].includes(bytes[3]) &&
+        bytes.subarray(6, 10).every((byte) => byte < 128)) ||
+      (frame &&
+        (bytes[1] & 0xe6) === 0xe2 &&
+        (bytes[1] & 0x18) !== 0x08 &&
+        (bytes[2] & 0xf0) !== 0 &&
+        (bytes[2] & 0xf0) !== 0xf0 &&
+        (bytes[2] & 0x0c) !== 0x0c)
+    )
+      return 'audio/mpeg';
     // Ogg, MP4 and WebM can carry video too. Only offer the audio player when
     // the upload was declared as audio AND its container signature agrees.
     if (declaredType.toLowerCase().startsWith('audio/')) {
@@ -1439,11 +1461,17 @@ app.get('/api/files/:id', auth, async (req, res) => {
     [uuid.parse(req.params.id), user(req).id],
   );
   requireValue(rows[0], 404, 'Файл не найден.');
-  if (req.query.inline === '1' && inlineMediaTypes.has(rows[0].mime)) {
-    const original = path.join(directory, rows[0].id);
+  const original = path.join(directory, rows[0].id);
+  const mime =
+    req.query.inline === '1' &&
+    rows[0].mime === 'application/octet-stream' &&
+    /\.(mp3|wav|flac|aac)$/i.test(rows[0].name)
+      ? await mediaType(original, 'audio/*').catch(() => 'application/octet-stream')
+      : rows[0].mime;
+  if (req.query.inline === '1' && inlineMediaTypes.has(mime)) {
     const preview =
-      isRecordedAudio(rows[0].mime) && !rows[0].audio_ready
-        ? await audioPreview(original, rows[0].mime)
+      isRecordedAudio(mime) && !rows[0].audio_ready
+        ? await audioPreview(original, mime)
         : undefined;
     if (preview) {
       if (res.destroyed) {
@@ -1459,7 +1487,7 @@ app.get('/api/files/:id', auth, async (req, res) => {
       );
       requireValue(access.rowCount, 404, 'Файл недоступен.');
     }
-    res.setHeader('Content-Type', preview ? 'audio/mp4' : rows[0].mime);
+    res.setHeader('Content-Type', preview ? 'audio/mp4' : mime);
     res.setHeader('Content-Disposition', 'inline');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");

@@ -15,18 +15,46 @@ export function marked(text: string, query?: string): ReactNode {
   return parts;
 }
 
-// Render text as text; only explicit HTTP(S) addresses become links.
+// Render addresses and @usernames without interpreting message text as HTML.
 export const MessageText = memo(function MessageText({
   text,
   highlight,
+  onMention,
 }: {
   text: string;
   highlight?: string;
+  onMention?: (username: string) => void;
 }) {
   const parts: ReactNode[] = [];
   let position = 0;
-  for (const match of text.matchAll(/https?:\/\/[^\s<>"']+/gi)) {
+  for (const match of text.matchAll(
+    /https?:\/\/[^\s<>"']+|(?<![\w.@])@([a-z0-9_]{3,24})(?![\w@])/gi,
+  )) {
     const start = match.index;
+    if (match[1]) {
+      const username = match[1].toLowerCase();
+      parts.push(
+        <Fragment key={`t${position}`}>{marked(text.slice(position, start), highlight)}</Fragment>,
+        <a
+          key={start}
+          href={`/app?u=${encodeURIComponent(username)}`}
+          className="message-mention"
+          onClick={
+            onMention
+              ? (event) => {
+                  if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  onMention(username);
+                }
+              : undefined
+          }
+        >
+          {marked(match[0], highlight)}
+        </a>,
+      );
+      position = start + match[0].length;
+      continue;
+    }
     let address = match[0].replace(/[.,!?;:»”]+$/, '');
     for (const [open, close] of [
       ['(', ')'],

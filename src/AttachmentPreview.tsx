@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { FileText, LoaderCircle, RotateCw, X } from 'lucide-react';
 import { AudioPlayer } from './AudioPlayer';
-import { fileLabel, isVideoNote } from './MediaAttachment';
+import { fileLabel, isAudioFile, isVideoNote } from './MediaAttachment';
+import { VideoPlayer } from './VideoPlayer';
 
 const formatSize = (bytes: number) =>
   bytes < 1024 * 1024
@@ -25,7 +26,7 @@ export function AttachmentPreview({
 }) {
   const [preview, setPreview] = useState<{ file: File; url: string } | null>(null);
   const url = preview?.file === file ? preview.url : '';
-  const audio = file.type.startsWith('audio/');
+  const audio = isAudioFile(file.name, file.type);
   const image = file.type.startsWith('image/');
   const video = file.type.startsWith('video/');
   const note = video && isVideoNote({ name: file.name, mime: file.type });
@@ -51,20 +52,21 @@ export function AttachmentPreview({
     >
       {image && url ? (
         <img className="pending-thumbnail" src={url} alt="Прикреплённое фото" />
-      ) : video && url ? (
+      ) : note && url ? (
         <video
-          className={`pending-thumbnail ${note ? 'round' : ''}`}
+          className="pending-thumbnail round"
           src={`${url}#t=0.1`}
           muted
           playsInline
           preload="metadata"
-          aria-label={note ? 'Записанный кружок' : 'Прикреплённое видео'}
+          aria-label="Записанный кружок"
         />
       ) : (
-        !audio && <FileText size={22} />
+        !audio && !video && <FileText size={22} />
       )}
       <div className="pending-file-content">
-        <strong>{audio ? 'Голосовое сообщение' : fileLabel(file.name)}</strong>
+        <strong title={file.name}>{fileLabel(file.name)}</strong>
+        {video && !note && url && <VideoPlayer key={url} src={url} name={file.name} compact />}
         {audio && url && (
           <AudioPlayer src={url} name={file.name} size={file.size} mime={file.type} compact />
         )}

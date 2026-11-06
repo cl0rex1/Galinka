@@ -122,6 +122,22 @@ export function MediaSettings() {
         <h2>Устройства</h2>
         {picker('audioinput', 'Микрофон', prefs.mic)}
         {picker('videoinput', 'Камера для кружков', prefs.camera)}
+        <div className="settings-row">
+          <div>
+            <h3>Отзеркалить камеру</h3>
+            <p>Отражает изображение слева направо в предпросмотре и в записанном кружке.</p>
+          </div>
+          <button
+            type="button"
+            className={`switch ${prefs.mirror ? 'on' : ''}`}
+            role="switch"
+            aria-checked={prefs.mirror}
+            aria-label="Отзеркалить камеру"
+            onClick={() => update({ mirror: !prefs.mirror })}
+          >
+            <span />
+          </button>
+        </div>
         {!named && (
           <p className="settings-hint">
             Названия устройств появятся после проверки: браузер покажет их, когда вы разрешите
@@ -148,7 +164,14 @@ export function MediaSettings() {
         <h2>Проверка</h2>
         {testing ? (
           <div className="media-check">
-            <video ref={preview} autoPlay muted playsInline aria-label="Изображение с камеры" />
+            <video
+              ref={preview}
+              className={prefs.mirror ? 'camera-mirrored' : undefined}
+              autoPlay
+              muted
+              playsInline
+              aria-label="Изображение с камеры"
+            />
             <div
               ref={meter}
               className="mic-level"

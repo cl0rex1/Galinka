@@ -27,14 +27,17 @@ export function Avatar({
   person,
   chat,
   size = 'normal',
+  showPresence = true,
 }: {
   person?: Person | null;
   chat?: Chat;
   size?: 'small' | 'normal' | 'large';
+  showPresence?: boolean;
 }) {
   const photo =
     chat?.kind === 'group' ? chat.avatar : chat?.kind === 'saved' ? null : person?.avatar;
-  const online = chat?.kind !== 'group' && chat?.kind !== 'saved' && person?.seen === 'online';
+  const online =
+    showPresence && chat?.kind !== 'group' && chat?.kind !== 'saved' && person?.seen === 'online';
   return (
     <span
       className={`avatar ${size} tone-${chat?.kind === 'saved' ? 0 : (person?.color ?? (chat?.id === 'weekend' ? 0 : 2)) % 6} ${chat?.kind === 'group' ? 'group-avatar' : ''} ${online ? 'online' : ''}`}

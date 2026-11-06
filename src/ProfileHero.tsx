@@ -135,11 +135,11 @@ export function ProfileHero({
         aria-label={expanded ? 'Свернуть аватар' : 'Развернуть аватар'}
         onClick={() => setExpanded((v) => !v)}
       >
-        <Avatar person={person} chat={chat} size="large" />
+        <Avatar person={person} chat={chat} size="large" showPresence={false} />
       </button>
       <div className="hero-text">
         <h2>{title}</h2>
-        <p>{subtitle}</p>
+        <p className={subtitle === 'в сети' ? 'is-online' : undefined}>{subtitle}</p>
       </div>
       {children}
     </div>

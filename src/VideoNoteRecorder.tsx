@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { Square, Video, X } from 'lucide-react';
-import { audioConstraints, videoConstraints } from './media';
+import { audioConstraints, mediaPrefs, videoConstraints } from './media';
 
 const maxSeconds = 60;
 const maxBytes = 20 * 1024 * 1024;
@@ -10,8 +10,42 @@ type Session = {
   recorder?: MediaRecorder;
   chunks: Blob[];
   discard: boolean;
+  stopMirror?: () => void;
   timer?: ReturnType<typeof setInterval>;
 };
+
+function mirrorCamera(video: HTMLVideoElement, source: MediaStream) {
+  const canvas = document.createElement('canvas');
+  const scale = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
+  canvas.width = Math.round(video.videoWidth * scale);
+  canvas.height = Math.round(video.videoHeight * scale);
+  const context = canvas.getContext('2d');
+  if (!context || !canvas.width || !canvas.height || !canvas.captureStream)
+    throw new DOMException('Camera mirroring unavailable', 'NotSupportedError');
+  context.translate(canvas.width, 0);
+  context.scale(-1, 1);
+  const capture = canvas.captureStream(30);
+  const videoTrack = capture.getVideoTracks()[0];
+  const stream = new MediaStream([videoTrack, ...source.getAudioTracks()]);
+  let frame = 0;
+  const draw = () => {
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    frame = requestAnimationFrame(draw);
+  };
+  try {
+    draw();
+  } catch (error) {
+    videoTrack.stop();
+    throw error;
+  }
+  return {
+    stream,
+    stop: () => {
+      cancelAnimationFrame(frame);
+      videoTrack.stop();
+    },
+  };
+}
 
 /** Round video message: camera button in the composer and a full-screen round preview. */
 export function VideoNoteRecorder({
@@ -25,6 +59,7 @@ export function VideoNoteRecorder({
 }) {
   const [phase, setPhase] = useState<'idle' | 'starting' | 'recording'>('idle');
   const [seconds, setSeconds] = useState(0);
+  const [mirror, setMirror] = useState(false);
   const preview = useRef<HTMLVideoElement>(null);
   const session = useRef<Session | null>(null);
   const attempt = useRef(0);
@@ -35,6 +70,7 @@ export function VideoNoteRecorder({
     const current = session.current;
     if (current) {
       clearInterval(current.timer);
+      current.stopMirror?.();
       current.stream.getTracks().forEach((track) => track.stop());
     }
     session.current = null;
@@ -42,10 +78,10 @@ export function VideoNoteRecorder({
   }
   function stop(discard: boolean) {
     const current = session.current;
-    if (!current) {
+    if (!current?.recorder) {
       // Still asking for the camera: forget that request.
       attempt.current++;
-      setPhase('idle');
+      release();
       return;
     }
     current.discard ||= discard;
@@ -84,8 +120,12 @@ export function VideoNoteRecorder({
       return;
     }
     const id = ++attempt.current;
-    setPhase('starting');
-    setSeconds(0);
+    const mirrored = mediaPrefs().mirror;
+    flushSync(() => {
+      setMirror(mirrored);
+      setPhase('starting');
+      setSeconds(0);
+    });
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: videoConstraints(),
@@ -97,7 +137,16 @@ export function VideoNoteRecorder({
       }
       const current: Session = { stream, chunks: [], discard: false };
       session.current = current;
-      if (preview.current) preview.current.srcObject = stream;
+      const camera = preview.current!;
+      camera.srcObject = stream;
+      let recording = stream;
+      if (mirrored) {
+        await camera.play();
+        if (id !== attempt.current) return;
+        const reflected = mirrorCamera(camera, stream);
+        current.stopMirror = reflected.stop;
+        recording = reflected.stream;
+      }
       // MP4 plays everywhere, Safari included; WebM is the fallback for Firefox.
       const types: (string | undefined)[] = [
         'video/mp4;codecs=avc1,mp4a.40.2',
@@ -110,7 +159,7 @@ export function VideoNoteRecorder({
       let recorder: MediaRecorder | undefined;
       for (const mimeType of types) {
         try {
-          const candidate = new MediaRecorder(stream, {
+          const candidate = new MediaRecorder(recording, {
             ...(mimeType ? { mimeType } : {}),
             videoBitsPerSecond: 1_000_000,
             audioBitsPerSecond: 64000,
@@ -166,7 +215,9 @@ export function VideoNoteRecorder({
           : name === 'NotFoundError'
             ? 'Камера не найдена. Подключите её или выберите другую в настройках.'
             : name === 'NotSupportedError'
-              ? 'Устройство не умеет записывать видео в этом браузере.'
+              ? mirrored
+                ? 'Не удалось записать зеркальное видео. Отключите зеркалирование в настройках «Голос и видео».'
+                : 'Устройство не умеет записывать видео в этом браузере.'
               : 'Не удалось включить камеру. Возможно, она занята другим приложением.',
       );
     }
@@ -188,7 +239,13 @@ export function VideoNoteRecorder({
         createPortal(
           <div className="video-note-recorder" role="dialog" aria-label="Запись кружка">
             <div className="video-note-stage">
-              <video ref={preview} autoPlay muted playsInline />
+              <video
+                ref={preview}
+                className={mirror ? 'camera-mirrored' : undefined}
+                autoPlay
+                muted
+                playsInline
+              />
               <svg className="video-note-ring" viewBox="0 0 100 100" aria-hidden="true">
                 <circle
                   cx="50"

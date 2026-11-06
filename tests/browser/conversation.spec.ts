@@ -84,7 +84,6 @@ test('returning to a conversation restores its history and reading position befo
   await page.locator('.messages').evaluate((element) => {
     element.scrollTop = 0;
   });
-  await page.getByRole('button', { name: 'Более ранние сообщения', exact: true }).click();
   await expect(page.locator('.message-row')).toHaveCount(90);
   await page.locator('.messages').evaluate((element) => {
     element.scrollTop = 220;
@@ -106,6 +105,21 @@ test('returning to a conversation restores its history and reading position befo
     0,
   );
   await page.clock.resume();
+});
+
+test('a mention can be selected with Enter and opens the member profile', async ({ page }) => {
+  await page.goto('/?demo=1');
+  await page.locator('.chat-item').filter({ hasText: 'На выходные' }).click();
+  const input = page.getByRole('textbox', { name: 'Сообщение', exact: true });
+  await input.fill('Привет @an');
+  await expect(page.getByRole('group', { name: 'Упомянуть участника' })).toContainText('@anya');
+  await input.press('Enter');
+  await expect(input).toHaveValue('Привет @anya ');
+  await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+  await page.getByRole('link', { name: '@anya', exact: true }).click();
+  await expect(
+    page.getByRole('dialog').getByRole('heading', { name: 'Аня', exact: true }),
+  ).toBeVisible();
 });
 
 test('right click and a touch hold open message actions, while scrolling does not', async ({

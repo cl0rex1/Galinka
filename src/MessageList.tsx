@@ -44,6 +44,7 @@ export type MessageActions = {
   menu: (details: HTMLDetailsElement, point?: { x: number; y: number }) => void;
   jump: (messageId: string) => void;
   profile: (person: Person) => void;
+  mention: (username: string) => void;
   retry: (message: Message) => void;
   discard: (message: Message) => void;
 };
@@ -64,7 +65,8 @@ const interactive =
   'button, a, input, textarea, audio, video, details, [role="button"], [role="slider"]';
 // The message's own content (a photo, a file, a round video, a quote) is a button for a tap,
 // but a long press or right click on it still opens the message menu. Real controls do not.
-const content = '.image-preview, .file-attachment, .video-note, .video-attachment, .message-quote';
+const content =
+  '.image-preview, .file-attachment, .video-note, .video-player video, .message-quote';
 const holdable = (target: EventTarget | null) => {
   if (!(target instanceof Element)) return false;
   const control = target.closest(interactive);
@@ -217,7 +219,9 @@ const MessageRow = memo(function MessageRow({
             {m.file && (
               <MediaAttachment file={m.file} onDownload={() => actions.download(m.file!)} />
             )}
-            {m.body && <MessageText text={m.body} highlight={highlight} />}
+            {m.body && (
+              <MessageText text={m.body} highlight={highlight} onMention={actions.mention} />
+            )}
             <span className="message-time">
               {m.edited_at && (
                 <span className="message-edited" title={`Изменено ${time(m.edited_at)}`}>

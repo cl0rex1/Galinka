@@ -48,6 +48,17 @@ test('a custom theme is created, applied, and travels by link to another browser
   page,
   browser,
 }) => {
+  await page.addInitScript(() => {
+    Object.defineProperties(navigator, {
+      canShare: { value: (data: ShareData) => data.files?.[0]?.type === 'image/png' },
+      share: {
+        value: async (data: ShareData) => {
+          document.body.dataset.sharedText = data.text;
+          document.body.dataset.sharedFile = data.files?.[0]?.name;
+        },
+      },
+    });
+  });
   await page.goto('/?demo=1');
   await page.getByRole('button', { name: 'Настройки', exact: true }).click();
   await page.getByRole('tab', { name: 'Оформление', exact: true }).click();
@@ -73,6 +84,9 @@ test('a custom theme is created, applied, and travels by link to another browser
   await expect(sheet.getByRole('img', { name: 'QR-код' })).toBeVisible();
   const link = await sheet.getByRole('textbox', { name: 'Ссылка' }).inputValue();
   expect(link).toContain('/app?theme=');
+  await sheet.getByRole('button', { name: 'Отправить', exact: true }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-shared-file', 'galinka-Мята.png');
+  expect(await page.locator('body').getAttribute('data-shared-text')).toContain(link);
 
   const other = await browser.newPage();
   await other.goto(link.replace('/app?', '/app?demo=1&'));

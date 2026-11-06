@@ -149,15 +149,16 @@ test('text drafts survive reload and loading older messages preserves the readin
   await page.getByRole('button', { name: /На выходные/ }).click();
   await expect(page.locator('.message-row')).toHaveCount(60);
   await settled(page);
-  await page.locator('.messages').evaluate((element) => {
+  const anchor = page.getByText('История 30', { exact: true });
+  const before = await page.locator('.messages').evaluate((element) => {
     element.scrollTop = 0;
+    return element
+      .querySelector('[data-message-id="history-30"] .message-text')!
+      .getBoundingClientRect().y;
   });
   await expect(
     page.getByRole('button', { name: 'К последним сообщениям', exact: true }),
   ).toBeVisible();
-  const anchor = page.getByText('История 30', { exact: true });
-  const before = (await anchor.boundingBox())!.y;
-  await page.getByRole('button', { name: 'Более ранние сообщения', exact: true }).click();
   await expect(page.locator('.message-row')).toHaveCount(90);
   await expect
     .poll(async () => Math.abs((await anchor.boundingBox())!.y - before))

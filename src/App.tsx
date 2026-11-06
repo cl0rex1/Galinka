@@ -16,6 +16,8 @@ import {
   Download,
   X,
   Paperclip,
+  Images,
+  FileText,
   Smile,
   Check,
   Reply,
@@ -313,6 +315,8 @@ export default function App() {
     [loading, setLoading] = useState(false),
     [hasOlder, setHasOlder] = useState(false),
     [paging, setPaging] = useState(false),
+    [mentionCursor, setMentionCursor] = useState<number | null>(null),
+    [mentionIndex, setMentionIndex] = useState(0),
     [install, setInstall] = useState<InstallEvent | null>(null),
     [inviteUrl, setInviteUrl] = useState(''),
     [deleteId, setDeleteId] = useState(''),
@@ -356,6 +360,8 @@ export default function App() {
     textQueue = useRef<Record<string, Promise<unknown>>>({}),
     lastRead = useRef<Record<string, string>>({}),
     messagesRef = useRef(messages),
+    olderRequest = useRef<{ id: string; promise: Promise<boolean> } | null>(null),
+    lastScrollTop = useRef(0),
     scrollRestore = useRef<{ id: string; top: number; height: number } | null>(null),
     joined = useRef(false),
     followBottom = useRef(true),
@@ -371,6 +377,42 @@ export default function App() {
     edit = editing?.message.chat_id === activeId ? editing : null,
     composerValue = edit ? edit.body : draft,
     savingCurrentEdit = Boolean(edit && savingEdit);
+  const mention =
+    mentionCursor === null || sending || savingCurrentEdit
+      ? null
+      : /(?:^|\s)@([\p{L}\p{N}_]{0,24})$/u.exec(composerValue.slice(0, mentionCursor));
+  const mentionOptions = mention
+    ? members
+        .filter(
+          (member) =>
+            member.id !== me?.id &&
+            member.username &&
+            (member.username.toLowerCase().startsWith(mention[1].toLowerCase()) ||
+              member.name.toLowerCase().startsWith(mention[1].toLowerCase())),
+        )
+        .slice(0, 6)
+    : [];
+  const mentionPanel = usePresence(mentionOptions.length > 0, 160);
+  const previousMentionOptions = useRef(mentionOptions);
+  if (mentionOptions.length) previousMentionOptions.current = mentionOptions;
+  const shownMentionOptions = mentionPanel.closing
+    ? previousMentionOptions.current
+    : mentionOptions;
+  const mentionList = useRef<HTMLDivElement>(null);
+  const selectedMention = mentionOptions[mentionIndex % mentionOptions.length];
+  useEffect(() => {
+    const list = mentionList.current;
+    const selected = list?.querySelector<HTMLElement>('.selected');
+    if (!list || !selected) return;
+    const top = selected.offsetTop;
+    const bottom = top + selected.offsetHeight;
+    const visibleBottom = list.scrollTop + list.clientHeight;
+    if (top < list.scrollTop || bottom > visibleBottom)
+      list.scrollTo({
+        top: top < list.scrollTop ? top : bottom - list.clientHeight,
+        behavior: 'auto',
+      });
+  }, [selectedMention?.id]);
   const report = useCallback((e: unknown) => {
     if (e instanceof ApiError && e.status === 401) {
       // A revoked/expired session must stop rendering private conversation data.
@@ -789,6 +831,9 @@ export default function App() {
     const cached = conversationCache.current.get(activeId);
     setLoading(!cached);
     setPaging(false);
+    olderRequest.current = null;
+    lastScrollTop.current = 0;
+    setMentionCursor(null);
     setAwayFromBottom(cached ? !cached.following : false);
     setNewMessageIds([]);
     jumpingToLatest.current = false;
@@ -857,7 +902,12 @@ export default function App() {
     const previous = glide.current;
     glide.current = { id: activeId, last, height: el.scrollHeight };
     if (restore && restore.id === activeId) {
-      el.scrollTop = restore.top + el.scrollHeight - restore.height;
+      const top = restore.top + el.scrollHeight - restore.height;
+      if (Math.abs(el.scrollTop - top) >= 1) {
+        autoScroll.current = true;
+        el.scrollTop = top;
+      }
+      lastScrollTop.current = el.scrollTop;
       scrollRestore.current = null;
     } else if (followBottom.current) {
       stickToBottom(el);
@@ -915,7 +965,12 @@ export default function App() {
       if (!target.closest('.emoji-wrap')) setEmojiOpen(false);
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+      if (
+        event.key !== 'Escape' ||
+        event.defaultPrevented ||
+        document.querySelector('dialog:modal')
+      )
+        return;
       const menus = document.querySelectorAll(
         'details.message-menu[open], details.chat-actions[open]',
       );
@@ -1170,6 +1225,24 @@ export default function App() {
     }
     if (activeId) setDrafts((prev) => ({ ...prev, [activeId]: value }));
     if (activeId) delete nonces.current[activeId];
+  }
+  function chooseMention(member: Person) {
+    const field = textarea.current;
+    if (!field || !mention || mentionCursor === null) return;
+    const start = mentionCursor - mention[1].length - 1;
+    const tail = composerValue.slice(mentionCursor);
+    const rest = tail.replace(/^[\p{L}\p{N}_]+/u, '');
+    const inserted = `@${member.username}${/^\s/.test(rest) ? '' : ' '}`;
+    const value = composerValue.slice(0, start) + inserted + rest;
+    if (value.length > 8000) return;
+    changeDraft(value);
+    setMentionCursor(null);
+    requestAnimationFrame(() => {
+      if (field !== textarea.current || activeId !== activeRef.current) return;
+      field.focus({ preventScroll: true });
+      const cursor = start + inserted.length + (/^\s/.test(rest) ? 1 : 0);
+      field.setSelectionRange(cursor, cursor);
+    });
   }
   function closeMenus() {
     document
@@ -1499,36 +1572,42 @@ export default function App() {
     }
   }
   /** Prepend one page of older history. Returns false when there is nothing older. */
-  async function loadOlder() {
+  function loadOlder() {
     const id = activeRef.current;
     const oldest = messagesRef.current.find((message) => !message.pending);
-    if (!id || !oldest || paging) return false;
+    if (!id || !oldest) return Promise.resolve(false);
+    if (olderRequest.current?.id === id) return olderRequest.current.promise;
     setPaging(true);
     const epoch = requestEpoch.current;
-    try {
-      const data = await api<Message[]>(
-        `/chats/${id}/messages?before=${encodeURIComponent(oldest.id)}`,
-      );
-      if (activeRef.current !== id || epoch !== requestEpoch.current) return false;
-      followBottom.current = false;
-      setAwayFromBottom(true);
-      const el = scroller.current;
-      if (el) scrollRestore.current = { id, top: el.scrollTop, height: el.scrollHeight };
-      // Committed at once, so a caller looking for a message finds it in the DOM.
-      flushSync(() => {
-        setMessages((prev) => [
-          ...data.filter((m) => !prev.some((old) => old.id === m.id)),
-          ...prev,
-        ]);
-        setHasOlder(data.length === 60);
+    const promise = api<Message[]>(`/chats/${id}/messages?before=${encodeURIComponent(oldest.id)}`)
+      .then((data) => {
+        if (activeRef.current !== id || epoch !== requestEpoch.current) return false;
+        followBottom.current = false;
+        setAwayFromBottom(true);
+        const el = scroller.current;
+        if (el) scrollRestore.current = { id, top: el.scrollTop, height: el.scrollHeight };
+        // Committed at once, so a caller looking for a message finds it in the DOM.
+        flushSync(() => {
+          setMessages((prev) => [
+            ...data.filter((m) => !prev.some((old) => old.id === m.id)),
+            ...prev,
+          ]);
+          setHasOlder(data.length === 60);
+        });
+        return data.length > 0;
+      })
+      .catch((e) => {
+        if (activeRef.current === id && epoch === requestEpoch.current) report(e);
+        return false;
+      })
+      .finally(() => {
+        if (olderRequest.current?.promise === promise) {
+          olderRequest.current = null;
+          setPaging(false);
+        }
       });
-      return data.length > 0;
-    } catch (e) {
-      if (activeRef.current === id) report(e);
-      return false;
-    } finally {
-      if (activeRef.current === id) setPaging(false);
-    }
+    olderRequest.current = { id, promise };
+    return promise;
   }
   /** Scroll to a message and light it up, loading older pages until it is on screen. */
   async function showMessage(messageId: string) {
@@ -1636,6 +1715,11 @@ export default function App() {
       closeMenus();
       setPerson(sender);
     },
+    mention: (username) => {
+      const member = members.find((person) => person.username === username);
+      if (member) setPerson(member);
+      else openLink(`/app?u=${encodeURIComponent(username)}`);
+    },
     retry: (message) => {
       setMessages((previous) =>
         previous.map((item) => (item.id === message.id ? { ...item, failed: false } : item)),
@@ -1661,6 +1745,7 @@ export default function App() {
       remove: (message) => latestMessageActions.current.remove(message),
       jump: (id) => latestMessageActions.current.jump(id),
       profile: (sender) => latestMessageActions.current.profile(sender),
+      mention: (username) => latestMessageActions.current.mention(username),
       retry: (message) => latestMessageActions.current.retry(message),
       discard: (message) => latestMessageActions.current.discard(message),
     }),
@@ -2122,8 +2207,15 @@ export default function App() {
                   className="messages"
                   ref={scroller}
                   {...gestures}
-                  onWheel={() => {
+                  onWheel={(event) => {
                     jumpingToLatest.current = false;
+                    if (
+                      hasOlder &&
+                      !loading &&
+                      event.deltaY < 0 &&
+                      event.currentTarget.scrollTop <= 0
+                    )
+                      void loadOlder();
                     // A floating message menu would stay put while its message scrolls away.
                     document
                       .querySelectorAll('details.message-menu[open]')
@@ -2134,6 +2226,8 @@ export default function App() {
                   }}
                   onScroll={() => {
                     const el = scroller.current!;
+                    const upwards = el.scrollTop < lastScrollTop.current;
+                    lastScrollTop.current = el.scrollTop;
                     // Our own jump to the bottom: content may have grown meanwhile (a photo
                     // decoding), which must not read as the user scrolling up.
                     if (autoScroll.current) {
@@ -2150,6 +2244,7 @@ export default function App() {
                       cached.following = atBottom;
                     }
                     setAwayFromBottom(!atBottom);
+                    if (upwards && el.scrollTop < 180 && hasOlder && !loading) void loadOlder();
                     const latest = messages.at(-1);
                     if (followBottom.current && activeId && latest)
                       void markRead(activeId, latest.id);
@@ -2276,6 +2371,33 @@ export default function App() {
                     />
                   )}
                   <form className="composer" onSubmit={send}>
+                    {mentionPanel.mounted && (
+                      <div
+                        ref={mentionList}
+                        className="mention-options"
+                        role="group"
+                        aria-label="Упомянуть участника"
+                        data-closing={mentionPanel.closing || undefined}
+                        inert={mentionPanel.closing}
+                      >
+                        {shownMentionOptions.map((member, index) => (
+                          <button
+                            key={member.id}
+                            type="button"
+                            className={
+                              index === mentionIndex % shownMentionOptions.length ? 'selected' : ''
+                            }
+                            onPointerDown={(event) => event.preventDefault()}
+                            onClick={() => chooseMention(member)}
+                          >
+                            <Avatar person={member} size="small" />
+                            <span>
+                              {member.name} <small>@{member.username}</small>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     <input
                       ref={fileInput}
                       type="file"
@@ -2287,13 +2409,46 @@ export default function App() {
                       }}
                     />
                     <div className="composer-field">
-                      <IconButton
-                        label="Прикрепить файл"
-                        disabled={sending || Boolean(edit)}
-                        onClick={() => fileInput.current?.click()}
-                      >
-                        <Paperclip size={21} />
-                      </IconButton>
+                      {sending || edit ? (
+                        <IconButton label="Прикрепить файл" disabled>
+                          <Paperclip size={21} />
+                        </IconButton>
+                      ) : (
+                        <details className="chat-actions attachment-menu">
+                          <summary
+                            className="icon-button"
+                            aria-label="Прикрепить файл"
+                            onClick={toggleMenu}
+                          >
+                            <Paperclip size={21} />
+                          </summary>
+                          <div className="chat-actions-menu">
+                            {(
+                              [
+                                [Images, 'Галерея', 'image/*,video/*'],
+                                [FileText, 'Файл', ''],
+                              ] as const
+                            ).map(([Icon, label, accept]) => {
+                              return (
+                                <button
+                                  type="button"
+                                  key={label}
+                                  onClick={(event) => {
+                                    const input = fileInput.current;
+                                    if (!input) return;
+                                    closeMenu(event.currentTarget.closest('details')!);
+                                    input.accept = accept;
+                                    input.click();
+                                  }}
+                                >
+                                  <Icon size={18} />
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </details>
+                      )}
                       <textarea
                         ref={textarea}
                         enterKeyHint="enter"
@@ -2304,7 +2459,13 @@ export default function App() {
                         maxLength={8000}
                         readOnly={sending || savingCurrentEdit}
                         aria-busy={sending || savingCurrentEdit}
-                        onChange={(e) => changeDraft(e.target.value)}
+                        onChange={(e) => {
+                          changeDraft(e.target.value);
+                          setMentionCursor(e.target.selectionEnd);
+                          setMentionIndex(0);
+                        }}
+                        onSelect={(event) => setMentionCursor(event.currentTarget.selectionEnd)}
+                        onBlur={() => setMentionCursor(null)}
                         onPaste={(e) => {
                           const file = e.clipboardData.files[0];
                           if (file && !edit) {
@@ -2313,6 +2474,38 @@ export default function App() {
                           }
                         }}
                         onKeyDown={(e) => {
+                          if (
+                            selectedMention &&
+                            !e.nativeEvent.isComposing &&
+                            e.nativeEvent.keyCode !== 229
+                          ) {
+                            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              setMentionIndex(
+                                (index) =>
+                                  (index +
+                                    mentionOptions.length +
+                                    (e.key === 'ArrowDown' ? 1 : -1)) %
+                                  mentionOptions.length,
+                              );
+                              return;
+                            }
+                            if (
+                              (e.key === 'Enter' || e.key === 'Tab') &&
+                              !e.shiftKey &&
+                              !e.ctrlKey &&
+                              !e.metaKey
+                            ) {
+                              e.preventDefault();
+                              chooseMention(selectedMention);
+                              return;
+                            }
+                            if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setMentionCursor(null);
+                              return;
+                            }
+                          }
                           // As in Telegram Desktop: ↑ in an empty field edits your last message.
                           if (e.key === 'ArrowUp' && !composerValue && !edit && !attachment) {
                             const last = [...messages]

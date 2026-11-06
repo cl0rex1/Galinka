@@ -299,6 +299,33 @@ test(
         (await request('/files/' + uploaded.data.id, 'GET', undefined, eve.cookie)).status,
         404,
       );
+      const frame = Buffer.alloc(417);
+      frame.set([0xff, 0xfb, 0x90, 0x64]);
+      const mp3 = Buffer.concat([frame, frame, frame]);
+      const track = new FormData();
+      track.set('file', new Blob([mp3]), 'track.mp3');
+      const audio = await request(`/chats/${id}/files`, 'POST', track, alice.cookie);
+      assert.equal(audio.status, 201);
+      assert.equal(audio.data.mime, 'audio/mpeg');
+      const inline = () =>
+        fetch(`${base}/api/files/${audio.data.id}?inline=1`, {
+          headers: { Cookie: bob.cookie, Range: 'bytes=0-3' },
+        });
+      const part = await inline();
+      assert.equal(part.status, 206);
+      assert.equal(part.headers.get('content-type'), 'audio/mpeg');
+      assert.deepEqual(Buffer.from(await part.arrayBuffer()), mp3.subarray(0, 4));
+      await db.query("UPDATE files SET mime='application/octet-stream' WHERE id=$1", [
+        audio.data.id,
+      ]);
+      const legacy = await inline();
+      assert.equal(legacy.status, 206);
+      assert.equal(legacy.headers.get('content-type'), 'audio/mpeg');
+      await legacy.arrayBuffer();
+      assert.equal(
+        (await request(`/files/${audio.data.id}?inline=1`, 'GET', undefined, eve.cookie)).status,
+        404,
+      );
       const invitation = await request(`/chats/${id}/invite`, 'POST', {}, alice.cookie);
       assert.equal(invitation.status, 200);
       const token = new URL(invitation.data.url).searchParams.get('join');

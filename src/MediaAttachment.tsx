@@ -5,6 +5,7 @@ import { getDemoFileUrl } from './demo';
 import type { Attachment } from './types';
 import { AudioPlayer } from './AudioPlayer';
 import { motionAllowed } from './ui';
+import { VideoPlayer } from './VideoPlayer';
 
 const size = (bytes: number) =>
   bytes < 1048576
@@ -26,6 +27,9 @@ export const fileLabel = (name: string) =>
 /** Round video messages are recorded by Galinka under this name. */
 export const isVideoNote = (file: { name: string; mime?: string }) =>
   /^video\//.test(file.mime || '') && file.name.startsWith('Кружок');
+export const isAudioFile = (name: string, mime?: string) =>
+  /^audio\/(webm|ogg|mp4|mpeg|wav|x-wav|flac|aac)$/.test(mime || '') ||
+  ((!mime || mime === 'application/octet-stream') && /\.(mp3|wav|flac|aac)$/i.test(name));
 
 export function MediaAttachment({
   file,
@@ -41,11 +45,16 @@ export function MediaAttachment({
     : `${API_BASE}/files/${encodeURIComponent(file.id)}?inline=1`;
   const mime = file.mime || '';
   const image = /^image\/(png|jpeg|gif|webp)$/.test(mime) && url && !failed;
-  const audio = /^audio\/(webm|ogg|mp4|mpeg|wav|x-wav)$/.test(mime) && url;
+  const audio = isAudioFile(file.name, mime) && url;
   const video = /^video\/(mp4|webm|quicktime)$/.test(mime) && url && !failed;
   if (audio && url)
     return (
       <div className="media-attachment audio-attachment">
+        {!file.name.startsWith('Голосовое-') && (
+          <div className="audio-file-name" title={file.name}>
+            {file.name}
+          </div>
+        )}
         <AudioPlayer
           src={url}
           name={file.name}
@@ -62,14 +71,7 @@ export function MediaAttachment({
       </div>
     ) : (
       <div className="media-attachment video-attachment">
-        <video
-          src={url}
-          controls
-          playsInline
-          preload="metadata"
-          aria-label={`Видео ${file.name}`}
-          onError={() => setFailed(true)}
-        />
+        <VideoPlayer src={url} name={file.name} onError={() => setFailed(true)} />
       </div>
     );
   if (!image || !url)

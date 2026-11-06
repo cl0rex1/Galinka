@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import qrcode from 'qrcode-generator';
 import { Check, Copy, Download, Share2 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
@@ -91,6 +91,35 @@ export function ShareSheet({
   const card = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState('');
+  const [qr, setQr] = useState<{ link: string; file: File; data: string } | null>(null);
+  const ready = qr?.link === link ? qr : null;
+  const native = Capacitor.isNativePlatform();
+  useEffect(() => {
+    let current = true;
+    async function prepare() {
+      const svg = card.current?.querySelector('svg');
+      if (!svg) return;
+      const image = new Image();
+      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1024;
+      const context = canvas.getContext('2d');
+      if (!context) throw Error('QR canvas unavailable');
+      context.drawImage(image, 0, 0, 1024, 1024);
+      const data = canvas.toDataURL('image/png');
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw Error('QR encoding failed');
+      const name = `galinka-${title.replace(/[^\p{L}\p{N}]+/gu, '-').slice(0, 80)}.png`;
+      if (current) setQr({ link, file: new File([blob], name, { type: 'image/png' }), data });
+    }
+    void prepare().catch(() => {
+      if (current) setError('Не удалось подготовить изображение QR.');
+    });
+    return () => {
+      current = false;
+    };
+  }, [accent, link, title]);
   async function copy() {
     try {
       await navigator.clipboard.writeText(link);
@@ -100,20 +129,40 @@ export function ShareSheet({
       setError('Не удалось скопировать. Выделите ссылку и скопируйте вручную.');
     }
   }
-  // Draw the code onto a canvas and save it as a PNG, white margin included.
-  async function save() {
-    const svg = card.current?.querySelector('svg');
-    if (!svg) return;
-    const image = new Image();
-    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
-    await image.decode();
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 1024;
-    canvas.getContext('2d')!.drawImage(image, 0, 0, 1024, 1024);
+  function save() {
+    if (!ready) return;
     const linkElement = document.createElement('a');
-    linkElement.href = canvas.toDataURL('image/png');
-    linkElement.download = `galinka-${title.replace(/[^\p{L}\p{N}]+/gu, '-')}.png`;
+    linkElement.href = ready.data;
+    linkElement.download = ready.file.name;
     linkElement.click();
+  }
+  const webShare = 'share' in navigator;
+  const fileShare = Boolean(ready && webShare && navigator.canShare?.({ files: [ready.file] }));
+  async function share() {
+    if (!ready) return;
+    const text = `${title}\n${subtitle}\n${link}`;
+    try {
+      if (!native) {
+        // A prepared file lets the browser open its share sheet within the click gesture.
+        await navigator.share(fileShare ? { title, text, files: [ready.file] } : { title, text });
+        return;
+      }
+      const [{ Filesystem, Directory }, { Share }] = await Promise.all([
+        import('@capacitor/filesystem'),
+        import('@capacitor/share'),
+      ]);
+      const { uri } = await Filesystem.writeFile({
+        path: `attachments/${crypto.randomUUID()}-${ready.file.name}`,
+        data: ready.data.split(',')[1],
+        directory: Directory.Cache,
+        recursive: true,
+      });
+      await Share.share({ title, text, files: [uri] });
+    } catch (cause) {
+      const error = cause as Error;
+      if (error.name !== 'AbortError' && error.message !== 'Share canceled')
+        setError('Не удалось отправить QR и ссылку.');
+    }
   }
   return (
     <Modal title={heading} onClose={onClose} error={error}>
@@ -130,17 +179,18 @@ export function ShareSheet({
         </button>
       </div>
       <div className="share-actions">
-        {'share' in navigator && (
+        {(native || webShare) && (
           <button
             type="button"
             className="secondary"
-            onClick={() => void navigator.share({ title, url: link }).catch(() => {})}
+            disabled={!ready}
+            onClick={() => void share()}
           >
             <Share2 size={17} />
-            Отправить
+            {native || fileShare ? 'Отправить' : 'Отправить ссылку'}
           </button>
         )}
-        <button type="button" className="secondary" onClick={() => void save()}>
+        <button type="button" className="secondary" disabled={!ready} onClick={save}>
           <Download size={17} />
           Сохранить QR
         </button>
