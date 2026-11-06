@@ -1388,7 +1388,7 @@ await listen();
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Маршрут не найден.' }));
 const publicDir = path.resolve('dist');
 if (production) {
-  const landingPage = path.join(publicDir, 'landing.html');
+  const landingPage = path.resolve('dist-landing.html');
   const hasLandingPage = existsSync(landingPage);
   app.use(
     express.static(publicDir, {
