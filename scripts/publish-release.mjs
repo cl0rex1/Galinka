@@ -13,8 +13,7 @@ const section = (await readFile('CHANGELOG.md', 'utf8'))
   .split(/^## /m)
   .find((part) => part.startsWith(`${version} `));
 if (!section) throw Error(`CHANGELOG.md has no section for ${version}.`);
-const releaseNotes = section.slice(section.indexOf('
-') + 1).trim();
+const releaseNotes = section.slice(section.indexOf('\n') + 1).trim();
 const directory = 'release';
 const files = (await readdir(directory))
   .filter((name) => /\.(exe|dmg|zip|AppImage|deb|apk|pkg\.tar\.zst|yml|blockmap)$/.test(name))
