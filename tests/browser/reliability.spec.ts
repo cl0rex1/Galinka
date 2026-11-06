@@ -15,7 +15,7 @@ test('API rejects invalid responses, times out stalled requests and distinguishe
     route.fulfill({ status: 401, json: { error: 'Войдите в Galinka.' } }),
   );
   await page.goto('/admin');
-  await expect(page.getByRole('heading', { name: 'С возвращением' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Вход', exact: true })).toBeVisible();
   await page.route('**/api/broken-success', (route) =>
     route.fulfill({ status: 200, contentType: 'text/html', body: '<html>Proxy error</html>' }),
   );

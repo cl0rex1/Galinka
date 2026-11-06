@@ -9,7 +9,13 @@ import path from 'node:path';
 import { z, ZodError } from 'zod';
 import { digest, hashPassword, verifyPassword, readCookie } from './security.js';
 import { nelyaReply } from './nelya.js';
-import { AudioError, normalizeUploadedAudio, audioPreview, removeAudioPreview, isRecordedAudio } from './audio.js';
+import {
+  AudioError,
+  normalizeUploadedAudio,
+  audioPreview,
+  removeAudioPreview,
+  isRecordedAudio,
+} from './audio.js';
 import {
   pushEnabled,
   anyPushEnabled,
@@ -26,9 +32,12 @@ const publicApiOrigin = process.env.PUBLIC_API_ORIGIN
   ? new URL(process.env.PUBLIC_API_ORIGIN).origin
   : undefined;
 const apiOrigins = publicApiOrigin ? [publicApiOrigin] : [];
+// Optional shared code. Without it, only one-time invites from the admin panel register accounts.
 const inviteCode = process.env.INVITE_CODE || '';
-if (inviteCode.length < 12)
-  throw Error('Set INVITE_CODE to a random string of at least 12 characters.');
+if (inviteCode && inviteCode.length < 12)
+  throw Error(
+    'INVITE_CODE must be at least 12 characters, or empty to allow only one-time invites.',
+  );
 if (new URL(origin).origin !== origin)
   throw Error('APP_ORIGIN must be an origin without a path or trailing slash.');
 if (production && !origin.startsWith('https://') && process.env.COOKIE_SECURE !== 'false')
@@ -163,16 +172,27 @@ type User = { id: string; username: string; name: string; color: number; role: '
 type AuthedRequest = Request & { user: User; sessionToken: string };
 async function auth(req: Request, res: Response, next: NextFunction) {
   try {
-    const token = digest(readCookie(req.headers.cookie));
+    const raw = readCookie(req.headers.cookie);
+    const token = digest(raw);
     const { rows } = await pool.query(
-      `SELECT u.id,u.username,u.name,u.color,u.role FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>now() AND NOT u.blocked`,
+      `SELECT u.id,u.username,u.name,u.color,u.role,(s.expires_at<now()+interval '15 days' OR s.last_seen_at<now()-interval '1 hour') AS stale
+       FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>now() AND NOT u.blocked`,
       [token],
     );
     if (!rows[0]) {
-      res.status(401).json({ error: 'Войдите в Galinka.' });
+      res.status(401).json({ error: 'Войдите снова.' });
       return;
     }
-    Object.assign(req, { user: rows[0], sessionToken: token });
+    const { stale, ...account } = rows[0];
+    // Sliding expiry: active devices keep their session and push registrations.
+    if (stale) {
+      await pool.query(
+        "UPDATE sessions SET expires_at=now()+interval '30 days',last_seen_at=now() WHERE token=$1",
+        [token],
+      );
+      setSessionCookie(res, raw);
+    }
+    Object.assign(req, { user: account, sessionToken: token });
     next();
   } catch (error) {
     next(error);
@@ -196,6 +216,16 @@ async function member(chatId: string, userId: string, db: Pool | PoolClient = po
 async function lockedMember(chatId: string, userId: string, db: PoolClient) {
   await db.query('SELECT id FROM chats WHERE id=$1 FOR UPDATE', [uuid.parse(chatId)]);
   return member(chatId, userId, db);
+}
+async function removeStoredFiles(ids: string[]) {
+  await Promise.all(
+    ids.map(async (id) => {
+      const filename = path.join(directory, id);
+      await unlink(filename).catch(() => {});
+      // Do not wait for a running decoder; its output is discarded when it finishes.
+      void removeAudioPreview(filename);
+    }),
+  );
 }
 async function transaction<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
   const db = await pool.connect();
@@ -229,12 +259,7 @@ async function notify(
 }
 const secure =
   process.env.COOKIE_SECURE === 'true' || (production && process.env.COOKIE_SECURE !== 'false');
-async function session(res: Response, id: string) {
-  const token = randomBytes(32).toString('base64url');
-  await pool.query(
-    "INSERT INTO sessions(token,user_id,expires_at) VALUES($1,$2,now()+interval '30 days')",
-    [digest(token), id],
-  );
+function setSessionCookie(res: Response, token: string) {
   res.cookie('galinka', token, {
     httpOnly: true,
     secure,
@@ -243,9 +268,17 @@ async function session(res: Response, id: string) {
     path: '/',
   });
 }
+async function session(req: Request, res: Response, id: string) {
+  const token = randomBytes(32).toString('base64url');
+  await pool.query(
+    "INSERT INTO sessions(token,user_id,expires_at,user_agent) VALUES($1,$2,now()+interval '30 days',$3)",
+    [digest(token), id, String(req.headers['user-agent'] || '').slice(0, 300)],
+  );
+  setSessionCookie(res, token);
+}
 app.get('/api/health', async (_req, res) => {
   await pool.query('SELECT 1');
-  res.json({ ok: true });
+  res.status(listening ? 200 : 503).json({ ok: listening });
 });
 app.get('/api/version', (_req, res) => res.json(buildInfo));
 app.get('/api/push/status', auth, (_req, res) =>
@@ -361,12 +394,10 @@ app.get('/api/downloads', async (_req, res) => {
     res.status(503).json({ error: 'Не удалось проверить сборки. Попробуйте позже.' });
   }
 });
-async function createAccount(data: {
-  username: string;
-  name: string;
-  password: string;
-  role?: 'admin' | 'user';
-}) {
+async function createAccount(
+  data: { username: string; name: string; password: string; role?: 'admin' | 'user' },
+  invite?: string,
+) {
   const id = randomUUID(),
     password = await hashPassword(data.password);
   return transaction(async (db) => {
@@ -374,6 +405,13 @@ async function createAccount(data: {
       `INSERT INTO users(id,username,name,password,color,role) VALUES($1,$2,$3,$4,$5,$6) RETURNING ${personSQL}`,
       [id, data.username, data.name, password, Math.floor(Math.random() * 6), data.role || 'user'],
     );
+    if (invite) {
+      const used = await db.query(
+        'UPDATE signup_invites SET used_by=$2,used_at=now() WHERE token=$1 AND used_at IS NULL AND expires_at>now()',
+        [invite, id],
+      );
+      requireValue(used.rowCount, 403, 'Приглашение недействительно или уже использовано.');
+    }
     const chatId = randomUUID();
     await db.query(
       "INSERT INTO chats(id,kind,title,owner_id,nelya) VALUES($1,'saved','Избранное',$2,true)",
@@ -383,7 +421,7 @@ async function createAccount(data: {
     await db.query('INSERT INTO messages(id,chat_id,body,nonce) VALUES($1,$2,$3,$4)', [
       randomUUID(),
       chatId,
-      'Привет! Это ваше место для заметок, файлов и мыслей. Я Неля — напишите «@неля помощь», и я расскажу, что умею.',
+      'Здесь можно хранить заметки и файлы. Команды Нели: «@неля помощь».',
       randomUUID(),
     ]);
     return rows[0];
@@ -393,13 +431,13 @@ app.post('/api/auth/register', authLimit, async (req, res) => {
   const data = credentials
     .extend({ name: z.string().trim().min(1).max(40), invite: z.string().max(200) })
     .parse(req.body);
-  requireValue(
-    timingSafeEqual(Buffer.from(digest(data.invite)), Buffer.from(digest(inviteCode))),
-    403,
-    'Код приглашения не подошёл. Попросите его у владельца сервера.',
-  );
-  const account = await createAccount(data);
-  await session(res, account.id);
+  const code = data.invite.trim();
+  const shared =
+    Boolean(inviteCode) &&
+    timingSafeEqual(Buffer.from(digest(code)), Buffer.from(digest(inviteCode)));
+  requireValue(shared || code.length >= 20, 403, 'Код приглашения не подошёл.');
+  const account = await createAccount(data, shared ? undefined : digest(code));
+  await session(req, res, account.id);
   res.status(201).json(account);
 });
 app.post('/api/auth/login', authLimit, async (req, res) => {
@@ -410,11 +448,65 @@ app.post('/api/auth/login', authLimit, async (req, res) => {
     data.password,
     account?.password || '00000000000000000000000000000000:' + '0'.repeat(128),
   );
-  requireValue(account && valid, 401, 'Логин или пароль не подошли.');
-  requireValue(!account.blocked, 403, 'Аккаунт заблокирован. Обратитесь к администратору.');
-  await session(res, account.id);
+  requireValue(account && valid, 401, 'Неверный логин или пароль.');
+  requireValue(!account.blocked, 403, 'Аккаунт заблокирован.');
+  await session(req, res, account.id);
   const { id, username, name, color, role } = account;
   res.json({ id, username, name, color, role });
+});
+/*
+ * Sign in by QR, as in Telegram: a new device shows a code, a signed-in phone scans it and
+ * confirms. The code carries only `token`; the new device also holds a private `key`, so a
+ * photographed code cannot be used to collect the session. One use, two minutes.
+ * ponytail: in-memory, one server instance; move to the database when running replicas.
+ */
+const qrLogins = new Map<
+  string,
+  { key: string; agent: string; expires: number; userId?: string }
+>();
+const qrToken = z.string().regex(/^[A-Za-z0-9_-]{32}$/);
+function liveQr(token: string) {
+  const entry = qrLogins.get(token);
+  if (entry && entry.expires < Date.now()) qrLogins.delete(token);
+  return qrLogins.get(token);
+}
+app.post('/api/auth/qr', authLimit, (req, res) => {
+  for (const [token, entry] of qrLogins) if (entry.expires < Date.now()) qrLogins.delete(token);
+  requireValue(qrLogins.size < 5000, 503, 'Попробуйте войти по QR через минуту.');
+  const token = randomBytes(24).toString('base64url');
+  const key = randomBytes(32).toString('base64url');
+  const expires = Date.now() + 120_000;
+  qrLogins.set(token, { key, agent: String(req.headers['user-agent'] || '').slice(0, 300), expires });
+  res.json({ token, key, expires });
+});
+app.post('/api/auth/qr/poll', async (req, res) => {
+  const { token, key } = z.object({ token: qrToken, key: z.string().max(64) }).parse(req.body);
+  const entry = liveQr(token);
+  requireValue(entry && entry.key === key, 410, 'QR-код устарел. Обновите его.');
+  if (!entry!.userId) {
+    res.json({ status: 'pending' });
+    return;
+  }
+  qrLogins.delete(token);
+  const { rows } = await pool.query(`SELECT ${personSQL},blocked FROM users WHERE id=$1`, [
+    entry!.userId,
+  ]);
+  requireValue(rows[0] && !rows[0].blocked, 403, 'Аккаунт заблокирован.');
+  await session(req, res, rows[0].id);
+  const { id, username, name, color, role } = rows[0];
+  res.json({ status: 'approved', person: { id, username, name, color, role } });
+});
+// The phone first sees which device asks, then approves.
+app.post('/api/auth/qr/inspect', auth, (req, res) => {
+  const entry = liveQr(qrToken.parse(req.body.token));
+  requireValue(entry && !entry.userId, 410, 'QR-код устарел. Попросите показать новый.');
+  res.json({ agent: entry!.agent });
+});
+app.post('/api/auth/qr/approve', auth, (req, res) => {
+  const entry = liveQr(qrToken.parse(req.body.token));
+  requireValue(entry && !entry.userId, 410, 'QR-код устарел. Попросите показать новый.');
+  entry!.userId = user(req).id;
+  res.json({ ok: true });
 });
 app.post('/api/auth/logout', auth, async (req, res) => {
   const token = (req as AuthedRequest).sessionToken;
@@ -431,6 +523,53 @@ app.patch('/api/me', auth, async (req, res) => {
     user(req).id,
   ]);
   res.json(rows[0]);
+});
+const endStreams = (userId: string, keep?: string) => {
+  for (const [response, info] of streams)
+    if (info.userId === userId && info.token !== keep) response.end();
+};
+app.post('/api/me/password', auth, authLimit, async (req, res) => {
+  const { current, password } = z
+    .object({ current: z.string().max(128), password: credentials.shape.password })
+    .parse(req.body);
+  const { rows } = await pool.query('SELECT password FROM users WHERE id=$1', [user(req).id]);
+  requireValue(await verifyPassword(current, rows[0].password), 403, 'Текущий пароль не подошёл.');
+  const token = (req as AuthedRequest).sessionToken;
+  const hashed = await hashPassword(password);
+  await transaction(async (db) => {
+    await db.query('UPDATE users SET password=$1 WHERE id=$2', [hashed, user(req).id]);
+    await db.query('DELETE FROM sessions WHERE user_id=$1 AND token<>$2', [user(req).id, token]);
+  });
+  endStreams(user(req).id, token);
+  res.json({ ok: true });
+});
+app.get('/api/me/sessions', auth, async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT left(token,16) AS id,created_at,last_seen_at,user_agent,token=$2 AS current
+     FROM sessions WHERE user_id=$1 AND expires_at>now() ORDER BY token=$2 DESC,last_seen_at DESC`,
+    [user(req).id, (req as AuthedRequest).sessionToken],
+  );
+  res.json(rows);
+});
+app.delete('/api/me/sessions/:id', auth, async (req, res) => {
+  const id = z
+    .string()
+    .regex(/^[0-9a-f]{16}$/)
+    .parse(req.params.id);
+  const token = (req as AuthedRequest).sessionToken;
+  const { rows } = await pool.query(
+    'DELETE FROM sessions WHERE user_id=$1 AND left(token,16)=$2 AND token<>$3 RETURNING token',
+    [user(req).id, id, token],
+  );
+  requireValue(rows[0], 404, 'Сеанс не найден.');
+  for (const [response, info] of streams) if (info.token === rows[0].token) response.end();
+  res.json({ ok: true });
+});
+app.delete('/api/me/sessions', auth, async (req, res) => {
+  const token = (req as AuthedRequest).sessionToken;
+  await pool.query('DELETE FROM sessions WHERE user_id=$1 AND token<>$2', [user(req).id, token]);
+  endStreams(user(req).id, token);
+  res.json({ ok: true });
 });
 app.get('/api/users', auth, async (req, res) => {
   const q = z.string().trim().min(2).max(40).parse(req.query.q);
@@ -505,6 +644,39 @@ app.patch('/api/admin/users/:id', auth, admin, async (req, res) => {
   });
   res.json(account);
 });
+app.get('/api/admin/invites', auth, admin, async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT left(i.token,16) AS id,i.note,i.created_at,i.expires_at,i.used_at,u.name AS used_by
+     FROM signup_invites i LEFT JOIN users u ON u.id=i.used_by ORDER BY i.created_at DESC LIMIT 50`,
+  );
+  res.json(rows);
+});
+app.post('/api/admin/invites', auth, admin, async (req, res) => {
+  const { note, days } = z
+    .object({
+      note: z.string().trim().max(80).default(''),
+      days: z.number().int().min(1).max(30).default(7),
+    })
+    .parse(req.body);
+  const token = randomBytes(24).toString('base64url');
+  await pool.query(
+    'INSERT INTO signup_invites(token,created_by,note,expires_at) VALUES($1,$2,$3,now()+make_interval(days=>$4))',
+    [digest(token), user(req).id, note, days],
+  );
+  res.status(201).json({ url: `${origin}/app?signup=${token}` });
+});
+app.delete('/api/admin/invites/:id', auth, admin, async (req, res) => {
+  const id = z
+    .string()
+    .regex(/^[0-9a-f]{16}$/)
+    .parse(req.params.id);
+  const result = await pool.query(
+    'DELETE FROM signup_invites WHERE left(token,16)=$1 AND used_at IS NULL',
+    [id],
+  );
+  requireValue(result.rowCount, 404, 'Приглашение не найдено или уже использовано.');
+  res.json({ ok: true });
+});
 const announcementFields = z.object({
   title: z.string().trim().min(1).max(120),
   body: z.string().trim().min(1).max(10000),
@@ -553,17 +725,19 @@ app.delete('/api/admin/announcements/:id', auth, admin, async (req, res) => {
 app.get('/api/chats', auth, async (req, res) => {
   const { rows } = await pool.query(
     `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,m.read_at,m.pinned,m.muted,m.archived,
- CASE WHEN c.kind='direct' THEN (SELECT u.name FROM members mm JOIN users u ON u.id=mm.user_id WHERE mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) ELSE c.title END AS title,
+ CASE WHEN c.kind='direct' THEN peer.name ELSE c.title END AS title,
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
- (SELECT row_to_json(u) FROM (SELECT u.id,u.name,u.username,u.color FROM members mm JOIN users u ON u.id=mm.user_id WHERE mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) u) AS peer,
- (SELECT row_to_json(msg) FROM (
-   SELECT m.body,m.created_at,m.sender_id,m.file_id,
-    CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file
-   FROM messages m LEFT JOIN files f ON f.id=m.file_id WHERE m.chat_id=c.id
-   ORDER BY m.created_at DESC,m.id DESC LIMIT 1
- ) msg) AS last_message,
+ CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color) END AS peer,
+ CASE WHEN last.created_at IS NULL THEN NULL ELSE json_build_object('body',last.body,'created_at',last.created_at,'sender_id',last.sender_id,'file_id',last.file_id,'file',last.file) END AS last_message,
  (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread
- FROM chats c JOIN members m ON m.chat_id=c.id WHERE m.user_id=$1 ORDER BY m.pinned DESC,COALESCE((SELECT max(created_at) FROM messages WHERE chat_id=c.id),c.created_at) DESC,c.id`,
+ FROM chats c JOIN members m ON m.chat_id=c.id
+ LEFT JOIN LATERAL (SELECT u.id,u.name,u.username,u.color FROM members mm JOIN users u ON u.id=mm.user_id
+   WHERE c.kind='direct' AND mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) peer ON true
+ LEFT JOIN LATERAL (SELECT lm.body,lm.created_at,lm.sender_id,lm.file_id,
+   CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file
+   FROM messages lm LEFT JOIN files f ON f.id=lm.file_id WHERE lm.chat_id=c.id
+   ORDER BY lm.created_at DESC,lm.id DESC LIMIT 1) last ON true
+ WHERE m.user_id=$1 ORDER BY m.pinned DESC,COALESCE(last.created_at,c.created_at) DESC,c.id`,
     [user(req).id],
   );
   res.json(rows);
@@ -730,13 +904,7 @@ app.delete('/api/chats/:id/members/:userId', auth, async (req, res) => {
     await notify(db, chat.id, undefined, targetId);
     return [];
   });
-  await Promise.all(removedFiles.map(async (id) => {
-    const filename = path.join(directory, id);
-    await unlink(filename).catch(() => {});
-    // Deletion should not wait for an already-running decoder, but its output
-    // must be discarded when it finishes as well.
-    void removeAudioPreview(filename);
-  }));
+  await removeStoredFiles(removedFiles);
   res.json({ ok: true });
 });
 app.post('/api/chats/:id/read', auth, async (req, res) => {
@@ -821,6 +989,18 @@ app.get('/api/chats/:id/messages', auth, async (req, res) => {
     [req.params.id, user(req).id, q || null, before || null],
   );
   res.json(rows.reverse());
+});
+// Search across every chat the user is in; the client opens a hit in its conversation.
+app.get('/api/search', auth, async (req, res) => {
+  const q = z.string().trim().min(2).max(100).parse(req.query.q);
+  const { rows } = await pool.query(
+    `SELECT m.id,m.chat_id,m.body,m.created_at,m.sender_id,COALESCE(u.name,'Неля') AS sender_name
+     FROM messages m JOIN members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=$1
+     LEFT JOIN users u ON u.id=m.sender_id
+     WHERE strpos(lower(m.body),lower($2))>0 ORDER BY m.created_at DESC,m.id DESC LIMIT 50`,
+    [user(req).id, q],
+  );
+  res.json(rows);
 });
 app.post('/api/chats/:id/messages', auth, async (req, res) => {
   const data = z
@@ -916,19 +1096,25 @@ app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
   res.json({ ok: true });
 });
 app.delete('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
-  await transaction(async (db) => {
+  const removed = await transaction(async (db) => {
     await lockedMember(String(req.params.id), user(req).id, db);
     const result = await db.query(
-      'DELETE FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3',
+      'DELETE FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 RETURNING file_id',
       [uuid.parse(req.params.messageId), req.params.id, user(req).id],
     );
     requireValue(result.rowCount, 404, 'Можно удалить только своё сообщение.');
     await notify(db, String(req.params.id), String(req.params.messageId));
+    // A deleted attachment must stop being downloadable and stop counting toward the quota.
+    const files = await db.query(
+      'DELETE FROM files f WHERE f.id=$1 AND NOT EXISTS(SELECT 1 FROM messages WHERE file_id=f.id) RETURNING id',
+      [result.rows[0].file_id],
+    );
+    return files.rows.map((file) => file.id as string);
   });
+  await removeStoredFiles(removed);
   res.json({ ok: true });
 });
 app.post('/api/chats/:id/messages/:messageId/reactions', auth, async (req, res) => {
-  await member(String(req.params.id), user(req).id);
   const { emoji } = z.object({ emoji: z.enum(['❤', '👍', '😂', '🔥']) }).parse(req.body);
   await transaction(async (db) => {
     await lockedMember(String(req.params.id), user(req).id, db);
@@ -966,6 +1152,9 @@ const inlineMediaTypes = new Set([
   'audio/webm',
   'audio/ogg',
   'audio/mp4',
+  'video/mp4',
+  'video/webm',
+  'video/quicktime',
 ]);
 async function mediaType(filename: string, declaredType: string) {
   const file = await open(filename, 'r');
@@ -990,6 +1179,16 @@ async function mediaType(filename: string, declaredType: string) {
         bytes.includes(Buffer.from('webm'))
       )
         return 'audio/webm';
+    }
+    // Same rule for video: declared as video and the container agrees.
+    if (declaredType.toLowerCase().startsWith('video/')) {
+      if (bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp')
+        return bytes.toString('ascii', 8, 10) === 'qt' ? 'video/quicktime' : 'video/mp4';
+      if (
+        bytes.subarray(0, 4).equals(Buffer.from([26, 69, 223, 163])) &&
+        bytes.includes(Buffer.from('webm'))
+      )
+        return 'video/webm';
     }
     return 'application/octet-stream';
   } finally {
@@ -1026,7 +1225,9 @@ app.post(
       }
       const record = await transaction(async (db) => {
         await lockedMember(String(req.params.id), user(req).id, db);
-        const account = await db.query('SELECT id,blocked FROM users WHERE id=$1 FOR UPDATE', [user(req).id]);
+        const account = await db.query('SELECT id,blocked FROM users WHERE id=$1 FOR UPDATE', [
+          user(req).id,
+        ]);
         requireValue(account.rows[0] && !account.rows[0].blocked, 401, 'Войдите в Galinka снова.');
         const session = await db.query(
           'SELECT token FROM sessions WHERE token=$1 AND user_id=$2 AND expires_at>now() FOR SHARE',
@@ -1132,12 +1333,14 @@ app.get('/api/events', auth, async (req, res) => {
   });
 });
 let listener: Client | undefined,
+  listening = false,
   stopping = false;
 async function listen() {
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   listener = client;
   client.on('error', () => client.end().catch(() => {}));
   client.on('end', () => {
+    listening = false;
     if (!stopping) setTimeout(() => listen().catch(() => {}), 2000).unref();
   });
   client.on('notification', async (event) => {
@@ -1176,6 +1379,7 @@ async function listen() {
   });
   await client.connect();
   await client.query('LISTEN galinka');
+  listening = true;
   // A listener reconnection invalidates clients so missed transient notifications recover from PostgreSQL.
   for (const res of streams.keys()) res.write('data: {"type":"connected"}\n\n');
 }
@@ -1196,6 +1400,14 @@ if (production) {
     res.sendFile(path.join(publicDir, 'index.html'));
   });
 }
+const fieldErrors: Record<string, string> = {
+  username: 'Логин: 3–24 символа, латиница, цифры и _.',
+  password: 'Пароль: от 10 до 128 символов.',
+  name: 'Имя: от 1 до 40 символов.',
+  body: 'Сообщение: до 8000 символов.',
+  title: 'Название не заполнено или слишком длинное.',
+  invite: 'Укажите код приглашения.',
+};
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (res.headersSent) return;
   if (error instanceof SyntaxError && 'body' in error) {
@@ -1203,10 +1415,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     return;
   }
   if (error instanceof ZodError) {
-    res.status(400).json({
-      error:
-        'Проверьте данные: логин — 3–24 латинских символа, пароль — от 10 символов. Поля не должны быть пустыми.',
-    });
+    const field = String(error.issues[0]?.path[0] ?? '');
+    res.status(400).json({ error: fieldErrors[field] || 'Проверьте введённые данные.' });
     return;
   }
   if (error instanceof HttpError || error instanceof AudioError) {
@@ -1218,7 +1428,8 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     return;
   }
   if ((error as { code?: string }).code === '23505') {
-    res.status(409).json({ error: 'Этот логин уже занят.' });
+    const login = (error as { constraint?: string }).constraint === 'users_username_key';
+    res.status(409).json({ error: login ? 'Этот логин уже занят.' : 'Запись уже существует.' });
     return;
   }
   if ((error as { code?: string }).code === '23503') {
@@ -1247,9 +1458,18 @@ async function stop() {
 }
 process.on('SIGTERM', () => void stop());
 process.on('SIGINT', () => void stop());
-// Expired sessions are small indexed deletes; external maintenance can replace this for a large deployment.
-const cleanup = setInterval(
-  () => pool.query('DELETE FROM sessions WHERE expires_at<now()').catch(console.error),
-  3600_000,
-);
+// Hourly housekeeping. Uploads never attached to a message are removed after a day.
+// ponytail: runs on every replica; the deletes are idempotent, just redundant.
+async function housekeeping() {
+  await pool.query('DELETE FROM sessions WHERE expires_at<now()');
+  await pool.query('DELETE FROM invites WHERE expires_at<now()');
+  await pool.query(
+    "DELETE FROM signup_invites WHERE used_at IS NULL AND expires_at<now()-interval '30 days'",
+  );
+  const { rows } = await pool.query(
+    "DELETE FROM files f WHERE created_at<now()-interval '1 day' AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.file_id=f.id) RETURNING id",
+  );
+  await removeStoredFiles(rows.map((row) => row.id as string));
+}
+const cleanup = setInterval(() => housekeeping().catch(console.error), 3600_000);
 cleanup.unref();

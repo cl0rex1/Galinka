@@ -318,7 +318,8 @@ export function AudioPlayer({
         >
           {speed}×
         </button>
-        {onDownload && (
+        {/* Normally download lives in the message menu; offered here when playback fails. */}
+        {onDownload && phase === 'error' && (
           <button
             type="button"
             className="voice-download"

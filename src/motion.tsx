@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from 'react';
-import { Sparkles } from 'lucide-react';
 const listeners = new Set<() => void>();
 function read() {
   try {
@@ -23,34 +22,25 @@ function subscribe(listener: () => void) {
 export function MotionSettings() {
   const reduced = useSyncExternalStore(subscribe, read);
   return (
-    <section className="settings-section">
-      <div className="settings-row">
-        <span className="settings-icon">
-          <Sparkles size={22} />
-        </span>
-        <div>
-          <h3>Меньше движения</h3>
-          <p>
-            Спокойные переходы без лишней анимации. Системные настройки доступности учитываются
-            всегда.
-          </p>
-        </div>
-        <button
-          className={`switch ${reduced ? 'on' : ''}`}
-          role="switch"
-          aria-label="Уменьшить анимацию"
-          aria-checked={reduced}
-          onClick={() => {
-            document.documentElement.dataset.motion = reduced ? 'system' : 'reduced';
-            try {
-              localStorage.setItem('galinka-reduce-motion', String(!reduced));
-            } catch {}
-            apply();
-          }}
-        >
-          <span />
-        </button>
+    <div className="settings-row">
+      <div>
+        <h3>Меньше анимации</h3>
       </div>
-    </section>
+      <button
+        className={`switch ${reduced ? 'on' : ''}`}
+        role="switch"
+        aria-label="Уменьшить анимацию"
+        aria-checked={reduced}
+        onClick={() => {
+          document.documentElement.dataset.motion = reduced ? 'system' : 'reduced';
+          try {
+            localStorage.setItem('galinka-reduce-motion', String(!reduced));
+          } catch {}
+          apply();
+        }}
+      >
+        <span />
+      </button>
+    </div>
   );
 }

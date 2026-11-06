@@ -401,7 +401,7 @@ function createWindow() {
     minWidth: 800,
     minHeight: 600,
     title: 'Galinka',
-    backgroundColor: '#0c0c0d',
+    backgroundColor: '#18191b',
     show: false,
     autoHideMenuBar: true,
     webPreferences: {

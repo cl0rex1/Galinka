@@ -1,4 +1,4 @@
-import { Bookmark, Users, Sparkles } from 'lucide-react';
+import { Bookmark, Users } from 'lucide-react';
 import type { Person, Chat } from './types';
 
 export function Avatar({
@@ -12,15 +12,13 @@ export function Avatar({
 }) {
   return (
     <span
-      className={`avatar ${size} tone-${chat?.kind === 'saved' ? 0 : (person?.color ?? (chat?.id === 'weekend' ? 0 : 2))} ${chat?.kind === 'group' ? 'group-avatar' : ''}`}
+      className={`avatar ${size} tone-${chat?.kind === 'saved' ? 0 : (person?.color ?? (chat?.id === 'weekend' ? 0 : 2)) % 6} ${chat?.kind === 'group' ? 'group-avatar' : ''}`}
       aria-hidden="true"
     >
       {chat?.kind === 'saved' ? (
         <Bookmark size={size === 'large' ? 28 : 20} />
       ) : chat?.kind === 'group' ? (
         <Users size={size === 'large' ? 30 : 22} />
-      ) : person?.id === 'nelya' ? (
-        <Sparkles size={20} />
       ) : (
         person?.name
           .split(' ')

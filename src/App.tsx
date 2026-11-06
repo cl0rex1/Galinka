@@ -5,24 +5,15 @@ import {
   useRef,
   useCallback,
   useMemo,
-  useId,
-  Fragment,
-  type ReactNode,
   type FormEvent,
 } from 'react';
 import {
   MessageCircle,
   Search,
-  Plus,
   Users,
-  ArrowUpRight,
   ArrowLeft,
-  ArrowRight,
-  Settings,
-  LogOut,
+  Settings2,
   Download,
-  Bookmark,
-  SlidersHorizontal,
   X,
   Paperclip,
   Smile,
@@ -35,21 +26,19 @@ import {
   BellOff,
   Archive,
   ArchiveRestore,
-  ChevronDown,
   Info,
-  Sparkles,
-  Leaf,
-  Lock,
-  MoreHorizontal,
+  MoreVertical,
   Copy,
-  Link,
+  QrCode,
+  ScanLine,
   LoaderCircle,
   WifiOff,
-  Compass,
-  Puzzle,
   ArrowUp,
   ArrowDown,
+  ChevronDown,
+  ChevronUp,
   Megaphone,
+  SquarePen,
 } from 'lucide-react';
 import { useConversationGestures } from './gestures';
 import { Avatar } from './Avatar';
@@ -57,23 +46,58 @@ import { MessageList, type MessageActions } from './MessageList';
 import { AttachmentPreview, type Transfer } from './AttachmentPreview';
 import { GroupSettings } from './GroupSettings';
 import { VoiceRecorder } from './VoiceRecorder';
+import { VideoNoteRecorder } from './VideoNoteRecorder';
+import { fileLabel, isVideoNote } from './MediaAttachment';
 import { getDemoFileUrl } from './demo';
 import { Announcements } from './Announcements';
 import { api, upload, ApiError, isDemo, API_BASE } from './api';
-import { Updates, useUpdates } from './updates';
-import { MotionSettings } from './motion';
-import { ThemePicker, ThemeToggle } from './theme';
-import { NotificationSettings, useNotifications, isNative, clearPushDevice } from './notifications';
+import { useUpdates } from './updates';
+import { useNotifications, isNative, clearPushDevice } from './notifications';
+import { Auth } from './Auth';
+import { Settings } from './Settings';
+import { ProfileHero } from './ProfileHero';
+import { PersonCard } from './PersonCard';
+import { listTime, SearchResults } from './SearchResults';
+import { currentAccent, ShareSheet } from './Share';
+import { lookPrefs, ThemeImport } from './Appearance';
+import { LoginApprove } from './QrLogin';
+import { QrScanner, ScannedText } from './QrScanner';
+import { decodeTheme, type CustomTheme } from './theme';
+import {
+  closeMenu,
+  CloseButton,
+  IconButton,
+  Modal,
+  motionAllowed,
+  plural,
+  toggleMenu,
+  usePresence,
+  useTabIndicator,
+} from './ui';
+import { compressImage } from './image';
 import { App as NativeApp } from '@capacitor/app';
-import type { Person, Chat, Message, Attachment } from './types';
+import { flushSync } from 'react-dom';
+import type { Person, Chat, Message, Attachment, SearchHit } from './types';
 
 type InstallEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: string }>;
 };
 type ModalKind = 'new' | 'install' | 'profile' | 'invite' | 'delete' | 'group' | null;
-const timeFormatter = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' });
-const time = (date: string) => timeFormatter.format(new Date(date));
+const skeletonBubbles: [boolean, string][] = [
+  [false, '52%'],
+  [false, '34%'],
+  [true, '46%'],
+  [false, '62%'],
+  [true, '30%'],
+  [true, '55%'],
+  [false, '40%'],
+];
+const folders = ['Все', 'Непрочитанные', 'Личные', 'Группы', 'Архив'];
+type Section = 'chats' | 'announcements' | 'settings';
+// Keep in sync with the one-pane breakpoint in styles.css.
+const narrowLayout =
+  '(max-width: 800px), (max-width: 960px) and (max-height: 500px) and (pointer: coarse)';
 // Reuse unchanged API objects so receipts/polling do not repaint every message.
 function reconcileMessages(previous: Message[], incoming: Message[]) {
   const byId = new Map(previous.map((message) => [message.id, message]));
@@ -92,257 +116,6 @@ type CachedConversation = {
   top: number;
   following: boolean;
 };
-const plural = (n: number) =>
-  n % 10 === 1 && n % 100 !== 11
-    ? 'участник'
-    : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14)
-      ? 'участника'
-      : 'участников';
-function IconButton({
-  label,
-  children,
-  onClick,
-  className = '',
-  disabled = false,
-}: {
-  label: string;
-  children: ReactNode;
-  onClick?: () => void;
-  className?: string;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      className={`icon-button ${className}`}
-      title={label}
-      aria-label={label}
-      onClick={onClick}
-      disabled={disabled}
-    >
-      {children}
-    </button>
-  );
-}
-export function Modal({
-  title,
-  onClose,
-  children,
-  error,
-  closeDisabled = false,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-  error?: string;
-  closeDisabled?: boolean;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const titleId = useId();
-  useEffect(() => {
-    const dialog = ref.current!;
-    dialog.showModal();
-    return () => dialog.close();
-  }, []);
-  return (
-    <dialog
-      ref={ref}
-      aria-labelledby={titleId}
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!closeDisabled) onClose();
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && !closeDisabled) onClose();
-      }}
-      className="modal"
-    >
-      <div className="modal-head">
-        <h2 id={titleId}>{title}</h2>
-        <IconButton label="Закрыть" disabled={closeDisabled} onClick={onClose}>
-          <X size={20} />
-        </IconButton>
-      </div>
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-      {children}
-    </dialog>
-  );
-}
-export function Auth({
-  onLogin,
-  onDemo,
-}: {
-  onLogin: (person: Person) => void;
-  onDemo?: () => void;
-}) {
-  const [register, setRegister] = useState(false),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState('');
-  async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const data = Object.fromEntries(new FormData(e.currentTarget));
-    setBusy(true);
-    setError('');
-    try {
-      onLogin(await api<Person>(register ? '/auth/register' : '/auth/login', 'POST', data));
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <main className="auth-page">
-      <section className="auth-story">
-        <a className="brand" href="/app">
-          <img src="/icon.svg" alt="" />
-          galinka
-        </a>
-        <div className="auth-intro">
-          <span className="small-label">
-            <span className="status-dot" /> Для вашей компании
-          </span>
-          <h1>
-            Место,
-            <br />
-            где свои.
-          </h1>
-          <p>
-            Те самые разговоры до ночи.
-            <br />
-            Спонтанные планы. И просто «как ты?».
-          </p>
-          <div className="auth-note">
-            <Leaf size={22} />
-            <span>
-              Маленький мессенджер.
-              <br />
-              <strong>Большая дружба.</strong>
-            </span>
-          </div>
-        </div>
-        <div className="auth-bottom">
-          <span>Ваши люди. Ваши разговоры.</span>
-          <span>Galinka · {__APP_VERSION__}</span>
-        </div>
-      </section>
-      <section className="auth-form-side">
-        <div className="auth-theme">
-          <ThemeToggle />
-        </div>
-        <div className="auth-form-wrap">
-          <span className="auth-icon">
-            <MessageCircle size={28} />
-          </span>
-          <h2>{register ? 'Регистрация' : 'С возвращением'}</h2>
-          <p className="muted">
-            {register ? 'Создайте аккаунт по приглашению.' : 'Войдите, чтобы продолжить.'}
-          </p>
-          {onDemo && (
-            <div className="auth-tabs">
-              <button
-                className={!register ? 'selected' : ''}
-                onClick={() => {
-                  setRegister(false);
-                  setError('');
-                }}
-              >
-                Войти
-              </button>
-              <button
-                className={register ? 'selected' : ''}
-                onClick={() => {
-                  setRegister(true);
-                  setError('');
-                }}
-              >
-                Создать аккаунт
-              </button>
-            </div>
-          )}
-          <form onSubmit={submit}>
-            {register && (
-              <label>
-                Имя
-                <input
-                  name="name"
-                  autoComplete="name"
-                  required
-                  maxLength={40}
-                  placeholder="Например, Саша"
-                />
-              </label>
-            )}
-            <label>
-              Логин
-              <input
-                name="username"
-                autoComplete="username"
-                required
-                minLength={3}
-                maxLength={24}
-                pattern="[a-zA-Z0-9_]{3,24}"
-                placeholder="sasha"
-                autoCapitalize="none"
-                spellCheck={false}
-              />
-            </label>
-            <label>
-              Пароль
-              <input
-                name="password"
-                type="password"
-                autoComplete={register ? 'new-password' : 'current-password'}
-                required
-                minLength={10}
-                maxLength={128}
-                placeholder="Не менее 10 символов"
-              />
-            </label>
-            {register && (
-              <label>
-                Код приглашения
-                <input name="invite" required autoComplete="off" placeholder="Код приглашения" />
-                <small>Galinka пока для друзей. Попросите код у того, кто вас позвал.</small>
-              </label>
-            )}
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-            <button className="primary wide" disabled={busy}>
-              {busy ? (
-                <LoaderCircle className="spin" size={18} />
-              ) : (
-                <>
-                  {register ? 'Создать аккаунт' : 'Войти'}
-                  <ArrowRight size={18} />
-                </>
-              )}
-            </button>
-          </form>
-          {onDemo && (
-            <>
-              <div className="auth-divider">
-                <span>или</span>
-              </div>
-              <button className="secondary wide" onClick={onDemo}>
-                Открыть демо
-                <ArrowUpRight size={17} />
-              </button>
-            </>
-          )}
-          <p className="auth-footnote">
-            <Lock size={13} /> Войдите, чтобы продолжить общение.
-          </p>
-        </div>
-      </section>
-    </main>
-  );
-}
 function NewChat({
   onCreated,
   onClose,
@@ -423,19 +196,21 @@ function NewChat({
           Новая группа
         </button>
       </div>
-      <form onSubmit={create}>
-        {kind === 'group' && (
-          <label>
-            Название группы
-            <input
-              required
-              maxLength={70}
-              placeholder="Например, На выходные"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-          </label>
-        )}
+      <form className="stack" onSubmit={create}>
+        <div className="fold" data-open={kind === 'group'} inert={kind !== 'group'}>
+          <div>
+            <label>
+              Название группы
+              <input
+                required
+                maxLength={70}
+                value={title}
+                disabled={kind !== 'group'}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </label>
+          </div>
+        </div>
         <label>
           Найти пользователя
           <input
@@ -459,7 +234,7 @@ function NewChat({
           </div>
         )}
         <div className="people-results">
-          {searching && <span className="muted">Ищем друзей…</span>}
+          {searching && <span className="muted">Поиск…</span>}
           {results.map((p) => (
             <button
               type="button"
@@ -485,12 +260,7 @@ function NewChat({
           {query.length >= 2 && !searching && results.length === 0 && (
             <p className="muted">Никого не найдено.</p>
           )}
-          {query.length < 2 && (
-            <p className="muted">
-              Введите не менее 2 символов.
-              {kind === 'group' ? ' Участников также можно пригласить ссылкой.' : ''}
-            </p>
-          )}
+          {query.length < 2 && <p className="muted">Минимум 2 символа.</p>}
         </div>
         <p className="form-error" role="alert">
           {error}
@@ -498,11 +268,10 @@ function NewChat({
         <button className="primary wide" disabled={busy || (kind === 'direct' && !selected.length)}>
           {busy ? (
             <LoaderCircle className="spin" size={18} />
+          ) : kind === 'group' ? (
+            'Создать группу'
           ) : (
-            <>
-              {kind === 'group' ? 'Создать группу' : 'Написать'}
-              <ArrowRight size={18} />
-            </>
+            'Написать'
           )}
         </button>
       </form>
@@ -518,7 +287,7 @@ export default function App() {
     [activeId, setActiveId] = useState<string | null>(null),
     [messages, setMessages] = useState<Message[]>([]),
     [members, setMembers] = useState<Person[]>([]),
-    [section, setSection] = useState<'chats' | 'modules' | 'announcements' | 'settings'>('chats'),
+    [section, setSection] = useState<Section>('chats'),
     [modal, setModal] = useState<ModalKind>(null),
     [filter, setFilter] = useState('Все'),
     [listQuery, setListQuery] = useState(''),
@@ -533,9 +302,9 @@ export default function App() {
     [preferenceBusy, setPreferenceBusy] = useState(false),
     [sendingIds, setSendingIds] = useState<string[]>([]),
     [transfers, setTransfers] = useState<Record<string, Transfer>>({}),
-    [attachments, setAttachments] = useState<Record<string, { file: File; uploaded?: Attachment }>>(
-      {},
-    ),
+    [attachments, setAttachments] = useState<
+      Record<string, { file: File; source?: File; uploaded?: Attachment }>
+    >({}),
     [awayFromBottom, setAwayFromBottom] = useState(false),
     [newMessageIds, setNewMessageIds] = useState<string[]>([]),
     [error, setError] = useState(''),
@@ -547,8 +316,19 @@ export default function App() {
     [inviteUrl, setInviteUrl] = useState(''),
     [deleteId, setDeleteId] = useState(''),
     [name, setName] = useState(''),
-    [copied, setCopied] = useState(false),
     [emojiOpen, setEmojiOpen] = useState(false),
+    [person, setPerson] = useState<Person | null>(null),
+    [dropping, setDropping] = useState(false),
+    [hits, setHits] = useState<string[] | null>(null),
+    [hitIndex, setHitIndex] = useState(0),
+    [found, setFound] = useState<{ query: string; messages: SearchHit[]; people: Person[] } | null>(
+      null,
+    ),
+    [jumpTarget, setJumpTarget] = useState<{ chat: string; id: string } | null>(null),
+    [themeImport, setThemeImport] = useState<CustomTheme | null>(null),
+    [loginRequest, setLoginRequest] = useState(''),
+    [scanning, setScanning] = useState(false),
+    [scanned, setScanned] = useState(''),
     [working, setWorking] = useState(false);
   const initialized = useRef(false);
   const conversationCache = useRef(new Map<string, CachedConversation>());
@@ -564,7 +344,6 @@ export default function App() {
   const sectionRef = useRef(section);
   sectionRef.current = section;
   const activeRef = useRef(activeId),
-    queryRef = useRef(messageQuery),
     bottomRef = useRef<HTMLDivElement>(null),
     scroller = useRef<HTMLDivElement>(null),
     textarea = useRef<HTMLTextAreaElement>(null),
@@ -573,6 +352,7 @@ export default function App() {
     chatRequestEpoch = useRef(0),
     nonces = useRef<Record<string, string>>({}),
     sendingChats = useRef(new Set<string>()),
+    textQueue = useRef<Record<string, Promise<unknown>>>({}),
     lastRead = useRef<Record<string, string>>({}),
     messagesRef = useRef(messages),
     scrollRestore = useRef<{ id: string; top: number; height: number } | null>(null),
@@ -581,7 +361,6 @@ export default function App() {
     jumpingToLatest = useRef(false),
     editRequest = useRef(false);
   activeRef.current = activeId;
-  queryRef.current = messageQuery;
   messagesRef.current = messages;
   const active = chats.find((c) => c.id === activeId),
     draft = activeId ? drafts[activeId] || '' : '',
@@ -721,7 +500,7 @@ export default function App() {
       else if (document.querySelector('details.message-menu[open], details.chat-actions[open]'))
         document
           .querySelectorAll('details.message-menu[open], details.chat-actions[open]')
-          .forEach((menu) => menu.removeAttribute('open'));
+          .forEach((menu) => closeMenu(menu));
       else if (infoOpen) setInfoOpen(false);
       else if (searchOpen) {
         setSearchOpen(false);
@@ -767,11 +546,7 @@ export default function App() {
     setChats(data);
     if (!initialized.current) {
       initialized.current = true;
-      if (
-        !window.matchMedia(
-          '(max-width: 800px), (max-width: 960px) and (max-height: 500px) and (pointer: coarse)',
-        ).matches
-      )
+      if (!window.matchMedia(narrowLayout).matches)
         setActiveId((id) => id || data.find((chat) => !chat.archived)?.id || null);
     }
     return data;
@@ -779,7 +554,6 @@ export default function App() {
   const markRead = useCallback(
     async (id: string, lastMessageId: string) => {
       if (
-        queryRef.current ||
         activeRef.current !== id ||
         !followBottom.current ||
         sectionRef.current !== 'chats' ||
@@ -802,21 +576,19 @@ export default function App() {
   const loadMessages = useCallback(
     async (id: string, reset = false) => {
       if (activeRef.current !== id) return;
-      const epoch = ++requestEpoch.current,
-        q = queryRef.current;
-      const data = await api<Message[]>(
-        `/chats/${id}/messages${q ? `?q=${encodeURIComponent(q)}` : ''}`,
-      );
-      if (activeRef.current !== id || epoch !== requestEpoch.current || queryRef.current !== q)
-        return;
+      const epoch = ++requestEpoch.current;
+      const data = await api<Message[]>(`/chats/${id}/messages`);
+      if (activeRef.current !== id || epoch !== requestEpoch.current) return;
       const previous = messagesRef.current;
       const latest = previous.at(-1);
       const freshIds =
-        !reset && !q && latest
+        !reset && latest
           ? data
               .filter(
                 (m) =>
-                  !previous.some((old) => old.id === m.id) && m.created_at >= latest.created_at,
+                  !previous.some(
+                    (old) => old.id === m.id || (old.pending && old.nonce === m.nonce),
+                  ) && m.created_at >= latest.created_at,
               )
               .map((m) => m.id)
           : [];
@@ -828,14 +600,20 @@ export default function App() {
       );
       const boundary = data.length ? previous.findIndex((m) => m.id === data[0].id) : -1;
       setMessages((prev) => {
-        if (reset || q || data.length < 60) return reconcileMessages(prev, data);
+        // Messages still on their way stay at the end until the server returns them.
+        const local = prev.filter((m) => m.pending && !data.some((d) => d.nonce === m.nonce));
+        if (reset || data.length < 60) return reconcileMessages(prev, [...data, ...local]);
         const overlap = prev.findIndex((m) => m.id === data[0].id);
-        return reconcileMessages(prev, overlap > 0 ? [...prev.slice(0, overlap), ...data] : data);
+        return reconcileMessages(prev, [
+          ...(overlap > 0 ? prev.slice(0, overlap) : []),
+          ...data,
+          ...local,
+        ]);
       });
       // A non-overlapping window means over 60 new messages arrived while offline.
       // Expose older history again; retaining the old "fully loaded" flag would hide it.
-      if (reset || q || boundary < 0 || data.length < 60) setHasOlder(data.length === 60);
-      if (!q && data.length) await markRead(id, data.at(-1)!.id);
+      if (reset || boundary < 0 || data.length < 60) setHasOlder(data.length === 60);
+      if (data.length) await markRead(id, data.at(-1)!.id);
     },
     [markRead],
   );
@@ -995,7 +773,7 @@ export default function App() {
   useLayoutEffect(() => {
     if (!activeId || !me) return;
     let valid = true;
-    const cached = !messageQuery ? conversationCache.current.get(activeId) : undefined;
+    const cached = conversationCache.current.get(activeId);
     setLoading(!cached);
     setPaging(false);
     setAwayFromBottom(cached ? !cached.following : false);
@@ -1009,37 +787,38 @@ export default function App() {
     setHasOlder(cached?.hasOlder || false);
     setMembers([]);
     followBottom.current = cached?.following ?? true;
-    const timer = setTimeout(
-      () => {
-        Promise.all([
-          loadMessages(activeId, !cached),
-          api<Person[]>(`/chats/${activeId}/members`).then((data) => {
-            if (valid) setMembers(data);
-          }),
-        ])
-          .then(() => {
-            if (valid) refreshChats().catch(() => {});
-          })
-          .catch((e) => {
-            if (!valid) return;
-            if (e instanceof ApiError && [403, 404].includes(e.status)) {
-              conversationCache.current.delete(activeId);
-              setMessages([]);
-            }
-            report(e);
-          })
-          .finally(() => {
-            if (valid) setLoading(false);
-          });
-      },
-      messageQuery ? 250 : 0,
-    );
+    const timer = setTimeout(() => {
+      Promise.all([
+        loadMessages(activeId, !cached),
+        api<Person[]>(`/chats/${activeId}/members`).then((data) => {
+          if (valid) setMembers(data);
+        }),
+      ])
+        .then(() => {
+          if (valid) refreshChats().catch(() => {});
+        })
+        .catch((e) => {
+          if (!valid) return;
+          if (e instanceof ApiError && [403, 404].includes(e.status)) {
+            conversationCache.current.delete(activeId);
+            setMessages([]);
+          }
+          report(e);
+        })
+        .finally(() => {
+          if (valid) setLoading(false);
+        });
+    }, 0);
     return () => {
       valid = false;
       clearTimeout(timer);
       ++requestEpoch.current;
     };
-  }, [activeId, messageQuery, me?.id, loadMessages, refreshChats, report]);
+  }, [activeId, me?.id, loadMessages, refreshChats, report]);
+  const glide = useRef<{ id: string | null; last?: string; height: number }>({
+    id: null,
+    height: 0,
+  });
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
@@ -1052,21 +831,39 @@ export default function App() {
       return;
     }
     const restore = scrollRestore.current;
+    const last = messages.at(-1)?.id;
+    const previous = glide.current;
+    glide.current = { id: activeId, last, height: el.scrollHeight };
     if (restore && restore.id === activeId) {
       el.scrollTop = restore.top + el.scrollHeight - restore.height;
       scrollRestore.current = null;
-    } else if (followBottom.current && !messageQuery) {
+    } else if (followBottom.current) {
       el.scrollTop = el.scrollHeight;
+      // A message arrived at the bottom: instead of jumping, the list slides up by the new
+      // height. Quick bursts add up into one continuous movement rather than a series of jerks.
+      const list = el.querySelector<HTMLElement>('.message-list');
+      const grown = el.scrollHeight - previous.height;
+      if (
+        list &&
+        previous.id === activeId &&
+        previous.last !== last &&
+        grown > 0 &&
+        grown < el.clientHeight &&
+        motionAllowed()
+      ) {
+        const running = list.getAnimations().find((animation) => animation.id === 'glide');
+        const offset = running ? new DOMMatrixReadOnly(getComputedStyle(list).transform).m42 : 0;
+        running?.cancel();
+        const animation = list.animate(
+          [{ transform: `translateY(${offset + grown}px)` }, { transform: 'none' }],
+          { duration: 260, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
+        );
+        animation.id = 'glide';
+      }
     }
-  }, [messages, messageQuery, loading, section, activeId, reply?.id, edit?.message.id, attachment]);
+  }, [messages, loading, section, activeId, reply?.id, edit?.message.id, attachment]);
   useEffect(() => {
-    if (
-      !activeId ||
-      messageQuery ||
-      loading ||
-      messages.some((message) => message.chat_id !== activeId)
-    )
-      return;
+    if (!activeId || loading || messages.some((message) => message.chat_id !== activeId)) return;
     const cache = conversationCache.current;
     cache.delete(activeId);
     cache.set(activeId, {
@@ -1084,14 +881,14 @@ export default function App() {
       retained -= cache.get(oldest)!.messages.length;
       cache.delete(oldest);
     }
-  }, [activeId, messageQuery, messages, hasOlder, loading]);
+  }, [activeId, messages, hasOlder, loading]);
   useEffect(() => {
     const dismiss = (event: PointerEvent) => {
       const target = event.target as Element;
       document
         .querySelectorAll('details.message-menu[open], details.chat-actions[open]')
         .forEach((menu) => {
-          if (!menu.contains(target)) menu.removeAttribute('open');
+          if (!menu.contains(target)) closeMenu(menu);
         });
       if (!target.closest('.emoji-wrap')) setEmojiOpen(false);
     };
@@ -1101,7 +898,7 @@ export default function App() {
         'details.message-menu[open], details.chat-actions[open]',
       );
       if (menus.length) {
-        menus.forEach((menu) => menu.removeAttribute('open'));
+        menus.forEach((menu) => closeMenu(menu));
         return;
       }
       if (!editRequest.current) setEditing(null);
@@ -1135,13 +932,203 @@ export default function App() {
     const el = scroller.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
-      if (followBottom.current && !queryRef.current) el.scrollTop = el.scrollHeight;
+      if (followBottom.current) el.scrollTop = el.scrollHeight;
     });
     observer.observe(el);
     const content = el.querySelector('.message-list');
     if (content) observer.observe(content);
     return () => observer.disconnect();
   }, [activeId, section, ready, me?.id, loading]);
+  // Chat list: when a conversation moves (new message, pin), slide rows to their new places.
+  // Filter and search changes rebuild the list and are not animated.
+  const chatList = useRef<HTMLDivElement>(null);
+  const chatTops = useRef<{ key: string; tops: Map<string, number> }>({ key: '', tops: new Map() });
+  const listKey = `${filter}|${listQuery}`;
+  const listOrder = chats.map((c) => `${c.id}:${c.pinned ? 1 : 0}`).join();
+  useLayoutEffect(() => {
+    const list = chatList.current;
+    if (!list) return;
+    const previous = chatTops.current;
+    const tops = new Map<string, number>();
+    const animate = previous.key === listKey && previous.tops.size > 0 && motionAllowed();
+    list.querySelectorAll<HTMLElement>('[data-chat-id]').forEach((row) => {
+      const id = row.dataset.chatId!;
+      tops.set(id, row.offsetTop);
+      if (!animate) return;
+      const before = previous.tops.get(id);
+      if (before === undefined)
+        row.animate(
+          [
+            { opacity: 0, translate: '0 -8px' },
+            { opacity: 1, translate: '0 0' },
+          ],
+          {
+            duration: 240,
+            easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
+          },
+        );
+      else if (before !== row.offsetTop)
+        row.animate([{ translate: `0 ${before - row.offsetTop}px` }, { translate: '0 0' }], {
+          duration: 320,
+          easing: 'cubic-bezier(0.77, 0, 0.175, 1)',
+        });
+    });
+    chatTops.current = { key: listKey, tops };
+  }, [listOrder, listKey]);
+  /**
+   * Galinka links, opened from the address bar or the QR scanner: sign-in approval, a shared
+   * theme, someone's profile, a group invite. Returns false for anything else.
+   */
+  function openLink(href: string) {
+    let url: URL;
+    try {
+      url = new URL(href, location.href);
+    } catch {
+      return false;
+    }
+    if (url.origin !== location.origin && url.hostname !== 'mess.quiby.me') return false;
+    const params = url.searchParams;
+    const login = params.get('login'),
+      theme = params.get('theme'),
+      username = params.get('u'),
+      join = params.get('join');
+    if (login) setLoginRequest(login);
+    else if (theme) {
+      const decoded = decodeTheme(theme);
+      if (decoded) setThemeImport(decoded);
+      else setError('Ссылка на тему повреждена.');
+    } else if (username) {
+      if (username === me?.username) setSection('settings');
+      else
+        api<Person[]>(`/users?q=${encodeURIComponent(username)}`)
+          .then((people) => {
+            const match = people.find((person) => person.username === username);
+            if (match) setPerson(match);
+            else setError('Пользователь из ссылки не найден.');
+          })
+          .catch(report);
+    } else if (join) {
+      if (demo) setError('Приглашения в группы недоступны в демоверсии.');
+      else
+        api<{ id: string }>('/join', 'POST', { token: join })
+          .then(async (result) => {
+            await refreshChats();
+            select(result.id);
+          })
+          .catch(report);
+    } else return false;
+    return true;
+  }
+  // Links in the address bar; ?join= on first load is handled with the chat list above.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (!me || params.has('join') || !['login', 'theme', 'u'].some((key) => params.has(key)))
+      return;
+    openLink(location.href);
+    ['login', 'theme', 'u'].forEach((key) => params.delete(key));
+    history.replaceState({}, '', `${location.pathname}${params.size ? `?${params}` : ''}`);
+  }, [me?.id]);
+  // Search in a chat, as in Telegram: the conversation stays whole; arrows walk the matches
+  // from newest to oldest, loading older history when a match is further up.
+  useEffect(() => {
+    setHits(null);
+    const query = messageQuery.trim();
+    if (!activeId || !searchOpen || query.length < 2) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      api<Message[]>(
+        `/chats/${activeId}/messages?q=${encodeURIComponent(query)}`,
+        'GET',
+        undefined,
+        { signal: controller.signal },
+      )
+        .then((matches) => {
+          const ids = matches.map((message) => message.id).reverse();
+          setHits(ids);
+          setHitIndex(0);
+          if (ids[0]) void showMessage(ids[0]);
+        })
+        .catch((cause) => {
+          if (!controller.signal.aborted) report(cause);
+        });
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [messageQuery, activeId, searchOpen]);
+  function stepHit(delta: number) {
+    if (!hits?.length) return;
+    const next = Math.max(0, Math.min(hits.length - 1, hitIndex + delta));
+    setHitIndex(next);
+    void showMessage(hits[next]);
+  }
+  // Search in the sidebar: chats, people and messages from every chat, as in Telegram.
+  useEffect(() => {
+    const query = listQuery.trim();
+    if (query.length < 2) {
+      setFound(null);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      const options = { signal: controller.signal };
+      Promise.all([
+        api<SearchHit[]>(`/search?q=${encodeURIComponent(query)}`, 'GET', undefined, options),
+        api<Person[]>(`/users?q=${encodeURIComponent(query)}`, 'GET', undefined, options),
+      ])
+        .then(([messages, people]) => setFound({ query, messages, people }))
+        .catch((cause) => {
+          if (!controller.signal.aborted) report(cause);
+        });
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [listQuery]);
+  // A message picked in search opens once its chat has loaded.
+  useEffect(() => {
+    if (
+      !jumpTarget ||
+      loading ||
+      activeId !== jumpTarget.chat ||
+      !messages.some((message) => message.chat_id === jumpTarget.chat)
+    )
+      return;
+    setJumpTarget(null);
+    void showMessage(jumpTarget.id);
+  }, [jumpTarget, loading, activeId, messages]);
+  // Folders: the list slides in from the side of the folder chosen, the underline follows.
+  const folderTabs = useTabIndicator(filter);
+  const folderMove = useRef({ filter, dir: '' });
+  if (folderMove.current.filter !== filter)
+    folderMove.current = {
+      filter,
+      dir: folders.indexOf(filter) > folders.indexOf(folderMove.current.filter) ? 'next' : 'prev',
+    };
+  const swipe = useRef<{ x: number; y: number } | null>(null);
+  const info = usePresence(infoOpen, 260);
+  const search = usePresence(searchOpen, 160);
+  // Keep the last reply, edit and error on screen while their bars fold away.
+  const context = edit || reply ? { edit, reply } : null;
+  const lastContext = useRef(context);
+  if (context) lastContext.current = context;
+  const contextBar = usePresence(Boolean(context), 160);
+  const shownContext = context || lastContext.current;
+  const lastError = useRef(error);
+  if (error) lastError.current = error;
+  const errorBar = usePresence(Boolean(error), 160);
+  // Phone layout: animate list → chat as a push and chat → list as a pop; tabs switch instantly.
+  const shell = useRef<HTMLDivElement>(null);
+  const pane = activeId && section === 'chats' ? 'chat' : section;
+  const lastPane = useRef(pane);
+  useLayoutEffect(() => {
+    const el = shell.current;
+    if (el && lastPane.current !== pane)
+      el.dataset.nav = pane === 'chat' ? 'push' : lastPane.current === 'chat' ? 'pop' : '';
+    lastPane.current = pane;
+  }, [pane]);
   function select(id: string) {
     if (window.innerWidth <= 1080) setInfoOpen(false);
     setActiveId(id);
@@ -1165,9 +1152,9 @@ export default function App() {
   function closeMenus() {
     document
       .querySelectorAll('details.message-menu[open], details.chat-actions[open]')
-      .forEach((menu) => menu.removeAttribute('open'));
+      .forEach((menu) => closeMenu(menu));
   }
-  function positionMessageMenu(details: HTMLDetailsElement) {
+  function positionMessageMenu(details: HTMLDetailsElement, point?: { x: number; y: number }) {
     if (!details.open) return;
     setCopiedMessageId(null);
     const menu = details.querySelector<HTMLElement>('.message-menu-content');
@@ -1177,18 +1164,29 @@ export default function App() {
     const width = Math.min(240, window.innerWidth - 24);
     const height = Math.min(menu.scrollHeight, (viewport?.height ?? window.innerHeight) - 24);
     const origin = viewport?.offsetTop ?? 0;
-    const rect = summary.getBoundingClientRect();
-    const desiredLeft = details.closest('.own') ? rect.left : rect.right - width;
-    const desiredTop =
-      rect.top - height - 8 >= origin + 12 ? rect.top - height - 8 : rect.bottom + 8;
-    menu.style.setProperty(
-      '--message-menu-x',
-      `${Math.max(12, Math.min(desiredLeft, window.innerWidth - width - 12))}px`,
+    const bottom = origin + (viewport?.height ?? window.innerHeight);
+    const own = Boolean(details.closest('.own'));
+    // Right click and long press open at the pointer; the handle opens next to itself.
+    const rect = point
+      ? { left: point.x, right: point.x, top: point.y, bottom: point.y }
+      : summary.getBoundingClientRect();
+    const left = Math.max(
+      12,
+      Math.min(
+        point ? (own ? rect.left - width : rect.left) : own ? rect.left : rect.right - width,
+        window.innerWidth - width - 12,
+      ),
     );
-    menu.style.setProperty(
-      '--message-menu-y',
-      `${Math.max(origin + 12, Math.min(desiredTop, origin + (viewport?.height ?? window.innerHeight) - height - 12))}px`,
+    const above = rect.top - height - 8 >= origin + 12;
+    const top = Math.max(
+      origin + 12,
+      Math.min(above ? rect.top - height - 8 : rect.bottom + 8, bottom - height - 12),
     );
+    menu.style.setProperty('--message-menu-x', `${left}px`);
+    menu.style.setProperty('--message-menu-y', `${top}px`);
+    // Grow out of the point it was opened from.
+    const anchorX = Math.max(0, Math.min(width, (point || own ? rect.left : rect.right) - left));
+    menu.style.transformOrigin = `${anchorX}px ${above ? '100%' : '0'}`;
   }
   function startReply(message: Message) {
     if (sendingChats.current.has(message.chat_id)) return;
@@ -1232,19 +1230,24 @@ export default function App() {
       setError('Не удалось скопировать. Выделите текст сообщения и скопируйте вручную.');
     }
   }
-  function attachFile(file: File) {
-    if (!activeId || edit || sending) return;
+  async function attachFile(source: File, original = false) {
+    const id = activeId;
+    if (!id || edit || sending) return;
+    const file = original ? source : await compressImage(source);
     if (file.size > 20 * 1024 * 1024) {
-      setError('Максимальный размер файла — 20 МБ.');
+      setError('Файл больше 20 МБ.');
       return;
     }
-    setAttachments((previous) => ({ ...previous, [activeId]: { file } }));
+    setAttachments((previous) => ({
+      ...previous,
+      [id]: { file, source: file === source ? undefined : source },
+    }));
     setTransfers((previous) => {
       const next = { ...previous };
-      delete next[activeId];
+      delete next[id];
       return next;
     });
-    delete nonces.current[activeId];
+    delete nonces.current[id];
   }
   async function setChatPreference(
     chat: Chat,
@@ -1273,7 +1276,12 @@ export default function App() {
       await saveEdit();
       return;
     }
-    if (!activeId || sendingChats.current.has(activeId) || (!draft.trim() && !attachment)) return;
+    if (!activeId || (!draft.trim() && !attachment)) return;
+    if (!attachment) {
+      sendText(activeId, draft.trim(), replies[activeId]);
+      return;
+    }
+    if (sendingChats.current.has(activeId)) return;
     const id = activeId,
       text = draft.trim(),
       originalDraft = draft,
@@ -1352,6 +1360,77 @@ export default function App() {
       setSendingIds([...sendingChats.current]);
     }
   }
+  /**
+   * Text goes out optimistically, as in Telegram: the bubble appears at once, the field clears and
+   * stays usable, and sends in one chat queue up so they arrive in order. The server's copy
+   * replaces the bubble by its nonce; a failed one stays with a retry button.
+   */
+  function sendText(id: string, text: string, replyTo?: Message, nonce?: string) {
+    const messageNonce = nonce ?? nonces.current[id] ?? crypto.randomUUID();
+    delete nonces.current[id];
+    const local: Message = {
+      id: `local-${messageNonce}`,
+      chat_id: id,
+      sender_id: me!.id,
+      sender: me!,
+      body: text,
+      created_at: new Date().toISOString(),
+      nonce: messageNonce,
+      file: null,
+      reactions: [],
+      read_by: 0,
+      reply: replyTo
+        ? {
+            id: replyTo.id,
+            body: replyTo.body,
+            sender: { id: replyTo.sender.id, name: replyTo.sender.name },
+            file_name: replyTo.file?.name,
+          }
+        : null,
+      pending: true,
+    };
+    if (activeRef.current === id) {
+      followBottom.current = true;
+      setAwayFromBottom(false);
+      setNewMessageIds([local.id]);
+      setMessages((previous) => [
+        ...previous.filter((message) => message.nonce !== messageNonce),
+        local,
+      ]);
+    }
+    if (!nonce) {
+      setDrafts((previous) => ({ ...previous, [id]: '' }));
+      setReplies((previous) => {
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
+    }
+    const post = () =>
+      api(`/chats/${id}/messages`, 'POST', {
+        body: text,
+        nonce: messageNonce,
+        replyTo: replyTo?.id,
+      });
+    const queued = (textQueue.current[id] ?? Promise.resolve()).then(post);
+    textQueue.current[id] = queued.catch(() => {});
+    queued
+      .then(() => Promise.all([loadMessages(id), refreshChats()]))
+      .catch((error) => {
+        if (error instanceof ApiError && error.status === 401) {
+          report(error);
+          return;
+        }
+        // Keep the bubble with a retry button; the same nonce makes the retry safe.
+        setMessages((previous) =>
+          previous.map((message) =>
+            message.nonce === messageNonce && message.pending
+              ? { ...message, failed: true }
+              : message,
+          ),
+        );
+      });
+  }
   async function react(message: Message, emoji: string) {
     try {
       await api(`/chats/${message.chat_id}/messages/${message.id}/reactions`, 'POST', { emoji });
@@ -1373,22 +1452,12 @@ export default function App() {
   }
   async function invite() {
     if (!activeId) return;
-    setInviteUrl('');
-    setModal('invite');
     try {
       const r = await api<{ url: string }>(`/chats/${activeId}/invite`, 'POST');
       setInviteUrl(r.url);
+      setModal('invite');
     } catch (e) {
       report(e);
-    }
-  }
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(inviteUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      setError('Не удалось скопировать. Выделите ссылку и скопируйте вручную.');
     }
   }
   async function logout() {
@@ -1407,29 +1476,53 @@ export default function App() {
       report(e);
     }
   }
+  /** Prepend one page of older history. Returns false when there is nothing older. */
   async function loadOlder() {
-    if (!activeId || !messages.length || paging) return;
+    const id = activeRef.current;
+    const oldest = messagesRef.current.find((message) => !message.pending);
+    if (!id || !oldest || paging) return false;
     setPaging(true);
-    const id = activeId,
-      q = messageQuery,
-      epoch = requestEpoch.current;
+    const epoch = requestEpoch.current;
     try {
       const data = await api<Message[]>(
-        `/chats/${id}/messages?before=${encodeURIComponent(messages[0].id)}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
+        `/chats/${id}/messages?before=${encodeURIComponent(oldest.id)}`,
       );
-      if (activeRef.current !== id || queryRef.current !== q || epoch !== requestEpoch.current)
-        return;
+      if (activeRef.current !== id || epoch !== requestEpoch.current) return false;
       followBottom.current = false;
       setAwayFromBottom(true);
       const el = scroller.current;
       if (el) scrollRestore.current = { id, top: el.scrollTop, height: el.scrollHeight };
-      setMessages((prev) => [...data.filter((m) => !prev.some((old) => old.id === m.id)), ...prev]);
-      setHasOlder(data.length === 60);
+      // Committed at once, so a caller looking for a message finds it in the DOM.
+      flushSync(() => {
+        setMessages((prev) => [
+          ...data.filter((m) => !prev.some((old) => old.id === m.id)),
+          ...prev,
+        ]);
+        setHasOlder(data.length === 60);
+      });
+      return data.length > 0;
     } catch (e) {
-      if (activeRef.current === id && queryRef.current === q) report(e);
+      if (activeRef.current === id) report(e);
+      return false;
     } finally {
-      if (activeRef.current === id && queryRef.current === q) setPaging(false);
+      if (activeRef.current === id) setPaging(false);
     }
+  }
+  /** Scroll to a message and light it up, loading older pages until it is on screen. */
+  async function showMessage(messageId: string) {
+    const id = activeRef.current;
+    for (let page = 0; page < 40 && id === activeRef.current; page++) {
+      const row = scroller.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+      if (row) {
+        row.scrollIntoView({ block: 'center', behavior: motionAllowed() ? 'smooth' : 'auto' });
+        row.classList.remove('flash');
+        void row.offsetWidth;
+        row.classList.add('flash');
+        return;
+      }
+      if (!(await loadOlder())) break;
+    }
+    if (id === activeRef.current) setError('Сообщение не найдено в истории.');
   }
   async function downloadFile(file: Attachment) {
     if (demo) {
@@ -1517,6 +1610,22 @@ export default function App() {
       closeMenus();
       setModal('delete');
     },
+    profile: (sender) => {
+      closeMenus();
+      setPerson(sender);
+    },
+    retry: (message) => {
+      setMessages((previous) =>
+        previous.map((item) => (item.id === message.id ? { ...item, failed: false } : item)),
+      );
+      const original = message.reply
+        ? messagesRef.current.find((item) => item.id === message.reply!.id)
+        : undefined;
+      sendText(message.chat_id, message.body, original, message.nonce);
+    },
+    discard: (message) =>
+      setMessages((previous) => previous.filter((item) => item.id !== message.id)),
+    jump: (id) => void showMessage(id),
   };
   // Keep the timeline independent from composer keystrokes while callbacks see current state.
   const messageActions = useMemo<MessageActions>(
@@ -1526,16 +1635,19 @@ export default function App() {
       copy: (message) => latestMessageActions.current.copy(message),
       react: (message, emoji) => latestMessageActions.current.react(message, emoji),
       download: (file) => latestMessageActions.current.download(file),
-      menu: (details) => latestMessageActions.current.menu(details),
+      menu: (details, point) => latestMessageActions.current.menu(details, point),
       remove: (message) => latestMessageActions.current.remove(message),
+      jump: (id) => latestMessageActions.current.jump(id),
+      profile: (sender) => latestMessageActions.current.profile(sender),
+      retry: (message) => latestMessageActions.current.retry(message),
+      discard: (message) => latestMessageActions.current.discard(message),
     }),
     [],
   );
   if (!ready)
     return (
-      <div className="boot">
-        <img src="/icon.svg" alt="Galinka" />
-        <p>Загрузка…</p>
+      <div className="boot" role="status">
+        <img src="/icon.svg" alt="Galinka" width="40" height="40" />
       </div>
     );
   if (!me)
@@ -1558,94 +1670,66 @@ export default function App() {
         )}
       </>
     );
+  async function refreshMembers() {
+    if (!active) return;
+    const id = active.id;
+    await refreshChats();
+    const people = await api<Person[]>(`/chats/${id}/members`);
+    if (activeRef.current === id) setMembers(people);
+  }
+  const preview = (c: Chat) => {
+    const file = c.last_message?.file;
+    return (
+      c.last_message?.body ||
+      (file?.mime?.startsWith('audio/')
+        ? 'Голосовое сообщение'
+        : file && isVideoNote(file)
+          ? 'Кружок'
+          : file?.mime?.startsWith('video/')
+            ? 'Видео'
+            : file?.mime?.startsWith('image/')
+              ? 'Фотография'
+              : file?.name || (c.last_message?.file_id ? 'Файл' : 'Нет сообщений'))
+    );
+  };
+  const subtitle = (chat: Chat) =>
+    chat.kind === 'saved'
+      ? 'Заметки и файлы'
+      : chat.kind === 'group'
+        ? `${chat.member_count} ${plural(chat.member_count, 'участник', 'участника', 'участников')}`
+        : `@${chat.peer?.username || ''}`;
+  // On a phone the Chats tab returns to the list; wider layouts keep the open conversation.
+  const openSection = (next: Section) => {
+    setSection(next);
+    if (next === 'chats' && matchMedia(narrowLayout).matches) setActiveId(null);
+  };
   return (
-    <div className={`app-shell ${activeId && section === 'chats' ? 'has-active' : ''}`}>
-      <nav className="rail" aria-label="Основная навигация">
-        <a className="rail-logo" href="/app" aria-label="Galinka">
-          <img src="/icon.svg" alt="" />
-        </a>
-        <div className="rail-links">
-          <IconButton
-            label="Чаты"
-            className={section === 'chats' ? 'active' : ''}
-            onClick={() => setSection('chats')}
-          >
-            <MessageCircle size={23} />
-            {unread > 0 && <span className="rail-dot" />}
-          </IconButton>
-          <IconButton
-            label="Модули"
-            className={section === 'modules' ? 'active' : ''}
-            onClick={() => setSection('modules')}
-          >
-            <Puzzle size={23} />
-          </IconButton>
-          <IconButton
-            label="Избранное"
-            onClick={() => {
-              const c = chats.find((c) => c.kind === 'saved');
-              if (c) select(c.id);
-            }}
-          >
-            <Bookmark size={23} />
-          </IconButton>
-          <IconButton
-            label="Объявления"
-            className={section === 'announcements' ? 'active' : ''}
-            onClick={() => setSection('announcements')}
-          >
-            <Megaphone size={23} />
-          </IconButton>
-        </div>
-        <div className="rail-bottom">
-          <ThemeToggle />
-          <>
-            {updates.available && (
-              <IconButton label="Доступно обновление" onClick={() => setSection('settings')}>
-                <Download size={21} />
-              </IconButton>
-            )}
-          </>
-          <IconButton
-            label="Настройки"
-            className={section === 'settings' ? 'active' : ''}
-            onClick={() => setSection('settings')}
-          >
-            <Settings size={22} />
-          </IconButton>
-          <button
-            className="profile-button"
-            aria-label="Мой профиль"
-            onClick={() => {
-              setName(me.name);
-              setModal('profile');
-            }}
-          >
-            <Avatar person={me} size="small" />
-          </button>
-        </div>
-      </nav>
+    <div
+      ref={shell}
+      className={`app-shell ${activeId && section === 'chats' ? 'has-active' : ''} section-${section}`}
+    >
       <aside className="sidebar">
-        <div className="sidebar-brand">
-          <a className="brand" href="/app">
-            galinka<span className="brand-dot">.</span>
-          </a>
-          <span className="sidebar-status">
-            <span className={`status-dot ${!connected ? 'offline' : ''}`} />
-            {demo ? 'Демо' : connected ? 'В сети' : 'Нет связи'}
-          </span>
-        </div>
-        <div className="sidebar-heading">
-          <h1>
-            {filter === 'Архив' ? 'Архив' : 'Чаты'}
-            <span>{filter === 'Архив' ? archivedCount : chats.length - archivedCount}</span>
-          </h1>
-          <IconButton label="Новый чат" className="new-chat" onClick={() => setModal('new')}>
-            <Plus size={21} />
+        <header className="sidebar-head">
+          <h1>{filter === 'Архив' ? 'Архив' : 'Чаты'}</h1>
+          {demo && <span className="demo-badge">Демо</span>}
+          {updates.available && (
+            <IconButton
+              label="Доступно обновление"
+              className="update-dot"
+              onClick={() => setSection('settings')}
+            >
+              <Download size={19} />
+            </IconButton>
+          )}
+          <IconButton label="Сканировать QR-код" onClick={() => setScanning(true)}>
+            <ScanLine size={20} />
           </IconButton>
-        </div>
+          <IconButton label="Новый чат" className="new-chat" onClick={() => setModal('new')}>
+            <SquarePen size={20} />
+          </IconButton>
+        </header>
         <label className="search-field">
-          <Search size={18} />
+          <Search size={17} />
           <input
             aria-label="Найти чат"
             placeholder="Поиск"
@@ -1658,48 +1742,75 @@ export default function App() {
             </button>
           )}
         </label>
-        <div className="chat-filters" aria-label="Фильтр чатов">
-          {['Все', 'Личные', 'Группы'].map((f) => (
-            <button key={f} className={filter === f ? 'selected' : ''} onClick={() => setFilter(f)}>
-              {f}
-            </button>
-          ))}
-          <IconButton
-            label="Непрочитанные"
-            className={filter === 'Непрочитанные' ? 'selected' : ''}
-            onClick={() => setFilter(filter === 'Непрочитанные' ? 'Все' : 'Непрочитанные')}
-          >
-            <SlidersHorizontal size={16} />
-          </IconButton>
-        </div>
-        {(archivedCount > 0 || filter === 'Архив') && (
-          <div className="sidebar-tools">
-            <button
-              className={filter === 'Архив' ? 'archive-link selected' : 'archive-link'}
-              aria-pressed={filter === 'Архив'}
-              onClick={() => setFilter(filter === 'Архив' ? 'Все' : 'Архив')}
-            >
-              {filter === 'Архив' ? <ArrowLeft size={16} /> : <Archive size={16} />}
-              {filter === 'Архив' ? 'Все чаты' : 'Архив'}
-              <span>{archivedCount}</span>
-            </button>
-            <span>
-              {filter === 'Непрочитанные'
-                ? 'Непрочитанные'
-                : filter === 'Архив'
-                  ? 'Скрытые разговоры'
-                  : 'Ваши разговоры'}
-            </span>
+        {filter !== 'Архив' && !listQuery.trim() && (
+          <div className="chat-filters" aria-label="Фильтр чатов" ref={folderTabs}>
+            {folders.slice(0, 4).map((f) => (
+              <button
+                key={f}
+                aria-pressed={filter === f}
+                className={filter === f ? 'selected' : ''}
+                onClick={() => setFilter(f)}
+              >
+                {f}
+              </button>
+            ))}
           </div>
         )}
-        <div className="chat-list">
-          {filtered.map((c, index) => (
-            <Fragment key={c.id}>
-              {((index === 0 && c.pinned) ||
-                (index > 0 && filtered[index - 1].pinned && !c.pinned)) && (
-                <div className="chat-list-label">{c.pinned ? 'Закреплённые' : 'Другие чаты'}</div>
-              )}
+        {listQuery.trim() ? (
+          <SearchResults
+            query={listQuery.trim()}
+            chats={chats}
+            found={found?.query === listQuery.trim() ? found : null}
+            me={me}
+            onChat={(id) => {
+              select(id);
+              setListQuery('');
+            }}
+            onPerson={setPerson}
+            onMessage={(hit) => {
+              select(hit.chat_id);
+              setListQuery('');
+              setJumpTarget({ chat: hit.chat_id, id: hit.id });
+            }}
+          />
+        ) : (
+          <div
+            className="chat-list"
+            ref={chatList}
+            key={filter}
+            data-dir={folderMove.current.dir}
+            // Phones: a horizontal swipe moves to the next or previous folder.
+            onTouchStart={(event) => {
+              const touch = event.touches[0];
+              swipe.current =
+                event.touches.length === 1 ? { x: touch.clientX, y: touch.clientY } : null;
+            }}
+            onTouchEnd={(event) => {
+              const start = swipe.current;
+              swipe.current = null;
+              if (!start || filter === 'Архив') return;
+              const touch = event.changedTouches[0];
+              const dx = touch.clientX - start.x;
+              if (Math.abs(dx) < 70 || Math.abs(dx) < 2 * Math.abs(touch.clientY - start.y)) return;
+              const next = folders.indexOf(filter) + (dx < 0 ? 1 : -1);
+              if (next >= 0 && next < 4) setFilter(folders[next]);
+            }}
+          >
+            {(archivedCount > 0 || filter === 'Архив') && (
               <button
+                className={filter === 'Архив' ? 'archive-link selected' : 'archive-link'}
+                aria-pressed={filter === 'Архив'}
+                onClick={() => setFilter(filter === 'Архив' ? 'Все' : 'Архив')}
+              >
+                {filter === 'Архив' ? <ArrowLeft size={18} /> : <Archive size={18} />}
+                <span>{filter === 'Архив' ? 'Все чаты' : 'Архив'}</span>
+                {filter !== 'Архив' && <small>{archivedCount}</small>}
+              </button>
+            )}
+            {filtered.map((c) => (
+              <button
+                key={c.id}
+                data-chat-id={c.id}
                 className={`chat-item ${activeId === c.id && section === 'chats' ? 'selected' : ''}`}
                 onClick={() => select(c.id)}
               >
@@ -1708,78 +1819,112 @@ export default function App() {
                   <span className="chat-item-title">
                     <strong>{c.title}</strong>
                     <span className="chat-flags">
-                      {c.pinned && <Pin size={12} aria-label="Закреплён" />}
-                      {c.muted && <BellOff size={12} aria-label="Без уведомлений" />}
+                      {c.muted && <BellOff size={13} aria-label="Без уведомлений" />}
                     </span>
-                    <time>{c.last_message ? time(c.last_message.created_at) : ''}</time>
+                    <time>{c.last_message ? listTime(c.last_message.created_at) : ''}</time>
                   </span>
                   <span className="chat-item-preview">
                     <span>
                       {drafts[c.id] || attachments[c.id] ? (
-                        <span className="chat-draft">
-                          Черновик: {drafts[c.id] || attachments[c.id].file.name}
-                        </span>
+                        <>
+                          <span className="chat-draft">Черновик:</span>{' '}
+                          {drafts[c.id] || fileLabel(attachments[c.id].file.name)}
+                        </>
                       ) : (
                         <>
                           {c.last_message?.sender_id === me.id && (
-                            <Check size={13} aria-label="Отправлено" />
-                          )}{' '}
-                          {c.last_message?.body ||
-                            (c.last_message?.file?.mime?.startsWith('audio/')
-                              ? 'Голосовое сообщение'
-                              : c.last_message?.file?.mime?.startsWith('image/')
-                                ? 'Фотография'
-                                : c.last_message?.file?.name ||
-                                  (c.last_message?.file_id ? 'Файл' : 'Нет сообщений'))}
+                            <span className="chat-you">Вы: </span>
+                          )}
+                          {preview(c)}
                         </>
                       )}
                     </span>
-                    {c.unread > 0 && (
-                      <b className={`unread ${c.muted ? 'muted-unread' : ''}`}>
+                    {c.unread > 0 ? (
+                      <b key={c.unread} className={`unread ${c.muted ? 'muted-unread' : ''}`}>
                         {c.unread > 99 ? '99+' : c.unread}
                       </b>
+                    ) : (
+                      c.pinned && <Pin size={13} className="pin-mark" aria-label="Закреплён" />
                     )}
                   </span>
                 </span>
               </button>
-            </Fragment>
-          ))}
-          {!filtered.length && (
-            <div className="list-empty">
-              <MessageCircle size={24} />
-              <p>
-                {listQuery
-                  ? 'Чат не найден'
-                  : filter === 'Архив'
-                    ? 'В архиве пока пусто'
-                    : 'Пока нет чатов'}
-              </p>
-              <button className="text-button" onClick={() => setModal('new')}>
-                Написать другу <Plus size={16} />
-              </button>
-            </div>
-          )}
-        </div>
+            ))}
+            {!initialized.current &&
+              !chats.length &&
+              Array.from({ length: 7 }, (_, index) => (
+                <div className="chat-skeleton" key={index} aria-hidden="true">
+                  <span />
+                  <span>
+                    <i style={{ width: `${46 + ((index * 17) % 30)}%` }} />
+                    <i style={{ width: `${64 + ((index * 23) % 28)}%` }} />
+                  </span>
+                </div>
+              ))}
+            {/* Until the first list arrives there is nothing to call empty. */}
+            {!filtered.length && initialized.current && (
+              <div className="list-empty">
+                <p>
+                  {listQuery
+                    ? 'Ничего не найдено'
+                    : filter === 'Архив'
+                      ? 'Архив пуст'
+                      : filter === 'Непрочитанные'
+                        ? 'Всё прочитано'
+                        : 'Чатов пока нет'}
+                </p>
+                {!listQuery && filter === 'Все' && (
+                  <button className="secondary" onClick={() => setModal('new')}>
+                    Новый чат
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </aside>
+      <nav className="app-nav" aria-label="Разделы">
+        {(
+          [
+            ['chats', 'Чаты', MessageCircle],
+            ['announcements', 'Объявления', Megaphone],
+            ['settings', 'Настройки', Settings2],
+          ] as const
+        ).map(([value, label, Icon]) => (
+          <button
+            key={value}
+            className={section === value ? 'active' : ''}
+            aria-current={section === value ? 'page' : undefined}
+            aria-label={label}
+            onClick={() => openSection(value)}
+          >
+            <Icon size={21} />
+            <span>{label}</span>
+            {value === 'chats' && unread > 0 && (
+              <b key={unread} className="nav-badge">
+                {unread > 99 ? '99+' : unread}
+              </b>
+            )}
+          </button>
+        ))}
+      </nav>
       <main className="workspace">
         {demo && (
           <div className="demo-bar">
-            <span>
-              <span className="status-dot" /> Демо · данные в браузере
-            </span>
-            <button onClick={logout}>
-              Войти <ArrowUpRight size={14} />
+            <span>Демо-режим: данные только в этом браузере</span>
+            <button className="text-button" onClick={logout}>
+              Войти
             </button>
           </div>
         )}
         {!connected && !demo && (
           <div className="connection-bar" role="status">
-            <WifiOff size={16} /> Соединение потеряно. Переписка обновится после подключения.
+            <WifiOff size={15} /> Нет соединения. Переписка обновится после подключения.
           </div>
         )}
-        {error && (
-          <div className="error-bar" role="alert">
-            <span>{error}</span>
+        {errorBar.mounted && (
+          <div className={`error-bar ${errorBar.closing ? 'closing' : ''}`} role="alert">
+            <span>{error || lastError.current}</span>
             <IconButton label="Закрыть ошибку" onClick={() => setError('')}>
               <X size={17} />
             </IconButton>
@@ -1795,19 +1940,12 @@ export default function App() {
               >
                 <ArrowLeft size={22} />
               </IconButton>
-              <Avatar person={active.peer} chat={active} />
               <button className="chat-heading" onClick={() => setInfoOpen((v) => !v)}>
-                <h2>
-                  {active.title}
-                  {active.kind === 'group' && <ChevronDown size={16} />}
-                </h2>
-                <p>
-                  {active.kind === 'saved'
-                    ? 'Личные заметки'
-                    : active.kind === 'group'
-                      ? `${active.member_count} ${plural(active.member_count)}`
-                      : `@${active.peer?.username || ''}`}
-                </p>
+                <Avatar person={active.peer} chat={active} size="small" />
+                <span>
+                  <h2>{active.title}</h2>
+                  <p>{subtitle(active)}</p>
+                </span>
               </button>
               <div className="header-actions">
                 <IconButton
@@ -1818,22 +1956,23 @@ export default function App() {
                     setMessageQuery('');
                   }}
                 >
-                  <Search size={21} />
+                  <Search size={20} />
                 </IconButton>
                 <IconButton
                   label="О чате"
                   className={`info-toggle ${infoOpen ? 'active' : ''}`}
                   onClick={() => setInfoOpen((v) => !v)}
                 >
-                  <Info size={21} />
+                  <Info size={20} />
                 </IconButton>
                 <details className="chat-actions">
                   <summary
+                    onClick={toggleMenu}
                     className="icon-button"
                     aria-label="Действия с чатом"
                     title="Действия с чатом"
                   >
-                    <MoreHorizontal size={22} />
+                    <MoreVertical size={20} />
                   </summary>
                   <div className="chat-actions-menu">
                     <button
@@ -1860,16 +1999,6 @@ export default function App() {
                       {active.archived ? <ArchiveRestore size={17} /> : <Archive size={17} />}
                       {active.archived ? 'Вернуть из архива' : 'В архив'}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        closeMenus();
-                        setInfoOpen(true);
-                      }}
-                    >
-                      <Info size={17} />
-                      Информация о чате
-                    </button>
                     {active.kind === 'group' && (
                       <button
                         type="button"
@@ -1886,16 +2015,41 @@ export default function App() {
                 </details>
               </div>
             </header>
-            {searchOpen && (
-              <div className="message-search">
-                <Search size={18} />
+            {search.mounted && (
+              <div className={`message-search ${search.closing ? 'closing' : ''}`}>
+                <Search size={17} />
                 <input
                   aria-label="Поиск по сообщениям"
-                  placeholder="Поиск по всей переписке"
+                  placeholder="Поиск в чате"
                   value={messageQuery}
                   onChange={(e) => setMessageQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Enter goes to the next older match, Shift+Enter back to a newer one.
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    stepHit(e.shiftKey ? -1 : 1);
+                  }}
                   autoFocus
                 />
+                {hits && (
+                  <span className="search-count" role="status">
+                    {hits.length ? `${hitIndex + 1} из ${hits.length}` : 'Не найдено'}
+                  </span>
+                )}
+                <IconButton
+                  label="Предыдущее совпадение"
+                  disabled={!hits || hitIndex >= hits.length - 1}
+                  onClick={() => stepHit(1)}
+                >
+                  <ChevronUp size={20} />
+                </IconButton>
+                <IconButton
+                  label="Следующее совпадение"
+                  disabled={!hits || hitIndex <= 0}
+                  onClick={() => stepHit(-1)}
+                >
+                  <ChevronDown size={20} />
+                </IconButton>
                 <IconButton
                   label="Закрыть поиск"
                   onClick={() => {
@@ -1908,13 +2062,36 @@ export default function App() {
               </div>
             )}
             <div className="conversation-layout">
-              <section className="conversation" aria-label="Переписка">
+              <section
+                className={`conversation ${dropping ? 'dropping' : ''}`}
+                aria-label="Переписка"
+                // Desktop: drop a file anywhere on the conversation to attach it.
+                onDragOver={(event) => {
+                  if (!event.dataTransfer.types.includes('Files') || edit || sending) return;
+                  event.preventDefault();
+                  setDropping(true);
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node))
+                    setDropping(false);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setDropping(false);
+                  const file = event.dataTransfer.files[0];
+                  if (file) void attachFile(file);
+                }}
+              >
                 <div
                   className="messages"
                   ref={scroller}
                   {...gestures}
                   onWheel={() => {
                     jumpingToLatest.current = false;
+                    // A floating message menu would stay put while its message scrolls away.
+                    document
+                      .querySelectorAll('details.message-menu[open]')
+                      .forEach((menu) => closeMenu(menu));
                   }}
                   onTouchStart={() => {
                     jumpingToLatest.current = false;
@@ -1937,35 +2114,26 @@ export default function App() {
                   }}
                 >
                   {loading ? (
-                    <div className="messages-loading" role="status">
-                      <span />
-                      <span />
-                      <span />
-                      <p>Загрузка…</p>
+                    // Placeholder bubbles in the shape of a conversation while it loads.
+                    <div className="messages-loading" role="status" aria-label="Загрузка">
+                      {skeletonBubbles.map(([own, width], index) => (
+                        <span key={index} className={own ? 'own' : ''} style={{ width }} />
+                      ))}
                     </div>
                   ) : (
                     <>
                       {hasOlder && (
-                        <button className="older-button" onClick={loadOlder} disabled={paging}>
-                          {paging ? 'Загружаем…' : 'Более ранние сообщения'}
+                        <button
+                          className="older-button"
+                          onClick={() => void loadOlder()}
+                          disabled={paging}
+                        >
+                          {paging ? 'Загрузка…' : 'Более ранние сообщения'}
                         </button>
                       )}
                       {!messages.length && (
                         <div className="conversation-empty">
-                          <span className="empty-mark">
-                            <MessageCircle size={32} />
-                          </span>
-                          <h2>{messageQuery ? 'Ничего не нашлось' : 'Нет сообщений'}</h2>
-                          <p>
-                            {messageQuery
-                              ? 'Попробуйте другое слово или очистите поиск.'
-                              : 'Напишите первое сообщение.'}
-                          </p>
-                          {messageQuery && (
-                            <button className="text-button" onClick={() => setMessageQuery('')}>
-                              Очистить поиск
-                            </button>
-                          )}
+                          <p>Сообщений пока нет</p>
                         </div>
                       )}
                       <MessageList
@@ -1977,37 +2145,43 @@ export default function App() {
                         sending={sending}
                         savingEdit={savingEdit}
                         actions={messageActions}
+                        highlight={
+                          searchOpen && messageQuery.trim().length >= 2 ? messageQuery : undefined
+                        }
                       />
                       <div ref={bottomRef} />
                     </>
                   )}
                 </div>
-                {awayFromBottom && !messageQuery && (
+                <div className="composer-wrap">
+                  {/* Always rendered so it can fade out as well as in. Inside the composer block, so it
+                    always sits above it, however tall the reply bar and draft make it. */}
                   <button
                     type="button"
-                    className="jump-to-latest"
+                    className={`jump-to-latest ${awayFromBottom ? 'shown' : ''}`}
+                    inert={!awayFromBottom}
                     onClick={jumpToLatest}
                     aria-label="К последним сообщениям"
                   >
-                    <ArrowDown size={18} />
-                    <span>К последним</span>
-                    {active.unread > 0 && <b>{active.unread}</b>}
+                    <ArrowDown size={20} />
+                    {active.unread > 0 && <b key={active.unread}>{active.unread}</b>}
                   </button>
-                )}
-                <div className="composer-wrap">
-                  {(edit || reply) && (
-                    <div className={`composer-context ${edit ? 'editing' : ''}`}>
-                      <span className="composer-context-icon">
-                        {edit ? <Pencil size={19} /> : <Reply size={19} />}
-                      </span>
+                  {contextBar.mounted && shownContext && (
+                    <div
+                      className={`composer-context ${shownContext.edit ? 'editing' : ''} ${contextBar.closing ? 'closing' : ''}`}
+                    >
+                      {shownContext.edit ? <Pencil size={18} /> : <Reply size={18} />}
                       <div>
                         <strong>
-                          {edit ? 'Редактирование сообщения' : `Ответ для ${reply!.sender.name}`}
+                          {shownContext.edit ? 'Редактирование' : shownContext.reply!.sender.name}
                         </strong>
                         <p>
-                          {edit
-                            ? edit.message.body || edit.message.file?.name
-                            : reply!.body || reply!.file?.name || 'Сообщение'}
+                          {shownContext.edit
+                            ? shownContext.edit.message.body || shownContext.edit.message.file?.name
+                            : shownContext.reply!.body ||
+                              (shownContext.reply!.file &&
+                                fileLabel(shownContext.reply!.file.name)) ||
+                              'Сообщение'}
                         </p>
                       </div>
                       <IconButton
@@ -2033,6 +2207,15 @@ export default function App() {
                     <AttachmentPreview
                       file={attachment}
                       transfer={activeId ? transfers[activeId] : undefined}
+                      original={
+                        activeId && attachments[activeId]?.source && !transfers[activeId]
+                          ? attachments[activeId].source
+                          : undefined
+                      }
+                      onOriginal={() => {
+                        const source = activeId ? attachments[activeId]?.source : undefined;
+                        if (source) void attachFile(source, true);
+                      }}
                       onRetry={() => void send()}
                       onRemove={() => {
                         if (!activeId) return;
@@ -2057,74 +2240,105 @@ export default function App() {
                       hidden
                       onChange={(e) => {
                         const file = e.target.files?.[0];
-                        if (file) attachFile(file);
+                        if (file) void attachFile(file);
                         e.target.value = '';
                       }}
                     />
-                    <IconButton
-                      label="Прикрепить файл"
-                      disabled={sending || Boolean(edit)}
-                      onClick={() => fileInput.current?.click()}
-                    >
-                      <Paperclip size={21} />
-                    </IconButton>
-                    <textarea
-                      ref={textarea}
-                      enterKeyHint="enter"
-                      aria-label="Сообщение"
-                      placeholder={
-                        edit ? 'Измените сообщение…' : reply ? 'Написать ответ…' : 'Сообщение…'
-                      }
-                      rows={1}
-                      value={composerValue}
-                      maxLength={8000}
-                      readOnly={sending || savingCurrentEdit}
-                      aria-busy={sending || savingCurrentEdit}
-                      onChange={(e) => changeDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (
-                          e.key === 'Enter' &&
-                          !e.shiftKey &&
-                          !e.nativeEvent.isComposing &&
-                          e.nativeEvent.keyCode !== 229 &&
-                          window.matchMedia('(pointer:fine)').matches
-                        ) {
-                          e.preventDefault();
-                          send();
-                        }
-                      }}
-                    />
-                    <div className="emoji-wrap">
-                      {emojiOpen && (
-                        <div className="emoji-picker">
-                          {['😊', '❤', '🌿', '👍', '☕', '🎉', '😂', '🔥'].map((emoji) => (
-                            <button
-                              type="button"
-                              key={emoji}
-                              onClick={() => {
-                                changeDraft(composerValue + emoji);
-                                setEmojiOpen(false);
-                                textarea.current?.focus();
-                              }}
-                            >
-                              {emoji}
-                            </button>
-                          ))}
-                        </div>
-                      )}
+                    <div className="composer-field">
                       <IconButton
-                        label="Добавить эмодзи"
-                        disabled={sending || savingCurrentEdit}
-                        onClick={() => setEmojiOpen((v) => !v)}
+                        label="Прикрепить файл"
+                        disabled={sending || Boolean(edit)}
+                        onClick={() => fileInput.current?.click()}
                       >
-                        <Smile size={22} />
+                        <Paperclip size={21} />
                       </IconButton>
+                      <textarea
+                        ref={textarea}
+                        enterKeyHint="enter"
+                        aria-label="Сообщение"
+                        placeholder={edit ? 'Изменить сообщение' : 'Сообщение'}
+                        rows={1}
+                        value={composerValue}
+                        maxLength={8000}
+                        readOnly={sending || savingCurrentEdit}
+                        aria-busy={sending || savingCurrentEdit}
+                        onChange={(e) => changeDraft(e.target.value)}
+                        onPaste={(e) => {
+                          const file = e.clipboardData.files[0];
+                          if (file && !edit) {
+                            e.preventDefault();
+                            void attachFile(file);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          // As in Telegram Desktop: ↑ in an empty field edits your last message.
+                          if (e.key === 'ArrowUp' && !composerValue && !edit && !attachment) {
+                            const last = [...messages]
+                              .reverse()
+                              .find((message) => message.sender_id === me.id && message.body);
+                            if (last) {
+                              e.preventDefault();
+                              startEdit(last);
+                              return;
+                            }
+                          }
+                          const enterSends = lookPrefs().enterSends;
+                          if (
+                            e.key === 'Enter' &&
+                            !e.shiftKey &&
+                            !e.nativeEvent.isComposing &&
+                            e.nativeEvent.keyCode !== 229 &&
+                            window.matchMedia('(pointer:fine)').matches &&
+                            (enterSends || e.ctrlKey || e.metaKey)
+                          ) {
+                            e.preventDefault();
+                            send();
+                          }
+                        }}
+                      />
+                      <div className="emoji-wrap">
+                        {
+                          <div
+                            className={`emoji-picker ${emojiOpen ? 'open' : ''}`}
+                            inert={!emojiOpen}
+                          >
+                            {['😊', '😂', '❤', '👍', '🙏', '🎉', '🔥', '😢'].map((emoji) => (
+                              <button
+                                type="button"
+                                key={emoji}
+                                onClick={() => {
+                                  changeDraft(composerValue + emoji);
+                                  setEmojiOpen(false);
+                                  textarea.current?.focus();
+                                }}
+                              >
+                                {emoji}
+                              </button>
+                            ))}
+                          </div>
+                        }
+                        <IconButton
+                          label="Добавить эмодзи"
+                          disabled={sending || savingCurrentEdit}
+                          onClick={() => setEmojiOpen((v) => !v)}
+                        >
+                          <Smile size={21} />
+                        </IconButton>
+                      </div>
+                      {!edit && !draft.trim() && !attachment && (
+                        <VideoNoteRecorder
+                          key={active.id}
+                          disabled={sending}
+                          onRecorded={(file) => void attachFile(file)}
+                          onError={setError}
+                        />
+                      )}
                     </div>
                     {!edit && !draft.trim() && !attachment ? (
                       <VoiceRecorder
                         key={active.id}
                         disabled={sending}
-                        onRecorded={attachFile}
+                        onRecorded={(file) => void attachFile(file)}
                         onError={setError}
                       />
                     ) : (
@@ -2144,136 +2358,112 @@ export default function App() {
                         {sending || savingCurrentEdit ? (
                           <LoaderCircle size={20} className="spin" />
                         ) : edit ? (
-                          <Check size={22} />
+                          <Check size={21} />
                         ) : (
-                          <ArrowUp size={22} />
+                          <ArrowUp size={21} />
                         )}
                       </button>
                     )}
                   </form>
-                  <div className="composer-foot">
-                    <span className="desktop-hint">
-                      Enter — отправить · Shift + Enter — перенос
-                    </span>
-                    <span className="mobile-hint">До 20 МБ на файл</span>
-                  </div>
                 </div>
               </section>
-              {infoOpen && (
-                <aside className="chat-info">
-                  <div className="info-mobile-head">
+              {info.mounted && (
+                <aside
+                  className={`chat-info ${info.closing ? 'closing' : ''}`}
+                  aria-label="О чате"
+                  inert={info.closing}
+                >
+                  <div className="info-head">
                     <strong>О чате</strong>
                     <IconButton label="Закрыть информацию" onClick={() => setInfoOpen(false)}>
                       <X size={20} />
                     </IconButton>
                   </div>
-                  <div className="info-profile">
-                    <Avatar chat={active} person={active.peer} size="large" />
-                    <h3>{active.title}</h3>
-                    <p>
-                      {active.kind === 'group'
-                        ? `${active.member_count} ${plural(active.member_count)}`
-                        : active.kind === 'saved'
-                          ? 'Личные заметки'
-                          : `@${active.peer?.username}`}
-                    </p>
-                    {active.kind === 'group' && active.owner_id === me.id && (
-                      <button className="secondary" onClick={invite}>
-                        <Link size={15} />
-                        Пригласить друзей
-                      </button>
-                    )}
-                  </div>
-                  <div className="info-chat-preferences">
+                  <ProfileHero
+                    key={active.id}
+                    chat={active}
+                    person={active.peer}
+                    title={active.title}
+                    subtitle={subtitle(active)}
+                  />
+                  <div className="hero-tiles">
                     <button
-                      type="button"
-                      disabled={preferenceBusy}
-                      onClick={() => void setChatPreference(active, { pinned: !active.pinned })}
-                    >
-                      {active.pinned ? <PinOff size={17} /> : <Pin size={17} />}
-                      {active.pinned ? 'Открепить чат' : 'Закрепить чат'}
-                    </button>
-                    <button
-                      type="button"
                       disabled={preferenceBusy}
                       onClick={() => void setChatPreference(active, { muted: !active.muted })}
                     >
-                      {active.muted ? <Bell size={17} /> : <BellOff size={17} />}
-                      {active.muted ? 'Включить уведомления' : 'Без уведомлений'}
+                      {active.muted ? <Bell size={20} /> : <BellOff size={20} />}
+                      {active.muted ? 'Звук' : 'Без звука'}
                     </button>
                     <button
-                      type="button"
-                      disabled={preferenceBusy}
-                      onClick={() => void setChatPreference(active, { archived: !active.archived })}
+                      onClick={() => {
+                        if (window.innerWidth <= 1180) setInfoOpen(false);
+                        setSearchOpen(true);
+                      }}
                     >
-                      {active.archived ? <ArchiveRestore size={17} /> : <Archive size={17} />}
-                      {active.archived ? 'Вернуть из архива' : 'В архив'}
+                      <Search size={20} />
+                      Поиск
                     </button>
-                    {active.kind === 'group' && (
-                      <button type="button" onClick={() => setModal('group')}>
-                        <Users size={17} />
-                        Управление группой
-                      </button>
+                    {active.kind === 'group' && active.owner_id === me.id && (
+                      <>
+                        <button onClick={invite}>
+                          <QrCode size={20} />
+                          Пригласить
+                        </button>
+                        <button onClick={() => setModal('group')}>
+                          <Users size={20} />
+                          Управление
+                        </button>
+                      </>
                     )}
                   </div>
-                  <div className="info-section">
-                    <div className="section-heading">
-                      <h3>{active.kind === 'saved' ? 'Ваше пространство' : 'Участники'}</h3>
-                      <span>{members.length}</span>
+                  {active.kind !== 'saved' && (
+                    <div className="info-section">
+                      <h4>
+                        Участники <span>{members.length}</span>
+                      </h4>
+                      {members.map((p) => (
+                        <button
+                          type="button"
+                          className="member-row"
+                          key={p.id}
+                          onClick={() => setPerson(p)}
+                        >
+                          <Avatar person={p} size="small" />
+                          <span className="member-name">
+                            <strong>
+                              {p.name}
+                              {p.id === me.id && <small> · вы</small>}
+                            </strong>
+                            <small>@{p.username}</small>
+                          </span>
+                          {p.id === active.owner_id && active.kind === 'group' && (
+                            <span className="owner-label">владелец</span>
+                          )}
+                        </button>
+                      ))}
                     </div>
-                    {members.map((p) => (
-                      <div className="member" key={p.id}>
-                        <Avatar person={p} size="small" />
-                        <span>
-                          {p.name}
-                          {p.id === me.id && <small>это вы</small>}
-                        </span>
-                        {p.id === active.owner_id && <span className="owner-label">создатель</span>}
-                      </div>
-                    ))}
-                  </div>
+                  )}
                   <div className="info-section">
-                    <div className="section-heading">
-                      <h3>Модули чата</h3>
-                      <Puzzle size={15} />
-                    </div>
-                    <div className="module-switch-row">
-                      <span className="nelya-small">
-                        <Sparkles size={19} />
-                      </span>
+                    <div className="settings-row">
                       <div>
-                        <strong>Неля</strong>
-                        <p>Помощник для компании</p>
+                        <h3>Неля</h3>
+                        <p>
+                          Бот для компании: «@неля монетка», «@неля выбери чай | кофе», «@неля
+                          идея».
+                          {active.owner_id !== me.id && ' Включает владелец чата.'}
+                        </p>
                       </div>
                       <button
                         className={`switch ${active.nelya ? 'on' : ''}`}
                         role="switch"
                         aria-checked={active.nelya}
-                        aria-label="Модуль Неля"
+                        aria-label="Неля в этом чате"
                         disabled={working || active.owner_id !== me.id}
                         onClick={() => toggleNelya(active)}
                       >
                         <span />
                       </button>
                     </div>
-                    {active.owner_id !== me.id && (
-                      <p className="tiny muted">Модули подключает создатель чата.</p>
-                    )}
-                    <button
-                      className="text-button all-modules"
-                      onClick={() => setSection('modules')}
-                    >
-                      О модуле
-                      <ArrowUpRight size={15} />
-                    </button>
-                  </div>
-                  <div className="info-footer">
-                    <Lock size={13} />
-                    <span>
-                      Ваша переписка
-                      <br />
-                      <small>Только для участников чата</small>
-                    </span>
                   </div>
                 </aside>
               )}
@@ -2281,213 +2471,33 @@ export default function App() {
           </>
         ) : section === 'chats' ? (
           <div className="workspace-empty">
-            <Leaf size={44} />
-            <h2>Выберите чат</h2>
-            <p>Или начните новый разговор.</p>
-            <button className="primary" onClick={() => setModal('new')}>
-              <Plus size={18} />
-              Написать другу
+            <p>Выберите чат слева или начните новый.</p>
+            <button className="secondary" onClick={() => setModal('new')}>
+              Новый чат
             </button>
-          </div>
-        ) : section === 'modules' ? (
-          <div className="content-page" key={section}>
-            <button className="text-button mobile-page-back" onClick={() => setSection('chats')}>
-              <ArrowLeft size={17} />К чатам
-            </button>
-            <div className="page-top">
-              <span className="page-symbol">
-                <Puzzle size={25} />
-              </span>
-              <h1>Чуть больше, чем чат.</h1>
-              <p>
-                Маленькие дополнения для вашей большой компании.
-                <br />
-                Подключайте только то, что вам нравится.
-              </p>
-            </div>
-            <section className="nelya-card">
-              <div className="nelya-art" aria-hidden="true">
-                <span className="nelya-face">
-                  <i />
-                  <i />
-                  <b />
-                </span>
-                <Sparkles className="sparkle-one" size={28} />
-                <Leaf className="sparkle-two" size={30} />
-                <span className="art-caption">приятно познакомиться!</span>
-              </div>
-              <div className="nelya-description">
-                <span className="module-label">Первый модуль Galinka</span>
-                <h2>
-                  Это Неля<span>.</span>
-                </h2>
-                <p>Подбросит монетку, выберет вариант или предложит план.</p>
-                <span className="module-disclosure">
-                  <Lock size={13} /> Монетка, идеи и выбор из ваших вариантов
-                </span>
-                <div className="command-examples">
-                  <code>@неля монетка</code>
-                  <code>@неля идея</code>
-                  <code>@неля выбери чай | кофе</code>
-                </div>
-                <label>
-                  Подключить к разговору
-                  <select value={activeId || ''} onChange={(e) => setActiveId(e.target.value)}>
-                    {chats.map((c) => (
-                      <option value={c.id} key={c.id}>
-                        {c.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {active && (
-                  <button
-                    className={active.nelya ? 'secondary' : 'primary'}
-                    disabled={working || active.owner_id !== me.id}
-                    onClick={() => toggleNelya(active)}
-                  >
-                    {active.nelya ? <Check size={17} /> : <Plus size={17} />}{' '}
-                    {active.nelya ? 'Подключена · отключить' : 'Позвать Нелю'}
-                  </button>
-                )}
-                {active?.owner_id !== me.id && (
-                  <small className="muted">Подключить модуль может создатель чата.</small>
-                )}
-              </div>
-            </section>
           </div>
         ) : section === 'announcements' ? (
           <div className="content-page" key={section}>
-            <button className="text-button mobile-page-back" onClick={() => setSection('chats')}>
-              <ArrowLeft size={17} />К чатам
-            </button>
             <Announcements />
           </div>
         ) : (
-          <div className="content-page settings-page" key="settings">
-            <button className="text-button mobile-page-back" onClick={() => setSection('chats')}>
-              <ArrowLeft size={17} />К чатам
-            </button>
-            <div className="page-top">
-              <span className="page-symbol">
-                <Settings size={25} />
-              </span>
-              <h1>Настройки</h1>
-              <p>Профиль, оформление и уведомления</p>
-            </div>
-            <section className="settings-section">
-              <div className="settings-profile">
-                <Avatar person={me} size="large" />
-                <div>
-                  <h2>{me.name}</h2>
-                  <p>@{me.username}</p>
-                </div>
-                <button
-                  className="secondary"
-                  onClick={() => {
-                    setName(me.name);
-                    setModal('profile');
-                  }}
-                >
-                  Изменить имя
-                </button>
-              </div>
-            </section>
-            <section className="settings-section">
-              <h3>Оформление</h3>
-              <ThemePicker />
-            </section>
-            <MotionSettings />
-            <NotificationSettings state={notifications} demo={demo} />
-            <section className="settings-section gesture-note">
-              <Reply size={22} />
-              <div>
-                <h3>Быстрее одним жестом</h3>
-                <p>
-                  Смахните сообщение вправо, чтобы ответить. Удерживайте сообщение или нажмите
-                  правой кнопкой для действий. Свайп от левого края возвращает к чатам.
-                </p>
-              </div>
-            </section>
-            {me.role === 'admin' && !demo && (
-              <section className="settings-section">
-                <h3>Администрирование</h3>
-                <p>Пользователи, роли и объявления.</p>
-                <a className="secondary" href="/admin">
-                  Панель администратора
-                </a>
-              </section>
-            )}
-            <section className="settings-section">
-              <h3>Приложение</h3>
-              <p>Для телефона и компьютера</p>
-              <button className="primary" onClick={() => setModal('install')}>
-                <Download size={18} />
-                Установить Galinka
-              </button>
-              <div className="platforms">iOS · Android · Windows · macOS · Linux</div>
-            </section>
-            <section className="settings-section privacy-note">
-              <Lock size={22} />
-              <div>
-                <h3>Конфиденциальность</h3>
-                <p>
-                  Чаты доступны участникам и администратору сервера. Сквозного шифрования пока нет.
-                </p>
-              </div>
-            </section>
-            <button className="logout-button" onClick={logout}>
-              <LogOut size={18} />
-              {demo ? 'Выйти из демоверсии' : 'Выйти из аккаунта'}
-            </button>
-            <section className="settings-section">
-              <Updates
-                hasDraft={
-                  Object.keys(attachments).length > 0 || Boolean(editing) || sendingIds.length > 0
-                }
-              />
-            </section>
-            <p className="settings-version">Galinka {__APP_VERSION__} · Сделано для своих</p>
-          </div>
+          <Settings
+            me={me}
+            demo={demo}
+            notifications={notifications}
+            hasDraft={
+              Object.keys(attachments).length > 0 || Boolean(editing) || sendingIds.length > 0
+            }
+            onEditName={() => {
+              setName(me.name);
+              setModal('profile');
+            }}
+            onInstall={() => setModal('install')}
+            onScan={() => setScanning(true)}
+            onLogout={logout}
+          />
         )}
       </main>
-      <nav className="mobile-nav" aria-label="Навигация на телефоне">
-        <button
-          className={section === 'chats' ? 'active' : ''}
-          aria-current={section === 'chats' ? 'page' : undefined}
-          onClick={() => {
-            setSection('chats');
-            setActiveId(null);
-          }}
-        >
-          <MessageCircle size={20} />
-          Чаты
-        </button>
-        <button
-          className={section === 'modules' ? 'active' : ''}
-          aria-current={section === 'modules' ? 'page' : undefined}
-          onClick={() => setSection('modules')}
-        >
-          <Puzzle size={20} />
-          Модули
-        </button>
-        <button
-          className={section === 'settings' ? 'active' : ''}
-          aria-current={section === 'settings' ? 'page' : undefined}
-          onClick={() => setSection('settings')}
-        >
-          <Settings size={20} />
-          Настройки
-        </button>
-        <button
-          className={section === 'announcements' ? 'active' : ''}
-          aria-current={section === 'announcements' ? 'page' : undefined}
-          onClick={() => setSection('announcements')}
-        >
-          <Megaphone size={20} />
-          Объявления
-        </button>
-      </nav>
       {modal === 'new' && (
         <NewChat
           onClose={() => setModal(null)}
@@ -2504,12 +2514,8 @@ export default function App() {
           me={me}
           members={members}
           onClose={() => setModal(null)}
-          onUpdated={async () => {
-            const id = active.id;
-            await refreshChats();
-            const people = await api<Person[]>(`/chats/${id}/members`);
-            if (activeRef.current === id) setMembers(people);
-          }}
+          onOpenPerson={setPerson}
+          onUpdated={refreshMembers}
           onLeft={async () => {
             setModal(null);
             setActiveId(null);
@@ -2521,13 +2527,29 @@ export default function App() {
           }}
         />
       )}
+      {person && (
+        <PersonCard
+          key={person.id}
+          person={person}
+          me={me}
+          chat={active}
+          onClose={() => setPerson(null)}
+          onUpdated={refreshMembers}
+          onMessage={async () => {
+            const { id } = await api<{ id: string }>('/chats', 'POST', {
+              kind: 'direct',
+              userIds: [person.id],
+            });
+            setPerson(null);
+            setModal(null);
+            await refreshChats();
+            select(id);
+          }}
+        />
+      )}
       {modal === 'install' && (
         <Modal error={error} title="Установить Galinka" onClose={() => setModal(null)}>
-          <div className="install-intro">
-            <img src="/icon.svg" alt="" />
-            <p>Выберите приложение для своего устройства.</p>
-          </div>
-          {install ? (
+          {install && (
             <button
               className="primary wide"
               onClick={async () => {
@@ -2536,32 +2558,21 @@ export default function App() {
                 setInstall(null);
               }}
             >
-              Установить Galinka
-              <Download size={18} />
+              Установить веб-приложение
             </button>
-          ) : (
-            <div className="install-steps">
-              <div>
-                <strong>iPhone и iPad</strong>
-                <p>Откройте в Safari → «Поделиться» → «На экран Домой» → «Добавить».</p>
-              </div>
-              <div>
-                <strong>Android</strong>
-                <p>
-                  Скачайте APK в разделе загрузок. Также можно установить веб-версию из меню Chrome.
-                </p>
-              </div>
-              <div>
-                <strong>Windows, macOS и Linux</strong>
-                <p>Установщики и AppImage доступны в разделе загрузок.</p>
-              </div>
-            </div>
           )}
+          <dl className="install-steps">
+            <dt>iPhone и iPad</dt>
+            <dd>Safari → «Поделиться» → «На экран Домой».</dd>
+            <dt>Android, Windows, macOS, Linux</dt>
+            <dd>Установщики — на странице загрузок.</dd>
+          </dl>
           <a
-            className="primary wide"
+            className="secondary wide"
             href={isNative ? 'https://mess.quiby.me/#download' : '/#download'}
           >
-            Скачать приложение <Download size={18} />
+            <Download size={17} />
+            Страница загрузок
           </a>
         </Modal>
       )}
@@ -2583,55 +2594,48 @@ export default function App() {
             }}
           >
             <label>
-              Ваше имя
+              Имя
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 maxLength={40}
                 required
+                autoFocus
               />
             </label>
-            <p className="muted tiny">Друзья увидят это имя в разговорах.</p>
             <button className="primary wide" disabled={working}>
-              {working ? 'Сохраняем…' : 'Сохранить'}
+              {working ? 'Сохранение…' : 'Сохранить'}
             </button>
           </form>
         </Modal>
       )}
-      {modal === 'invite' && (
-        <Modal error={error} title="Пригласить в группу" onClose={() => setModal(null)}>
-          <p className="muted">
-            Ссылка добавит зарегистрированного друга в «{active?.title}». Действует 7 дней. Новому
-            участнику также понадобится код регистрации по приглашению.
-          </p>
-          {inviteUrl ? (
-            <>
-              <label>
-                Ссылка-приглашение
-                <input readOnly value={inviteUrl} onFocus={(e) => e.target.select()} />
-              </label>
-              <button className="primary wide" onClick={copy}>
-                {copied ? <Check size={18} /> : <Copy size={18} />}{' '}
-                {copied ? 'Скопировано' : 'Скопировать ссылку'}
-              </button>
-              {demo && (
-                <p className="tiny muted">В демоверсии ссылка открывает только деморежим.</p>
-              )}
-            </>
-          ) : (
-            <p className="muted">{error || 'Готовим ссылку…'}</p>
-          )}
-        </Modal>
+      {modal === 'invite' && inviteUrl && (
+        <ShareSheet
+          heading="Пригласить в группу"
+          title={active?.title || 'Группа'}
+          subtitle="Ссылка-приглашение действует 7 дней"
+          link={inviteUrl}
+          accent={currentAccent()}
+          onClose={() => setModal(null)}
+        />
       )}
+      {themeImport && <ThemeImport theme={themeImport} onClose={() => setThemeImport(null)} />}
+      {loginRequest && <LoginApprove token={loginRequest} onClose={() => setLoginRequest('')} />}
+      {scanning && (
+        <QrScanner
+          onClose={() => setScanning(false)}
+          onResult={(text) => {
+            setScanning(false);
+            if (!openLink(text)) setScanned(text);
+          }}
+        />
+      )}
+      {scanned && <ScannedText text={scanned} onClose={() => setScanned('')} />}
       {modal === 'delete' && (
         <Modal error={error} title="Удалить сообщение?" onClose={() => setModal(null)}>
-          <p className="muted">
-            Оно исчезнет у всех участников чата. Восстановить сообщение не получится.
-          </p>
+          <p className="muted">Сообщение удалится у всех участников.</p>
           <div className="modal-actions">
-            <button className="secondary" onClick={() => setModal(null)}>
-              Оставить
-            </button>
+            <CloseButton>Отмена</CloseButton>
             <button
               className="danger"
               disabled={working}
@@ -2639,8 +2643,30 @@ export default function App() {
                 setWorking(true);
                 try {
                   await api(`/chats/${activeId}/messages/${deleteId}`, 'DELETE');
-                  setMessages((prev) => prev.filter((m) => m.id !== deleteId));
                   setModal(null);
+                  // Fold the row away before it leaves the list.
+                  const row = scroller.current
+                    ?.querySelector(`[data-message-id="${deleteId}"]`)
+                    ?.closest<HTMLElement>('.message-group-item');
+                  if (row && motionAllowed()) {
+                    row.style.overflow = 'hidden';
+                    const fold = row
+                      .animate(
+                        [
+                          { height: `${row.offsetHeight}px`, opacity: 1 },
+                          { height: '0px', opacity: 0, transform: 'scale(0.96)' },
+                        ],
+                        {
+                          duration: 220,
+                          easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
+                          fill: 'forwards',
+                        },
+                      )
+                      .finished.catch(() => undefined);
+                    // Background tabs pause animations; never let that hold the deletion.
+                    await Promise.race([fold, new Promise((done) => setTimeout(done, 300))]);
+                  }
+                  setMessages((prev) => prev.filter((m) => m.id !== deleteId));
                   await refreshChats();
                 } catch (e) {
                   report(e);

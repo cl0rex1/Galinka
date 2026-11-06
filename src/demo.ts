@@ -156,7 +156,21 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         p.id !== self.id &&
         `${p.name} ${p.username}`.toLowerCase().includes((params.get('q') || '').toLowerCase()),
     );
-  else if (pathname === '/chats' && method === 'GET')
+  else if (pathname === '/search') {
+    const needle = (params.get('q') || '').toLowerCase();
+    result = state.messages
+      .filter((m) => m.body.toLowerCase().includes(needle))
+      .reverse()
+      .slice(0, 50)
+      .map((m) => ({
+        id: m.id,
+        chat_id: m.chat_id,
+        body: m.body,
+        created_at: m.created_at,
+        sender_id: m.sender_id,
+        sender_name: m.sender.name,
+      }));
+  } else if (pathname === '/chats' && method === 'GET')
     result = [...state.chats].sort(
       (a, b) =>
         Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) ||

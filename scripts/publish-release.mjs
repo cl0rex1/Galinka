@@ -8,6 +8,13 @@ if (!token || !/^v\d+\.\d+\.\d+$/.test(tag || ''))
   throw Error('Release credentials and a version tag are required.');
 const version = JSON.parse(await readFile('package.json', 'utf8')).version;
 if (tag !== `v${version}`) throw Error('Release tag must match package.json.');
+// Release notes come from the matching CHANGELOG.md section, the same text the site shows.
+const section = (await readFile('CHANGELOG.md', 'utf8'))
+  .split(/^## /m)
+  .find((part) => part.startsWith(`${version} `));
+if (!section) throw Error(`CHANGELOG.md has no section for ${version}.`);
+const releaseNotes = section.slice(section.indexOf('
+') + 1).trim();
 const directory = 'release';
 const files = (await readdir(directory))
   .filter((name) => /\.(exe|dmg|zip|AppImage|deb|apk|pkg\.tar\.zst|yml|blockmap)$/.test(name))
@@ -63,7 +70,7 @@ if (!release)
   release = await api('releases', 'POST', {
     tag_name: tag,
     name: `Galinka ${tag}`,
-    body: await readFile('docs/RELEASE.md', 'utf8'),
+    body: releaseNotes,
     draft: true,
   });
 if (!release.draft) throw Error('This release is already published; assets are immutable.');

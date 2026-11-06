@@ -25,13 +25,13 @@ import {
 } from './platform';
 import './landing.css';
 const descriptions: Record<Platform, string> = {
-  Android: 'Все разговоры в отдельном приложении. Android 7 и новее.',
-  iOS: 'Откройте Galinka в Safari и добавьте на экран «Домой». Для iPhone и iPad.',
-  Windows: 'Отдельное приложение для Windows 10 и новее, x64.',
-  macOS: 'Выберите сборку для вашего Mac: Apple Silicon или Intel.',
-  Linux: 'Переносимый AppImage или пакет для Debian и Ubuntu. Архитектура x64.',
-  'Arch Linux': 'Компактный пакет для Arch Linux с системным Electron.',
-  Web: 'Переписка в браузере — на любом устройстве.',
+  Android: 'Android 7 и новее.',
+  iOS: 'Веб-приложение для iPhone и iPad: Safari → «На экран Домой».',
+  Windows: 'Windows 10 и новее, x64.',
+  macOS: 'Apple Silicon или Intel.',
+  Linux: 'AppImage или DEB для Debian и Ubuntu, x64.',
+  'Arch Linux': 'Пакет для pacman с системным Electron.',
+  Web: 'Любой современный браузер.',
 };
 function fileLabel(file: ReleaseAsset) {
   if (file.name.endsWith('.dmg'))
@@ -95,10 +95,11 @@ export default function Landing() {
       <header className="landing-nav">
         <a href="/" className="brand">
           <img src="/icon.svg" alt="" />
-          galinka<span className="brand-dot">.</span>
+          Galinka
         </a>
         <nav aria-label="Навигация сайта">
           <ThemeToggle />
+          <a href="/changelog">Изменения</a>
           <a href="#download">Скачать</a>
           <a className="secondary" href="/app">
             Войти <ArrowUpRight size={15} />
@@ -107,30 +108,18 @@ export default function Landing() {
       </header>
       <section className="release-hero" id="download">
         <div className="release-intro">
-          <span className="landing-eyebrow">Место, где свои</span>
-          <h1>
-            Ближе.
-            <br />
-            Даже издалека<span>.</span>
-          </h1>
-          <p>Разговоры до ночи, общие планы и знакомые голоса. Ваш круг — всегда с вами.</p>
+          <h1>Мессенджер для своего круга</h1>
+          <p>
+            Личные чаты и группы до 100 человек, голосовые, фото и файлы. Сервер ваш, регистрация —
+            по приглашению.
+          </p>
           <a className="release-web-link" href="/app">
             Открыть Galinka в браузере <ArrowUpRight size={19} />
           </a>
-          <div className="release-platforms" aria-label="Поддерживаемые устройства">
-            <Smartphone size={17} />
-            <span>Телефон</span>
-            <span className="release-dot">·</span>
-            <Monitor size={18} />
-            <span>Компьютер</span>
-          </div>
         </div>
         <div className="release-picker">
           <div className="release-picker-heading">
-            <div>
-              <span className="landing-eyebrow">Скачать Galinka</span>
-              <h2>Разговоры — с собой.</h2>
-            </div>
+            <h2>Скачать</h2>
             {release && <span className="version">v{release.version}</span>}
           </div>
           <div className="release-device" role="status">
@@ -186,12 +175,12 @@ export default function Landing() {
                 </>
               ) : platform === 'Web' ? (
                 <a className="primary" href="/app">
-                  Начать общаться <ArrowRight size={17} />
+                  Открыть <ArrowRight size={17} />
                 </a>
               ) : loading ? (
                 <p className="release-loading">
                   <RefreshCw size={17} className="spin" />
-                  Проверяем сборки…
+                  Загрузка списка…
                 </p>
               ) : files.length ? (
                 files.map((file) => (
@@ -206,7 +195,7 @@ export default function Landing() {
                   <p>
                     {failed
                       ? 'Не удалось загрузить список сборок.'
-                      : 'Сборка для этой платформы готовится.'}
+                      : 'Сборки для этой платформы пока нет.'}
                   </p>
                   {failed && (
                     <button
@@ -235,7 +224,6 @@ export default function Landing() {
                   <li>Нажмите «Поделиться» → «На экран Домой».</li>
                   <li>Нажмите «Добавить» и откройте Galinka с экрана «Домой».</li>
                 </ol>
-                <p>Приложение обновляется через сайт.</p>
               </div>
             )}
             {installPrompt && platform !== 'iOS' && (
@@ -250,25 +238,17 @@ export default function Landing() {
                 Установить веб-приложение <Plus size={16} />
               </button>
             )}
-            <p className="release-footnote">Переписка синхронизируется между устройствами.</p>
           </div>
         </div>
       </section>
       <section className="release-story">
         <div className="release-story-heading">
-          <h2>
-            Свой круг.
-            <br />
-            Своя Galinka.
-          </h2>
-          <p>
-            Напишите другу. Соберите компанию. Отправьте голосовое, которое скажет больше текста.
-          </p>
+          <h2>Что внутри</h2>
         </div>
         <div className="release-preview">
           <img
             src="/preview.png"
-            alt="Групповой чат Galinka со списком разговоров и модулем Неля"
+            alt="Групповой чат в Galinka"
             loading="lazy"
             width="1440"
             height="960"
@@ -277,26 +257,26 @@ export default function Landing() {
         <div className="release-features">
           <div>
             <MessageCircle size={22} />
-            <h3>Всё для разговора</h3>
-            <p>Ответы, реакции, фотографии и важное в избранном.</p>
+            <h3>Переписка</h3>
+            <p>Ответы, реакции, правки, поиск, закреплённые чаты и архив.</p>
           </div>
           <div>
             <Mic size={22} />
-            <h3>Знакомые голоса</h3>
-            <p>Записывайте голосовые, когда хочется рассказать больше.</p>
+            <h3>Голосовые и фото</h3>
+            <p>Голосовые до 5 минут с перемоткой. Фото сжимаются перед отправкой.</p>
           </div>
           <div>
             <Users size={22} />
-            <h3>Место для компании</h3>
-            <p>Группы, приглашения и Неля для общих решений.</p>
+            <h3>Группы</h3>
+            <p>Ссылки-приглашения, передача владения, бот Неля для жребия и выбора.</p>
           </div>
         </div>
       </section>
       <footer className="landing-footer">
         <a className="brand" href="/">
-          galinka.
+          Galinka
         </a>
-        <span>Место, где свои.</span>
+        <a href="/changelog">История изменений</a>
         <a href={release?.url || 'https://github.com/cl0rex1/Galinka/releases'}>
           Все версии <ArrowUpRight size={14} />
         </a>

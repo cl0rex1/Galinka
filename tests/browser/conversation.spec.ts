@@ -258,7 +258,7 @@ test('a failed message keeps its voice preview and retries the same upload and n
   await expect(preview).toContainText('Не отправлено');
   await expect(preview.locator('audio')).toHaveAttribute('src', source!);
   await page.getByRole('button', { name: 'Повторить отправку', exact: true }).click();
-  await expect(preview).toContainText('Отправляем сообщение');
+  await expect(preview).toContainText('Отправка');
   await expect.poll(() => attempts.length).toBe(2);
   expect(uploads).toBe(1);
   expect(attempts[1]).toEqual(attempts[0]);

@@ -79,6 +79,7 @@ test('update sidebar action appears only after a newer version is found', async 
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
+  await page.getByRole('tab', { name: 'Приложение', exact: true }).click();
   await page.getByRole('button', { name: 'Проверить обновления', exact: true }).click();
   await expect(
     page.getByRole('button', { name: 'Доступно обновление', exact: true }),

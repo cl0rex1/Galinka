@@ -35,6 +35,9 @@ export type Message = {
   nonce: string;
   file: Attachment | null;
   reactions: { emoji: string; count: number; mine: boolean }[];
+  /** Shown before the server confirms it (optimistic send); `failed` when it did not go. */
+  pending?: boolean;
+  failed?: boolean;
 };
 export type Chat = {
   id: string;
@@ -56,4 +59,13 @@ export type Chat = {
     file_id?: string;
     file?: Attachment | null;
   } | null;
+};
+/** A message found by the search across all chats. */
+export type SearchHit = {
+  id: string;
+  chat_id: string;
+  body: string;
+  created_at: string;
+  sender_id: string | null;
+  sender_name: string;
 };

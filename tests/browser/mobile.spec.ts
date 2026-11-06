@@ -8,6 +8,16 @@ async function openChat(page: Page) {
   await expect(page.getByRole('textbox', { name: 'Сообщение', exact: true })).toBeVisible();
 }
 
+// The conversation slides in on phones; wait for finite animations before measuring positions.
+const settled = (page: Page) =>
+  page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every(
+        (a) => a.playState !== 'running' || a.effect?.getComputedTiming().iterations === Infinity,
+      ),
+  );
+
 async function insideViewport(page: Page, selector: string) {
   const viewport = page.viewportSize()!;
   await expect
@@ -52,7 +62,8 @@ for (const width of [320, 375, 414, 768]) {
       .getByRole('button', { name: 'Настройки', exact: true })
       .filter({ visible: true })
       .click();
-    await insideViewport(page, '.mobile-nav');
+    await insideViewport(page, '.app-nav');
+    await page.getByRole('tab', { name: 'Оформление', exact: true }).click();
     await page.getByRole('button', { name: 'Тёмная', exact: false }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.screenshot({ path: testInfo.outputPath(`settings-${width}.png`) });
@@ -137,6 +148,7 @@ test('text drafts survive reload and loading older messages preserves the readin
   await page.reload();
   await page.getByRole('button', { name: /На выходные/ }).click();
   await expect(page.locator('.message-row')).toHaveCount(60);
+  await settled(page);
   await page.locator('.messages').evaluate((element) => {
     element.scrollTop = 0;
   });

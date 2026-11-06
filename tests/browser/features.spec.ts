@@ -134,7 +134,7 @@ test('real messenger features synchronize replies, edits, media and group permis
       .filter({ has: bob.locator('.bubble > p', { hasText: original }) });
     await originalBob.locator('summary').click();
     await originalBob.getByRole('button', { name: 'Ответить', exact: true }).click();
-    await expect(bob.locator('.composer-context')).toContainText('Ответ для Алиса');
+    await expect(bob.locator('.composer-context')).toContainText('Алиса');
     const answer = `Буду к шести ${suffix}`;
     await bob.getByRole('textbox', { name: 'Сообщение', exact: true }).fill(answer);
     await bob.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
@@ -247,23 +247,36 @@ test('real messenger features synchronize replies, edits, media and group permis
     await settings.getByLabel('Название группы', { exact: true }).fill(renamed);
     await settings.getByRole('button', { name: 'Сохранить название', exact: true }).click();
     await expect(bob.locator('.chat-header')).toContainText(renamed);
+    await settings.getByRole('button', { name: 'Добавить участников', exact: true }).click();
     await settings.getByLabel('Найти пользователя', { exact: true }).fill(`featurec${suffix}`);
     await settings.locator('.people-results button', { hasText: `@featurec${suffix}` }).click();
-    await settings.getByRole('button', { name: 'Добавить выбранных (1)', exact: true }).click();
-    await expect(settings.locator('.group-member-row', { hasText: 'Катя' })).toBeVisible();
-    await settings.getByRole('button', { name: 'Удалить участника: Борис', exact: true }).click();
-    await settings.getByRole('button', { name: 'Удалить участника', exact: true }).click();
+    await settings.getByRole('button', { name: 'Добавить 1 участника', exact: true }).click();
+    await expect(settings.locator('.member-row', { hasText: 'Катя' })).toBeVisible();
+    // Member actions live in the profile; each asks once more in a small dialog.
+    const profile = alice.getByRole('dialog', { name: 'Профиль', exact: true });
+    await settings.locator('.member-row', { hasText: 'Борис' }).click();
+    await profile.getByRole('button', { name: 'Удалить из группы', exact: true }).click();
+    await alice
+      .getByRole('dialog', { name: 'Удалить из группы?', exact: true })
+      .getByRole('button', { name: 'Удалить', exact: true })
+      .click();
+    await expect(profile).toHaveCount(0);
     await expect(bob.locator('.chat-header')).toHaveCount(0);
     await expect(bob.locator('.message-row')).toHaveCount(0);
     await expect(bob.locator('.chat-item', { hasText: renamed })).toHaveCount(0);
-    await settings.getByRole('button', { name: 'Сделать владельцем: Катя', exact: true }).click();
-    await settings.getByRole('button', { name: 'Передать владение', exact: true }).click();
+    await settings.locator('.member-row', { hasText: 'Катя' }).click();
+    await profile.getByRole('button', { name: 'Сделать владельцем', exact: true }).click();
+    await alice
+      .getByRole('dialog', { name: 'Передать группу?', exact: true })
+      .getByRole('button', { name: 'Передать', exact: true })
+      .click();
     await expect(settings.getByLabel('Название группы', { exact: true })).toHaveCount(0);
-    await expect(settings.locator('.group-member-row', { hasText: 'Катя' })).toContainText(
-      'Владелец',
-    );
+    await expect(settings.locator('.member-row', { hasText: 'Катя' })).toContainText('владелец');
     await settings.getByRole('button', { name: 'Выйти из группы', exact: true }).click();
-    await settings.getByRole('button', { name: 'Выйти из группы', exact: true }).click();
+    await alice
+      .getByRole('dialog', { name: 'Выйти из группы?', exact: true })
+      .getByRole('button', { name: 'Выйти', exact: true })
+      .click();
     await expect(settings).not.toBeVisible();
     await expect(alice.locator('.chat-header')).toHaveCount(0);
     await expect(alice.locator('.chat-item', { hasText: renamed })).toHaveCount(0);

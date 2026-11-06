@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Download, RefreshCw, ExternalLink, Check, ArrowUpRight } from 'lucide-react';
+import { Download, RefreshCw, ExternalLink, Check } from 'lucide-react';
 import { API_BASE, isDemo } from './api';
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { newerVersion, releaseFiles, type Release } from './platform';
@@ -262,31 +262,28 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
     bytes = (value: number) => `${(value / 1024 / 1024).toFixed(1)} МБ`;
   return (
     <div className="updates-panel">
-      <div>
-        <strong>Galinka</strong>
-        <p className="update-version">Версия {status.installedVersion || __APP_VERSION__}</p>
-      </div>
+      <p className="update-version">Версия {status.installedVersion || __APP_VERSION__}</p>
       <p className="update-status" role="status">
         {phase === 'current' ? (
           <>
-            <Check size={16} aria-hidden="true" /> У вас актуальная версия
+            <Check size={16} aria-hidden="true" /> Последняя версия
           </>
         ) : phase === 'available' ? (
           `Доступна версия ${status.version}`
         ) : phase === 'downloading' ? (
-          `Скачиваем обновление: ${status.percent ?? 0}%`
+          `Загрузка обновления: ${status.percent ?? 0}%`
         ) : phase === 'downloaded' ? (
           android ? (
-            `Версия ${status.version} проверена и готова к установке.`
+            `Версия ${status.version} готова к установке.`
           ) : (
-            `Версия ${status.version} готова. Перезапустите, когда будет удобно.`
+            `Версия ${status.version} загружена. Перезапустите, когда удобно.`
           )
         ) : phase === 'checking' || busy ? (
-          'Проверяем обновления…'
+          'Проверка…'
         ) : phase === 'error' ? (
           status.error
         ) : (
-          'Проверьте наличие новой версии.'
+          ''
         )}
       </p>
       {phase === 'downloading' && (
@@ -306,8 +303,8 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
             <strong>Скачивать автоматически</strong>
             <p>
               {android
-                ? 'APK загружается, пока Galinka работает. Может использовать мобильный интернет. Установка — с подтверждением Android.'
-                : 'Новые версии загружаются в фоне. Перезапуск — по вашему нажатию.'}
+                ? 'Пока приложение открыто. Может расходовать мобильный трафик.'
+                : 'В фоне. Перезапуск — по кнопке.'}
             </p>
           </div>
           <button
@@ -330,8 +327,7 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
       )}
       {(error || (available && needsRestart && hasDraft)) && (
         <p className="form-error" role="alert">
-          {error ||
-            'Завершите отправку, запись или редактирование перед перезапуском. Текстовые черновики сохранены.'}
+          {error || 'Сначала завершите отправку, запись или редактирование.'}
         </p>
       )}
       <div className="update-actions">
@@ -363,7 +359,7 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
             disabled={busy || phase === 'downloading'}
           >
             <RefreshCw size={17} className={busy ? 'spin' : ''} />
-            {busy ? 'Проверяем…' : 'Проверить обновления'}
+            {busy ? 'Проверка…' : 'Проверить обновления'}
           </button>
         )}
         {desktop && (
@@ -382,27 +378,13 @@ export function Updates({ hasDraft = false }: { hasDraft?: boolean }) {
           </a>
         )}
       </div>
-      {native && (
-        <p className="tiny muted">
-          Galinka проверяет новые версии автоматически.{' '}
-          {android
-            ? 'Перед установкой проверяются приложение, версия и подпись APK. Установку подтверждаете вы в Android.'
-            : 'Android попросит подтвердить установку APK — установите его поверх приложения, чтобы сохранить вход и переписку.'}
-        </p>
-      )}
       {desktop && status.mode === 'manual' && (
         <p className="tiny muted">
           {status.platform === 'darwin'
-            ? 'Новые версии проверяются автоматически. Для обновления скачайте DMG и замените Galinka в «Программах».'
+            ? 'Скачайте DMG и замените Galinka в «Программах».'
             : status.packageFormat === 'arch'
-              ? 'Новые версии проверяются автоматически. Скачайте пакет и установите его через pacman -U.'
-              : 'Новые версии проверяются автоматически. Установите скачанный DEB через менеджер пакетов.'}
-        </p>
-      )}
-      {!desktop && !native && (
-        <p className="tiny muted">
-          <ArrowUpRight size={13} aria-hidden="true" /> Galinka проверяет новые версии
-          автоматически. Обновление применится после перезапуска; текстовые черновики сохранятся.
+              ? 'Установите пакет через pacman -U.'
+              : 'Установите DEB через менеджер пакетов.'}
         </p>
       )}
     </div>

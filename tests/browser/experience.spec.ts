@@ -156,6 +156,8 @@ test('browser push asks permission only on click, registers this session, and re
   await toggle.click();
   await unsubscribe;
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  // The switch reads "off" while busy; wait until the operation finishes.
+  await expect(toggle).toBeEnabled();
   expect(await page.evaluate(() => (window as any).pushTest)).toMatchObject({
     requests: 1,
     subscribes: 1,

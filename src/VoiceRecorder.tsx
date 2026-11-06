@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Mic, Square, X, LoaderCircle } from 'lucide-react';
+import { audioConstraints } from './media';
 
 type Recording = {
   generation: number;
@@ -89,7 +90,7 @@ export function VoiceRecorder({
     setSeconds(0);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
+        audio: audioConstraints(),
       });
       session.stream = stream;
       if (!alive.current || current.current !== session || session.discard) {

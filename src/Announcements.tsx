@@ -37,7 +37,6 @@ export function Announcements() {
     <section className="announcement-feed" aria-labelledby="announcements-title">
       <div className="announcement-heading">
         <div>
-          <span className="small-label">Новости нашего круга</span>
           <h2 id="announcements-title">Объявления</h2>
         </div>
         <button className="secondary" onClick={load} disabled={busy}>
@@ -51,9 +50,11 @@ export function Announcements() {
         </p>
       )}
       {busy ? (
-        <p role="status">Загружаем объявления…</p>
+        <p role="status" className="muted">
+          Загрузка…
+        </p>
       ) : !error && !data.items.length ? (
-        <p className="muted">Пока нет объявлений. Опубликованные новости появятся здесь.</p>
+        <p className="muted">Объявлений пока нет.</p>
       ) : (
         data.page === page &&
         data.items.map((item) => (

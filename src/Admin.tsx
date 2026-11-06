@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowLeft, LogOut, Plus, RefreshCw, ShieldCheck, Users, Megaphone } from 'lucide-react';
+import {
+  ArrowLeft,
+  LogOut,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Users,
+  Megaphone,
+  Ticket,
+} from 'lucide-react';
+import { AdminInvites } from './AdminInvites';
 import { api, ApiError } from './api';
-import { Auth, Modal } from './App';
+import { Auth } from './Auth';
+import { Modal } from './ui';
 import { ThemeToggle } from './theme';
 import type { AdminUser, Announcement, Page, Person } from './types';
 import './admin.css';
@@ -9,7 +20,7 @@ import './admin.css';
 export default function Admin() {
   const [me, setMe] = useState<Person | null>(null),
     [ready, setReady] = useState(false);
-  const [tab, setTab] = useState<'users' | 'announcements'>('users');
+  const [tab, setTab] = useState<'users' | 'announcements' | 'invites'>('users');
   const [users, setUsers] = useState<Page<AdminUser>>({ items: [], total: 0, page: 1 });
   const [posts, setPosts] = useState<Page<Announcement>>({ items: [], total: 0, page: 1 });
   const [query, setQuery] = useState(''),
@@ -44,7 +55,7 @@ export default function Admin() {
     return () => current.abort();
   }, [fail]);
   const load = useCallback(async () => {
-    if (me?.role !== 'admin') return;
+    if (me?.role !== 'admin' || tab === 'invites') return;
     request.current?.abort();
     const current = new AbortController();
     request.current = current;
@@ -226,198 +237,208 @@ export default function Admin() {
               <Megaphone size={19} />
               Объявления
             </button>
+            <button
+              disabled={saving}
+              aria-current={tab === 'invites' ? 'page' : undefined}
+              onClick={() => {
+                setTab('invites');
+                setNotice('');
+              }}
+            >
+              <Ticket size={19} />
+              Приглашения
+            </button>
           </nav>
           <p>
-            Ваш сервер.
-            <br />
-            Ваш круг.
-            <br />
             <span>Galinka {__APP_VERSION__}</span>
           </p>
         </aside>
         <main className="admin-main">
-          <div className="admin-title">
-            <div>
-              <span className="small-label">Панель администратора</span>
-              <h1>{tab === 'users' ? 'Пользователи' : 'Объявления'}</h1>
-              <p className="muted">
-                {tab === 'users'
-                  ? 'Аккаунты, роли и доступ к Galinka.'
-                  : 'Новости, которые увидят пользователи приложения.'}
-              </p>
-            </div>
-            <button
-              className="primary"
-              disabled={busy}
-              onClick={() => {
-                setError('');
-                setEditor({ kind: tab === 'users' ? 'user' : 'post' });
-              }}
-            >
-              <Plus size={18} />
-              {tab === 'users' ? 'Добавить пользователя' : 'Создать объявление'}
-            </button>
-          </div>
-          <div className="admin-toolbar">
-            {tab === 'users' && (
-              <label className="admin-search">
-                Поиск пользователей
-                <input
-                  type="search"
-                  disabled={saving}
-                  placeholder="Имя или логин"
-                  value={query}
-                  maxLength={40}
-                  onChange={(e) => {
-                    setLoading(true);
-                    setQuery(e.target.value);
-                    setPage(1);
+          {tab === 'invites' ? (
+            <AdminInvites />
+          ) : (
+            <>
+              <div className="admin-title">
+                <div>
+                  <h1>{tab === 'users' ? 'Пользователи' : 'Объявления'}</h1>
+                  <p className="muted">
+                    {tab === 'users'
+                      ? 'Аккаунты, роли и доступ к Galinka.'
+                      : 'Новости, которые увидят пользователи приложения.'}
+                  </p>
+                </div>
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() => {
+                    setError('');
+                    setEditor({ kind: tab === 'users' ? 'user' : 'post' });
                   }}
-                />
-              </label>
-            )}
-            <span className="muted">Всего: {total}</span>
-            <button className="secondary" disabled={busy} onClick={load}>
-              <RefreshCw size={16} />
-              Обновить
-            </button>
-          </div>
-          {error && !editor && !deleting && (
-            <p className="form-error" role="alert">
-              {error}
-            </p>
-          )}
-          {notice && (
-            <p className="admin-notice" role="status">
-              {notice}
-            </p>
-          )}
-          {busy && <p role="status">{saving ? 'Сохраняем изменения…' : 'Загружаем данные…'}</p>}
-          <div className="admin-table-wrap" aria-busy={busy}>
-            {tab === 'users' ? (
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>Пользователь</th>
-                    <th>Роль</th>
-                    <th>Доступ</th>
-                    <th>
-                      <span className="sr-only">Действия</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.items.map((item) => (
-                    <tr key={item.id}>
-                      <td>
-                        <strong>{item.name}</strong>
-                        <span>
-                          @{item.username}
-                          {item.id === me.id ? ' · это вы' : ''}
-                        </span>
-                      </td>
-                      <td>{item.role === 'admin' ? 'Администратор' : 'Пользователь'}</td>
-                      <td>
-                        <span className={`admin-state ${item.blocked ? 'is-blocked' : ''}`}>
-                          {item.blocked ? 'Заблокирован' : 'Активен'}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          className="secondary"
-                          disabled={busy}
-                          onClick={() => {
-                            setError('');
-                            setEditor({ kind: 'user', item });
-                          }}
-                          aria-label={`Изменить ${item.username}`}
-                        >
-                          Изменить
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <div className="admin-posts">
-                {posts.items.map((item) => (
-                  <article key={item.id}>
-                    <div>
-                      <span className="admin-state">
-                        {item.published ? 'Опубликовано' : 'Черновик'}
-                      </span>
-                      <time dateTime={item.updated_at}>
-                        {new Date(item.updated_at).toLocaleDateString('ru')}
-                      </time>
-                    </div>
-                    <h2>{item.title}</h2>
-                    <p>{item.body}</p>
-                    <footer>
-                      <button
-                        className="secondary"
-                        disabled={busy}
-                        onClick={() => {
-                          setError('');
-                          setEditor({ kind: 'post', item });
-                        }}
-                        aria-label={`Редактировать ${item.title}`}
-                      >
-                        Редактировать
-                      </button>
-                      <button
-                        className="secondary"
-                        disabled={busy}
-                        onClick={() =>
-                          mutate(`/admin/announcements/${item.id}`, 'PATCH', {
-                            published: !item.published,
-                          })
-                        }
-                      >
-                        {item.published ? 'Снять с публикации' : 'Опубликовать'}
-                      </button>
-                      <button
-                        className="text-button"
-                        disabled={busy}
-                        onClick={() => {
-                          setError('');
-                          setDeleting(item);
-                        }}
-                        aria-label={`Удалить ${item.title}`}
-                      >
-                        Удалить
-                      </button>
-                    </footer>
-                  </article>
-                ))}
+                >
+                  <Plus size={18} />
+                  {tab === 'users' ? 'Добавить пользователя' : 'Создать объявление'}
+                </button>
               </div>
-            )}
-            {!busy && !total && (
-              <p className="admin-empty">
-                {tab === 'users'
-                  ? 'Пользователи не найдены.'
-                  : 'Пока нет объявлений. Создайте первую новость для вашей компании.'}
-              </p>
-            )}
-          </div>
-          {total > 50 && (
-            <div className="admin-pagination">
-              <button
-                className="secondary"
-                disabled={busy || page === 1}
-                onClick={() => setPage(page - 1)}
-              >
-                Назад
-              </button>
-              <span>Страница {page}</span>
-              <button
-                className="secondary"
-                disabled={busy || page * 50 >= total}
-                onClick={() => setPage(page + 1)}
-              >
-                Далее
-              </button>
-            </div>
+              <div className="admin-toolbar">
+                {tab === 'users' && (
+                  <label className="admin-search">
+                    Поиск пользователей
+                    <input
+                      type="search"
+                      disabled={saving}
+                      placeholder="Имя или логин"
+                      value={query}
+                      maxLength={40}
+                      onChange={(e) => {
+                        setLoading(true);
+                        setQuery(e.target.value);
+                        setPage(1);
+                      }}
+                    />
+                  </label>
+                )}
+                <span className="muted">Всего: {total}</span>
+                <button className="secondary" disabled={busy} onClick={load}>
+                  <RefreshCw size={16} />
+                  Обновить
+                </button>
+              </div>
+              {error && !editor && !deleting && (
+                <p className="form-error" role="alert">
+                  {error}
+                </p>
+              )}
+              {notice && (
+                <p className="admin-notice" role="status">
+                  {notice}
+                </p>
+              )}
+              {busy && <p role="status">{saving ? 'Сохраняем изменения…' : 'Загружаем данные…'}</p>}
+              <div className="admin-table-wrap" aria-busy={busy}>
+                {tab === 'users' ? (
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Пользователь</th>
+                        <th>Роль</th>
+                        <th>Доступ</th>
+                        <th>
+                          <span className="sr-only">Действия</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {users.items.map((item) => (
+                        <tr key={item.id}>
+                          <td>
+                            <strong>{item.name}</strong>
+                            <span>
+                              @{item.username}
+                              {item.id === me.id ? ' · это вы' : ''}
+                            </span>
+                          </td>
+                          <td>{item.role === 'admin' ? 'Администратор' : 'Пользователь'}</td>
+                          <td>
+                            <span className={`admin-state ${item.blocked ? 'is-blocked' : ''}`}>
+                              {item.blocked ? 'Заблокирован' : 'Активен'}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              className="secondary"
+                              disabled={busy}
+                              onClick={() => {
+                                setError('');
+                                setEditor({ kind: 'user', item });
+                              }}
+                              aria-label={`Изменить ${item.username}`}
+                            >
+                              Изменить
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="admin-posts">
+                    {posts.items.map((item) => (
+                      <article key={item.id}>
+                        <div>
+                          <span className="admin-state">
+                            {item.published ? 'Опубликовано' : 'Черновик'}
+                          </span>
+                          <time dateTime={item.updated_at}>
+                            {new Date(item.updated_at).toLocaleDateString('ru')}
+                          </time>
+                        </div>
+                        <h2>{item.title}</h2>
+                        <p>{item.body}</p>
+                        <footer>
+                          <button
+                            className="secondary"
+                            disabled={busy}
+                            onClick={() => {
+                              setError('');
+                              setEditor({ kind: 'post', item });
+                            }}
+                            aria-label={`Редактировать ${item.title}`}
+                          >
+                            Редактировать
+                          </button>
+                          <button
+                            className="secondary"
+                            disabled={busy}
+                            onClick={() =>
+                              mutate(`/admin/announcements/${item.id}`, 'PATCH', {
+                                published: !item.published,
+                              })
+                            }
+                          >
+                            {item.published ? 'Снять с публикации' : 'Опубликовать'}
+                          </button>
+                          <button
+                            className="text-button"
+                            disabled={busy}
+                            onClick={() => {
+                              setError('');
+                              setDeleting(item);
+                            }}
+                            aria-label={`Удалить ${item.title}`}
+                          >
+                            Удалить
+                          </button>
+                        </footer>
+                      </article>
+                    ))}
+                  </div>
+                )}
+                {!busy && !total && (
+                  <p className="admin-empty">
+                    {tab === 'users' ? 'Пользователи не найдены.' : 'Объявлений пока нет.'}
+                  </p>
+                )}
+              </div>
+              {total > 50 && (
+                <div className="admin-pagination">
+                  <button
+                    className="secondary"
+                    disabled={busy || page === 1}
+                    onClick={() => setPage(page - 1)}
+                  >
+                    Назад
+                  </button>
+                  <span>Страница {page}</span>
+                  <button
+                    className="secondary"
+                    disabled={busy || page * 50 >= total}
+                    onClick={() => setPage(page + 1)}
+                  >
+                    Далее
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </main>
       </div>

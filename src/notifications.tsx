@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { Bell, BellOff } from 'lucide-react';
 import { api } from './api';
 
 export const isNative = Capacitor.getPlatform() === 'android';
@@ -299,32 +298,28 @@ export function NotificationSettings({
   const desktop = Boolean(window.galinkaDesktop);
   const descriptions: Record<Phase, string> = {
     unavailable:
-      'Уведомления не поддерживаются этим браузером. Откройте Galinka в приложении или другом браузере.',
+      'Браузер не поддерживает уведомления. Установите приложение или откройте другой браузер.',
     install:
-      'На iPhone и iPad добавьте Galinka на экран «Домой» через меню «Поделиться», затем включите уведомления в приложении. Нужна iOS 16.4 или новее.',
-    unconfigured: 'Уведомления временно недоступны. Попробуйте позже.',
-    off: desktop
-      ? 'Уведомлять о новых сообщениях, пока Galinka работает.'
-      : 'Новые сообщения — даже когда Galinka закрыта.',
+      'Добавьте Galinka на экран «Домой» через «Поделиться» и включите уведомления там. Нужна iOS 16.4+.',
+    unconfigured: 'Сервер пока не настроил уведомления.',
+    off: desktop ? 'Пока приложение запущено.' : 'Даже когда Galinka закрыта.',
     denied: isNative
-      ? 'Разрешите уведомления Galinka в настройках Android.'
-      : 'Разрешите уведомления для Galinka в настройках браузера или устройства.',
+      ? 'Запрещены в настройках Android.'
+      : 'Запрещены в настройках браузера или устройства.',
     enabled: desktop
       ? state.background
-        ? 'Galinka остаётся в трее после закрытия окна. «Выйти» в меню трея полностью завершает приложение.'
-        : 'Уведомления приходят, пока приложение запущено.'
-      : 'Уведомления включены на этом устройстве. Чаты без звука не беспокоят.',
+        ? 'Включены. После закрытия окна Galinka остаётся в трее.'
+        : 'Включены, пока приложение запущено.'
+      : 'Включены. Чаты без звука не беспокоят.',
     busy: 'Подключение…',
-    error: 'Не удалось подключить уведомления. Повторите попытку.',
+    error: 'Не удалось включить. Повторите попытку.',
   };
   return (
     <section className="settings-section notification-settings">
+      <h2>Уведомления</h2>
       <div className="settings-row">
-        <span className="settings-icon">
-          {state.phase === 'enabled' ? <Bell size={22} /> : <BellOff size={22} />}
-        </span>
         <div>
-          <h3>Уведомления</h3>
+          <h3>На этом устройстве</h3>
           <p>{demo ? 'Недоступны в демоверсии.' : descriptions[state.phase]}</p>
         </div>
         {!demo && !['unavailable', 'unconfigured', 'denied', 'install'].includes(state.phase) && (

@@ -208,7 +208,7 @@ test('revoking the session closes the event stream and removes native notificati
   expect(await page.evaluate(() => (window as any).desktopTest.listeners())).toBe(1);
   state.revoked = true;
   await page.evaluate(() => (window as any).desktopTest.disconnect());
-  await expect(page.getByRole('heading', { name: 'С возвращением', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Вход', exact: true })).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(() => ({

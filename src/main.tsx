@@ -1,14 +1,11 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import '@fontsource-variable/unbounded';
-import '@fontsource/ibm-plex-mono/500.css';
 import '@fontsource-variable/golos-text';
 const App = React.lazy(() => import('./App'));
 const Landing = React.lazy(() => import('./Landing'));
 const Admin = React.lazy(() => import('./Admin'));
+const Changelog = React.lazy(() => import('./Changelog'));
 import './styles.css';
-import './experience.css';
-import './gestures.css';
 import './theme';
 import './motion';
 import { Capacitor } from '@capacitor/core';
@@ -28,6 +25,8 @@ createRoot(document.getElementById('root')!).render(
     >
       {location.pathname === '/admin' || location.pathname.startsWith('/admin/') ? (
         <Admin />
+      ) : location.pathname === '/changelog' ? (
+        <Changelog />
       ) : !Capacitor.isNativePlatform() &&
         location.pathname === '/' &&
         !location.search.includes('demo=1') ? (

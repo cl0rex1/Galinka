@@ -24,5 +24,5 @@ test('published Galinka serves the current installers and a working app', async 
   }
   await page.screenshot({ path: testInfo.outputPath('downloads-live.png'), fullPage: true });
   await page.getByRole('link', { name: 'Открыть Galinka в браузере', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'С возвращением', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Вход', exact: true })).toBeVisible();
 });

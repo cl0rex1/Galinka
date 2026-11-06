@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 const { version } = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
 );
-test('demo conversation and Nelya work; modules and keyboard modal are usable', async ({
+test('demo conversation and Nelya work; chat details and keyboard modal are usable', async ({
   page,
 }) => {
   await page.goto('/?demo=1');
@@ -23,12 +23,13 @@ test('demo conversation and Nelya work; modules and keyboard modal are usable', 
   await expect(
     page.getByRole('heading', { name: 'Проверка друзей', exact: true }).first(),
   ).toBeVisible();
-  await page.getByRole('button', { name: 'Модули', exact: true }).first().click();
-  await expect(page.getByRole('heading', { name: 'Это Неля.', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'О чате', exact: true }).click();
+  await expect(page.getByRole('switch', { name: 'Неля в этом чате' })).toBeVisible();
   await page
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
+  await page.getByRole('tab', { name: 'Приложение', exact: true }).click();
   await page.getByRole('button', { name: 'Установить Galinka', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.keyboard.press('Escape');
@@ -44,16 +45,20 @@ for (const width of [320, 375, 414, 768])
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true);
     if (width === 375) await page.screenshot({ path: 'docs/screenshots/mobile.png' });
-    const composer = await page.locator('.composer').boundingBox();
-    expect(composer!.x).toBeGreaterThanOrEqual(0);
-    expect(composer!.x + composer!.width).toBeLessThanOrEqual(width);
+    // The conversation slides in on phones; measure once it has settled.
+    await expect
+      .poll(async () => {
+        const composer = (await page.locator('.composer').boundingBox())!;
+        return composer.x >= 0 && composer.x + composer.width <= width;
+      })
+      .toBe(true);
     if (width <= 800)
       await page.getByRole('button', { name: 'Назад к чатам', exact: true }).click();
     await page
-      .getByRole('button', { name: 'Модули', exact: true })
+      .getByRole('button', { name: 'Настройки', exact: true })
       .filter({ visible: true })
       .click();
-    await expect(page.getByRole('heading', { name: 'Это Неля.', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Настройки', exact: true })).toBeVisible();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true);
@@ -61,12 +66,12 @@ for (const width of [320, 375, 414, 768])
 
 test('landing provides downloads and installation instructions', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /Ближе.*Даже издалека/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Мессенджер для своего круга' })).toBeVisible();
   await page.getByRole('button', { name: 'iOS', exact: true }).click();
   await page.getByRole('button', { name: 'Как установить', exact: true }).click();
   await expect(page.locator('.phone-instructions')).toContainText('iPhone');
   await page.getByRole('link', { name: 'Открыть на iPhone', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'С возвращением', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Вход', exact: true })).toBeVisible();
 });
 test('web update check reports the installed release', async ({ page }) => {
   await page.route('**/api/version', (route) =>
@@ -77,8 +82,9 @@ test('web update check reports the installed release', async ({ page }) => {
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
+  await page.getByRole('tab', { name: 'Приложение', exact: true }).click();
   await page.getByRole('button', { name: 'Проверить обновления', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('актуальная версия');
+  await expect(page.getByRole('status')).toContainText('Последняя версия');
 });
 
 test('themes persist and system mode follows the device; demo never asks for push access', async ({
@@ -91,16 +97,18 @@ test('themes persist and system mode follows the device; demo never asks for pus
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
-  await page.getByRole('button', { name: 'Тёмная', exact: false }).click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect(page.getByRole('switch', { name: 'Пуш-уведомления' })).toHaveCount(0);
   await expect(page.getByText('Недоступны в демоверсии.')).toBeVisible();
+  await page.getByRole('tab', { name: 'Оформление', exact: true }).click();
+  await page.getByRole('button', { name: 'Тёмная', exact: false }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
+  await page.getByRole('tab', { name: 'Оформление', exact: true }).click();
   await page.getByRole('button', { name: 'Системная', exact: false }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.emulateMedia({ colorScheme: 'dark' });
