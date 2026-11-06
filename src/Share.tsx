@@ -1,12 +1,13 @@
 import { useMemo, useRef, useState } from 'react';
 import qrcode from 'qrcode-generator';
 import { Check, Copy, Download, Share2 } from 'lucide-react';
-import { isNative } from './notifications';
+import { Capacitor } from '@capacitor/core';
 import { encodeTheme, type CustomTheme } from './theme';
 import { Modal } from './ui';
 
 // The app inside Android has no public address of its own; links point to the website.
-const origin = () => (isNative ? 'https://mess.quiby.me' : location.origin);
+const origin = () =>
+  Capacitor.getPlatform() === 'android' ? 'https://mess.quiby.me' : location.origin;
 export const profileLink = (username: string) =>
   `${origin()}/app?u=${encodeURIComponent(username)}`;
 export const loginLink = (token: string) => `${origin()}/app?login=${token}`;

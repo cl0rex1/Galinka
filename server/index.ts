@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import multer from 'multer';
 import { Pool, Client, type PoolClient } from 'pg';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readFile, mkdir, unlink, open } from 'node:fs/promises';
 import path from 'node:path';
 import { z, ZodError } from 'zod';
@@ -1387,6 +1388,8 @@ await listen();
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Маршрут не найден.' }));
 const publicDir = path.resolve('dist');
 if (production) {
+  const landingPage = path.join(publicDir, 'landing.html');
+  const hasLandingPage = existsSync(landingPage);
   app.use(
     express.static(publicDir, {
       index: false,
@@ -1395,9 +1398,10 @@ if (production) {
       },
     }),
   );
-  app.get('/{*path}', (_req, res) => {
+  app.get('/{*path}', (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    res.sendFile(path.join(publicDir, 'index.html'));
+    const showLanding = hasLandingPage && req.path === '/' && !req.url.includes('demo=1');
+    res.sendFile(showLanding ? landingPage : path.join(publicDir, 'index.html'));
   });
 }
 const fieldErrors: Record<string, string> = {

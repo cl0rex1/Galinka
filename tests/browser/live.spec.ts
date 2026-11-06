@@ -10,7 +10,7 @@ test('published Galinka serves the current installers and a working app', async 
   );
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(process.env.GALINKA_LIVE_URL!);
-  await expect(page.getByRole('heading', { name: 'Ближе. Даже издалека.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Мессенджер для своего круга' })).toBeVisible();
   const prefix = `https://github.com/cl0rex1/Galinka/releases/download/v${version}/Galinka-${version}`;
   for (const [platform, name, suffix] of [
     ['Windows', /Скачать для Windows/, '-win-x64.exe'],
