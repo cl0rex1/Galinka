@@ -48,7 +48,7 @@ async function desktopSession(page: Page) {
     const state = {
       focused: true,
       visibility: 'visible',
-      shown: [] as { chatId: string }[],
+      shown: [] as { chatId: string; title?: string; body?: string }[],
       cleared: 0,
       emit: (value: unknown) => {
         const source = sources.findLast((item) => !item.closed);
@@ -94,7 +94,7 @@ async function desktopSession(page: Page) {
         notifications: {
           status: async () => ({ supported: true, enabled: true, background: true }),
           setEnabled: async (enabled: boolean) => ({ supported: true, enabled, background: true }),
-          show: async (value: { chatId: string }) => {
+          show: async (value: { chatId: string; title?: string; body?: string }) => {
             state.shown.push(value);
             return true;
           },
@@ -118,6 +118,9 @@ async function desktopSession(page: Page) {
       state.chatReads++;
       return route.fulfill({ json: state.chats });
     }
+    // The server writes the notification text per the user's preview setting.
+    if (/^\/api\/messages\/[^/]+\/notification$/.test(path))
+      return route.fulfill({ json: { title: 'Аня', body: 'Буду к восьми' } });
     const json =
       path === '/api/me'
         ? person
@@ -141,6 +144,8 @@ async function desktopSession(page: Page) {
   return state;
 }
 
+// What reaches the native notification: the server's text, never the event's body.
+const shown = (chatId: string) => ({ chatId, title: 'Аня', body: 'Буду к восьми' });
 async function emit(page: Page, chatId: string, senderId = friendId) {
   await page.evaluate((change) => (window as any).desktopTest.emit(change), {
     type: 'messages',
@@ -154,7 +159,7 @@ async function emit(page: Page, chatId: string, senderId = friendId) {
   });
 }
 
-test('desktop notifications ignore own, muted and actively read messages; background notifications carry only a chat ID', async ({
+test('desktop notifications ignore own, muted and actively read messages; text comes from the server, not the event', async ({
   page,
 }) => {
   await desktopSession(page);
@@ -168,7 +173,7 @@ test('desktop notifications ignore own, muted and actively read messages; backgr
   await emit(page, activeId);
   await expect
     .poll(() => page.evaluate(() => (window as any).desktopTest.shown))
-    .toEqual([{ chatId: activeId }]);
+    .toEqual([shown(activeId)]);
   await page.evaluate(() => {
     (window as any).desktopTest.focused = true;
     (window as any).desktopTest.visibility = 'hidden';
@@ -176,7 +181,7 @@ test('desktop notifications ignore own, muted and actively read messages; backgr
   await emit(page, otherId);
   await expect
     .poll(() => page.evaluate(() => (window as any).desktopTest.shown))
-    .toEqual([{ chatId: activeId }, { chatId: otherId }]);
+    .toEqual([shown(activeId), shown(otherId)]);
 });
 
 test('new conversation notifications refresh membership and clicking the notification opens its conversation', async ({
@@ -190,7 +195,7 @@ test('new conversation notifications refresh membership and clicking the notific
   await expect.poll(() => state.chatReads).toBeGreaterThan(reads);
   await expect
     .poll(() => page.evaluate(() => (window as any).desktopTest.shown))
-    .toEqual([{ chatId: newId }]);
+    .toEqual([shown(newId)]);
   await page
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })

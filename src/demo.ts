@@ -2,14 +2,28 @@ import type { Person, Chat, Message } from './types';
 const self: Person = { id: 'demo-me', name: 'Саша', username: 'sasha', color: 0 };
 const people: Person[] = [
   self,
-  { id: 'anya', name: 'Аня', username: 'anya', color: 1 },
-  { id: 'max', name: 'Макс', username: 'max', color: 2 },
-  { id: 'dasha', name: 'Даша', username: 'dasha', color: 3 },
+  { id: 'anya', name: 'Аня', username: 'anya', color: 1, seen: 'online' },
+  {
+    id: 'max',
+    name: 'Макс',
+    username: 'max',
+    color: 2,
+    seen: new Date(Date.now() - 2 * 3600_000).toISOString(),
+  },
+  { id: 'dasha', name: 'Даша', username: 'dasha', color: 3, seen: 'recently' },
   { id: 'ilya', name: 'Илья', username: 'ilya', color: 4 },
 ];
 const bot: Person = { id: 'nelya', name: 'Неля', username: 'nelya', color: 5 };
 const demoFiles = new Map<string, string>();
-export const getDemoFileUrl = (id: string) => demoFiles.get(id);
+// Photos picked in the demo are kept as data URLs so they survive a reload.
+export const getDemoFileUrl = (id: string) => demoFiles.get(id) ?? state?.avatars?.[id];
+const asDataUrl = (file: Blob) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(Error('Не удалось прочитать фото.'));
+    reader.readAsDataURL(file);
+  });
 function seed() {
   const chats: Chat[] = [
     {
@@ -122,7 +136,13 @@ function seed() {
     const m = messages.filter((m) => m.chat_id === c.id).at(-1);
     if (m) c.last_message = m;
   }
-  return { chats, messages, people, membership: {} as Record<string, string[]> };
+  return {
+    chats,
+    messages,
+    people,
+    membership: {} as Record<string, string[]>,
+    avatars: {} as Record<string, string>,
+  };
 }
 let state: ReturnType<typeof seed>;
 try {
@@ -131,6 +151,7 @@ try {
   state = seed();
 }
 state.membership ??= {};
+state.avatars ??= {};
 Object.assign(
   self,
   state.people.find((p) => p.id === self.id),
@@ -144,6 +165,29 @@ export async function demoRequest(url: string, method: string, body: unknown): P
   const chat = state.chats.find((c) => c.id === parts[1]);
   let result: unknown = { ok: true };
   if (pathname === '/announcements') return { items: [], total: 0, page: 1 };
+  const updateSelf = (change: Partial<Person> & Record<string, unknown>) => {
+    Object.assign(self, change);
+    Object.assign(state.people.find((p) => p.id === self.id) ?? {}, change);
+    save();
+    return self;
+  };
+  if (pathname === '/me/settings') return updateSelf(data);
+  if (pathname === '/me/avatar') {
+    if (method === 'DELETE') return updateSelf({ avatar: null });
+    const id = crypto.randomUUID();
+    state.avatars[id] = await asDataUrl((body as FormData).get('file') as File);
+    return updateSelf({ avatar: id });
+  }
+  if (parts[0] === 'chats' && parts[2] === 'avatar' && chat) {
+    let avatar: string | null = null;
+    if (method !== 'DELETE') {
+      avatar = crypto.randomUUID();
+      state.avatars[avatar] = await asDataUrl((body as FormData).get('file') as File);
+    }
+    chat.avatar = avatar;
+    save();
+    return { avatar };
+  }
   if (pathname === '/me') {
     if (method === 'PATCH') {
       Object.assign(self, { name: data.name });

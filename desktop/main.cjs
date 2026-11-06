@@ -374,9 +374,12 @@ ipcMain.handle('notifications:show', (event, options) => {
     notifications.get(oldest)?.close();
     notifications.delete(oldest);
   }
+  // The text comes from the server, written per the user's preview setting; keep it short.
+  const text = (value, fallback, limit) =>
+    typeof value === 'string' && value.trim() ? value.slice(0, limit) : fallback;
   const notification = new Notification({
-    title: 'Galinka',
-    body: 'Новое сообщение',
+    title: text(options.title, 'Galinka', 80),
+    body: text(options.body, 'Новое сообщение', 200),
     icon: iconPath,
     silent: false,
   });
@@ -425,7 +428,22 @@ function createWindow() {
   window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => {
     if (isMainFrame) notificationReceiverReady = false;
   });
-  let microphoneAllowed = false;
+  // Microphone (voice) and camera (round videos, QR scanner) are asked for separately, once each.
+  const mediaAllowed = { audio: false, video: false };
+  const mediaQuestions = {
+    audio: {
+      title: 'Микрофон Galinka',
+      message: 'Разрешить запись голосовых сообщений и кружков?',
+      detail: 'Микрофон работает только во время записи, которую вы запускаете в чате.',
+      mac: 'microphone',
+    },
+    video: {
+      title: 'Камера Galinka',
+      message: 'Разрешить камеру для кружков и сканера QR-кодов?',
+      detail: 'Камера включается только пока открыта запись кружка или сканер.',
+      mac: 'camera',
+    },
+  };
   const trustedMediaFrame = (contents, url, isMainFrame) => {
     try {
       return (
@@ -441,7 +459,7 @@ function createWindow() {
     (contents, permission, origin, details) =>
       trustedMediaFrame(contents, origin, details.isMainFrame) &&
       (permission === 'clipboard-sanitized-write' ||
-        (permission === 'media' && details.mediaType === 'audio' && microphoneAllowed)),
+        (permission === 'media' && mediaAllowed[details.mediaType] === true)),
   );
   window.webContents.session.setPermissionRequestHandler(
     async (contents, permission, callback, details) => {
@@ -452,34 +470,36 @@ function createWindow() {
         callback(true);
         return;
       }
+      const types = details.mediaTypes || [];
       if (
         permission !== 'media' ||
         !trustedMediaFrame(contents, details.requestingUrl, details.isMainFrame) ||
-        details.mediaTypes?.length !== 1 ||
-        details.mediaTypes[0] !== 'audio'
+        !types.length ||
+        types.some((type) => type !== 'audio' && type !== 'video')
       ) {
         callback(false);
         return;
       }
       try {
-        if (!microphoneAllowed) {
-          microphoneAllowed =
+        for (const type of types) {
+          if (mediaAllowed[type]) continue;
+          const question = mediaQuestions[type];
+          mediaAllowed[type] =
             process.platform === 'darwin'
-              ? await systemPreferences.askForMediaAccess('microphone')
+              ? await systemPreferences.askForMediaAccess(question.mac)
               : (
                   await dialog.showMessageBox(window, {
                     type: 'question',
-                    title: 'Микрофон Galinka',
-                    message: 'Разрешить запись голосовых сообщений?',
-                    detail:
-                      'Микрофон используется только во время записи, которую вы запускаете кнопкой в чате.',
+                    title: question.title,
+                    message: question.message,
+                    detail: question.detail,
                     buttons: ['Разрешить', 'Не сейчас'],
                     defaultId: 0,
                     cancelId: 1,
                   })
                 ).response === 0;
         }
-        callback(microphoneAllowed && !contents.isDestroyed());
+        callback(types.every((type) => mediaAllowed[type]) && !contents.isDestroyed());
       } catch {
         callback(false);
       }

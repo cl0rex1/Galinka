@@ -25,6 +25,8 @@ import {
   webPushEndpointSchema,
   webPushSubscriptionSchema,
   startPushWorker,
+  messageInfoSQL,
+  previewText,
 } from './push.js';
 
 const production = process.env.NODE_ENV === 'production';
@@ -157,7 +159,7 @@ const credentials = z.object({
     .regex(/^[a-z0-9_]{3,24}$/),
   password: z.string().min(10).max(128),
 });
-const personSQL = `id, username, name, color, role`;
+const personSQL = `id, username, name, color, role, avatar`;
 class HttpError extends Error {
   constructor(
     public status: number,
@@ -169,14 +171,24 @@ class HttpError extends Error {
 const requireValue = (condition: unknown, status: number, message: string) => {
   if (!condition) throw new HttpError(status, message);
 };
-type User = { id: string; username: string; name: string; color: number; role: 'admin' | 'user' };
+type User = {
+  id: string;
+  username: string;
+  name: string;
+  color: number;
+  role: 'admin' | 'user';
+  avatar: string | null;
+  show_last_seen: boolean;
+  group_invites: 'all' | 'nobody';
+  notify_preview: 'full' | 'sender' | 'none';
+};
 type AuthedRequest = Request & { user: User; sessionToken: string };
 async function auth(req: Request, res: Response, next: NextFunction) {
   try {
     const raw = readCookie(req.headers.cookie);
     const token = digest(raw);
     const { rows } = await pool.query(
-      `SELECT u.id,u.username,u.name,u.color,u.role,(s.expires_at<now()+interval '15 days' OR s.last_seen_at<now()-interval '1 hour') AS stale
+      `SELECT u.id,u.username,u.name,u.color,u.role,u.avatar,u.show_last_seen,u.group_invites,u.notify_preview,(s.expires_at<now()+interval '15 days' OR s.last_seen_at<now()-interval '1 hour') AS stale
        FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>now() AND NOT u.blocked`,
       [token],
     );
@@ -477,7 +489,11 @@ app.post('/api/auth/qr', authLimit, (req, res) => {
   const token = randomBytes(24).toString('base64url');
   const key = randomBytes(32).toString('base64url');
   const expires = Date.now() + 120_000;
-  qrLogins.set(token, { key, agent: String(req.headers['user-agent'] || '').slice(0, 300), expires });
+  qrLogins.set(token, {
+    key,
+    agent: String(req.headers['user-agent'] || '').slice(0, 300),
+    expires,
+  });
   res.json({ token, key, expires });
 });
 app.post('/api/auth/qr/poll', async (req, res) => {
@@ -723,16 +739,74 @@ app.delete('/api/admin/announcements/:id', auth, admin, async (req, res) => {
   requireValue(result.rowCount, 404, 'Объявление не найдено.');
   res.json({ ok: true });
 });
+/**
+ * What one person may see of another's activity, as in Telegram. Online means an open event
+ * stream. Hiding your last seen hides it from everyone and, in return, hides theirs from you:
+ * both then see only "recently" (within a week).
+ */
+function presence<
+  T extends { id: string; last_seen_at?: string | Date | null; show_last_seen?: boolean },
+>(person: T, viewerShows: boolean) {
+  const { last_seen_at: seenAt, show_last_seen: shows, ...rest } = person;
+  const online = [...streams.values()].some((stream) => stream.userId === person.id);
+  const last = seenAt ? new Date(seenAt).toISOString() : null;
+  if (viewerShows && shows !== false) return { ...rest, seen: online ? 'online' : last };
+  const recent = online || (last !== null && Date.now() - Date.parse(last) < 7 * 86400_000);
+  return { ...rest, seen: recent ? 'recently' : null };
+}
+async function refuseGroupInvites(db: PoolClient, ids: string[], inviter: string) {
+  const { rows } = await db.query(
+    "SELECT name FROM users WHERE id=ANY($1::uuid[]) AND id<>$2 AND group_invites='nobody'",
+    [ids, inviter],
+  );
+  requireValue(
+    !rows.length,
+    403,
+    `${rows.map((row) => row.name).join(', ')} не разрешает добавлять себя в группы. Отправьте ссылку-приглашение.`,
+  );
+}
+app.patch('/api/me/settings', auth, async (req, res) => {
+  const data = z
+    .object({
+      show_last_seen: z.boolean().optional(),
+      group_invites: z.enum(['all', 'nobody']).optional(),
+      notify_preview: z.enum(['full', 'sender', 'none']).optional(),
+    })
+    .strict()
+    .parse(req.body);
+  const { rows } = await pool.query(
+    `UPDATE users SET show_last_seen=COALESCE($1,show_last_seen),group_invites=COALESCE($2,group_invites),
+     notify_preview=COALESCE($3,notify_preview) WHERE id=$4
+     RETURNING ${personSQL},show_last_seen,group_invites,notify_preview`,
+    [
+      data.show_last_seen ?? null,
+      data.group_invites ?? null,
+      data.notify_preview ?? null,
+      user(req).id,
+    ],
+  );
+  res.json(rows[0]);
+});
+// Desktop and in-app notifications ask for the text the same way pushes build it.
+app.get('/api/messages/:id/notification', auth, async (req, res) => {
+  const id = uuid.parse(req.params.id);
+  const { rows } = await pool.query(
+    `${messageInfoSQL} AND EXISTS(SELECT 1 FROM members WHERE chat_id=m.chat_id AND user_id=$2)`,
+    [id, user(req).id],
+  );
+  requireValue(rows[0], 404, 'Сообщение не найдено.');
+  res.json(previewText(rows[0], user(req).notify_preview));
+});
 app.get('/api/chats', auth, async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,m.read_at,m.pinned,m.muted,m.archived,
+    `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,c.avatar,m.read_at,m.pinned,m.muted,m.archived,
  CASE WHEN c.kind='direct' THEN peer.name ELSE c.title END AS title,
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
- CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color) END AS peer,
+ CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color,'avatar',peer.avatar,'last_seen_at',peer.last_seen_at,'show_last_seen',peer.show_last_seen) END AS peer,
  CASE WHEN last.created_at IS NULL THEN NULL ELSE json_build_object('body',last.body,'created_at',last.created_at,'sender_id',last.sender_id,'file_id',last.file_id,'file',last.file) END AS last_message,
  (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread
  FROM chats c JOIN members m ON m.chat_id=c.id
- LEFT JOIN LATERAL (SELECT u.id,u.name,u.username,u.color FROM members mm JOIN users u ON u.id=mm.user_id
+ LEFT JOIN LATERAL (SELECT u.id,u.name,u.username,u.color,u.avatar,u.last_seen_at,u.show_last_seen FROM members mm JOIN users u ON u.id=mm.user_id
    WHERE c.kind='direct' AND mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) peer ON true
  LEFT JOIN LATERAL (SELECT lm.body,lm.created_at,lm.sender_id,lm.file_id,
    CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file
@@ -741,7 +815,8 @@ app.get('/api/chats', auth, async (req, res) => {
  WHERE m.user_id=$1 ORDER BY m.pinned DESC,COALESCE(last.created_at,c.created_at) DESC,c.id`,
     [user(req).id],
   );
-  res.json(rows);
+  const viewer = user(req).show_last_seen !== false;
+  res.json(rows.map((row) => (row.peer ? { ...row, peer: presence(row.peer, viewer) } : row)));
 });
 app.post('/api/chats', auth, async (req, res) => {
   const data = z
@@ -763,6 +838,7 @@ app.post('/api/chats', auth, async (req, res) => {
       [ids],
     );
     requireValue(available.rowCount === ids.length, 400, 'Один из пользователей недоступен.');
+    if (data.kind === 'group') await refuseGroupInvites(db, ids, user(req).id);
     const key = data.kind === 'direct' ? [...ids].sort().join(':') : null;
     const { rows } = await db.query(
       `INSERT INTO chats(id,kind,title,owner_id,direct_key) VALUES($1,$2,$3,$4,$5) ON CONFLICT(direct_key) DO UPDATE SET direct_key=EXCLUDED.direct_key RETURNING id`,
@@ -783,11 +859,12 @@ app.get('/api/chats/:id/members', auth, async (req, res) => {
   await member(String(req.params.id), user(req).id);
   // Recheck access in the data snapshot in case membership changed after the 404 check.
   const { rows } = await pool.query(
-    `SELECT u.id,u.name,u.username,u.color FROM members m JOIN users u ON u.id=m.user_id
+    `SELECT u.id,u.name,u.username,u.color,u.avatar,u.last_seen_at,u.show_last_seen FROM members m JOIN users u ON u.id=m.user_id
      WHERE m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) ORDER BY u.name`,
     [req.params.id, user(req).id],
   );
-  res.json(rows);
+  const viewer = user(req).show_last_seen !== false;
+  res.json(rows.map((row) => presence(row, viewer)));
 });
 app.patch('/api/chats/:id', auth, async (req, res) => {
   const data = z
@@ -861,6 +938,7 @@ app.post('/api/chats/:id/members', auth, async (req, res) => {
       [ids],
     );
     requireValue(available.rowCount === ids.length, 400, 'Один из пользователей недоступен.');
+    await refuseGroupInvites(db, ids, user(req).id);
     const size = await db.query(
       'SELECT count(*)::int AS n FROM (SELECT user_id FROM members WHERE chat_id=$1 UNION SELECT unnest($2::uuid[])) people',
       [chat.id, ids],
@@ -1257,6 +1335,104 @@ app.post(
     }
   },
 );
+// Profile and group photos. The client crops a square and sends a small JPEG or WebP; the
+// server checks the file really is an image and serves it only to signed-in users.
+const avatarUpload = multer({
+  storage: multer.diskStorage({
+    destination: directory,
+    filename: (_req, _file, cb) => cb(null, `avatar-${randomUUID()}`),
+  }),
+  limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 0 },
+});
+const avatarTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const avatarPath = (id: string) => path.join(directory, `avatar-${uuid.parse(id)}`);
+async function storeAvatar(file: Express.Multer.File | undefined) {
+  requireValue(file, 400, 'Выберите фото.');
+  if (!avatarTypes.has(await mediaType(file!.path, file!.mimetype))) {
+    await unlink(file!.path).catch(() => {});
+    requireValue(false, 400, 'Подходят фото PNG, JPEG или WebP.');
+  }
+  return file!.filename.slice('avatar-'.length);
+}
+const dropAvatar = async (id?: string | null) => {
+  if (id) await unlink(avatarPath(id)).catch(() => {});
+};
+async function setUserAvatar(userId: string, avatar: string | null) {
+  const { rows: before } = await pool.query('SELECT avatar FROM users WHERE id=$1', [userId]);
+  const { rows } = await pool.query(
+    `UPDATE users SET avatar=$1 WHERE id=$2 RETURNING ${personSQL}`,
+    [avatar, userId],
+  );
+  await dropAvatar(before[0]?.avatar);
+  return rows[0];
+}
+app.post('/api/me/avatar', auth, avatarUpload.single('file'), async (req, res) => {
+  const id = await storeAvatar(req.file);
+  try {
+    res.json(await setUserAvatar(user(req).id, id));
+  } catch (error) {
+    await dropAvatar(id);
+    throw error;
+  }
+});
+app.delete('/api/me/avatar', auth, async (req, res) => {
+  res.json(await setUserAvatar(user(req).id, null));
+});
+async function groupOwner(req: Request, _res: Response, next: NextFunction) {
+  try {
+    const chat = await member(String(req.params.id), user(req).id);
+    requireValue(
+      chat.kind === 'group' && chat.owner_id === user(req).id,
+      403,
+      'Фото группы меняет владелец.',
+    );
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
+async function setChatAvatar(chatId: string, avatar: string | null) {
+  const { rows: before } = await pool.query('SELECT avatar FROM chats WHERE id=$1', [chatId]);
+  await pool.query('UPDATE chats SET avatar=$1 WHERE id=$2', [avatar, chatId]);
+  await dropAvatar(before[0]?.avatar);
+  await notify(pool, chatId);
+}
+app.post(
+  '/api/chats/:id/avatar',
+  auth,
+  groupOwner,
+  avatarUpload.single('file'),
+  async (req, res) => {
+    const id = await storeAvatar(req.file);
+    try {
+      await setChatAvatar(String(req.params.id), id);
+    } catch (error) {
+      await dropAvatar(id);
+      throw error;
+    }
+    res.json({ avatar: id });
+  },
+);
+app.delete('/api/chats/:id/avatar', auth, groupOwner, async (req, res) => {
+  await setChatAvatar(String(req.params.id), null);
+  res.json({ avatar: null });
+});
+app.get('/api/avatars/:id', auth, async (req, res) => {
+  const id = uuid.parse(req.params.id);
+  const { rowCount } = await pool.query(
+    'SELECT 1 FROM users WHERE avatar=$1 UNION ALL SELECT 1 FROM chats WHERE avatar=$1 LIMIT 1',
+    [id],
+  );
+  requireValue(rowCount, 404, 'Фото не найдено.');
+  const file = avatarPath(id);
+  res.setHeader('Content-Type', await mediaType(file, 'image/'));
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // A new photo gets a new id, so a stored one never changes.
+  res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+  if (publicApiOrigin && publicApiOrigin !== origin)
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+  res.sendFile(file);
+});
 app.get('/api/files/:id', auth, async (req, res) => {
   const { rows } = await pool.query(
     'SELECT f.* FROM files f JOIN members m ON m.chat_id=f.chat_id WHERE f.id=$1 AND m.user_id=$2',
@@ -1298,6 +1474,22 @@ app.get('/api/files/:id', auth, async (req, res) => {
   res.download(path.join(directory, rows[0].id), rows[0].name);
 });
 const streams = new Map<Response, { userId: string; token: string }>();
+// Someone came online or left: remember when, and tell the people they share chats with.
+// ponytail: streams of this instance only; publish through pg_notify when running replicas.
+async function presenceChanged(userId: string) {
+  try {
+    await pool.query('UPDATE users SET last_seen_at=now() WHERE id=$1', [userId]);
+    const { rows } = await pool.query(
+      'SELECT DISTINCT other.user_id FROM members mine JOIN members other ON other.chat_id=mine.chat_id WHERE mine.user_id=$1 AND other.user_id<>$1',
+      [userId],
+    );
+    const peers = new Set(rows.map((row) => row.user_id as string));
+    const event = `data: ${JSON.stringify({ type: 'presence', userId })}\n\n`;
+    for (const [response, stream] of streams) if (peers.has(stream.userId)) response.write(event);
+  } catch {
+    /* Presence is best effort; the next connection updates it. */
+  }
+}
 app.get('/api/events', auth, async (req, res) => {
   const uid = user(req).id,
     token = (req as AuthedRequest).sessionToken;
@@ -1312,7 +1504,9 @@ app.get('/api/events', auth, async (req, res) => {
   });
   res.flushHeaders();
   res.write('data: {"type":"connected"}\n\n');
+  const wasOnline = [...streams.values()].some((stream) => stream.userId === uid);
   streams.set(res, { userId: uid, token });
+  if (!wasOnline) void presenceChanged(uid);
   const heartbeat = setInterval(async () => {
     try {
       const valid = await pool.query(
@@ -1331,6 +1525,7 @@ app.get('/api/events', auth, async (req, res) => {
   req.on('close', () => {
     clearInterval(heartbeat);
     streams.delete(res);
+    if (![...streams.values()].some((stream) => stream.userId === uid)) void presenceChanged(uid);
   });
 });
 let listener: Client | undefined,

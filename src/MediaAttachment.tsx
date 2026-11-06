@@ -18,7 +18,11 @@ export const fileLabel = (name: string) =>
     ? 'Кружок'
     : name.startsWith('Голосовое-')
       ? 'Голосовое сообщение'
-      : name;
+      : /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(name)
+        ? 'Фотография'
+        : /\.(mp4|mov|webm|m4v)$/i.test(name)
+          ? 'Видео'
+          : name;
 /** Round video messages are recorded by Galinka under this name. */
 export const isVideoNote = (file: { name: string; mime?: string }) =>
   /^video\//.test(file.mime || '') && file.name.startsWith('Кружок');

@@ -14,7 +14,12 @@ contextBridge.exposeInMainWorld('galinkaDesktop', {
   notifications: {
     status: () => ipcRenderer.invoke('notifications:status'),
     setEnabled: (enabled) => ipcRenderer.invoke('notifications:enabled', enabled),
-    show: (options) => ipcRenderer.invoke('notifications:show', { chatId: options?.chatId }),
+    show: (options) =>
+      ipcRenderer.invoke('notifications:show', {
+        chatId: options?.chatId,
+        title: options?.title,
+        body: options?.body,
+      }),
     clear: () => ipcRenderer.invoke('notifications:clear'),
     onOpen: (callback) => {
       let active = true;

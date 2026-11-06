@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Check, ChevronRight, LoaderCircle, LogOut, UserPlus, X } from 'lucide-react';
-import { api } from './api';
-import { Avatar } from './Avatar';
+import { api, upload } from './api';
+import { PhotoPicker, photoForm } from './AvatarEditor';
+import { Avatar, seenText } from './Avatar';
 import { Confirm, Modal, plural } from './ui';
 import type { Chat, Person } from './types';
 
@@ -103,6 +104,25 @@ export function GroupSettings({
   return (
     <Modal title="Управление группой" closeDisabled={busy} onClose={onClose} error={error}>
       <div className="group-settings">
+        {owner && (
+          <PhotoPicker
+            hasPhoto={Boolean(chat.avatar)}
+            onUpload={async (blob) => {
+              await upload(`/chats/${chat.id}/avatar`, photoForm(blob), () => {});
+              await onUpdated();
+            }}
+            onRemove={async () => {
+              await api(`/chats/${chat.id}/avatar`, 'DELETE');
+              await onUpdated();
+            }}
+            trigger={(open) => (
+              <button type="button" className="group-photo" onClick={open}>
+                <Avatar chat={chat} size="large" />
+                <span>{chat.avatar ? 'Изменить фото группы' : 'Добавить фото группы'}</span>
+              </button>
+            )}
+          />
+        )}
         {owner && (
           <form className="group-name-form" onSubmit={rename}>
             <label>
@@ -208,7 +228,9 @@ export function GroupSettings({
                   {person.name}
                   {person.id === me.id && <small> · вы</small>}
                 </strong>
-                <small>@{person.username}</small>
+                <small className={person.seen === 'online' ? 'is-online' : ''}>
+                  {seenText(person.seen) || `@${person.username}`}
+                </small>
               </span>
               {person.id === chat.owner_id && <span className="owner-label">владелец</span>}
               <ChevronRight size={17} className="member-chevron" />

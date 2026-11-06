@@ -282,9 +282,19 @@ export function useNotifications(
       operation.current = false;
     }
   }
-  function notify(chatId: string) {
-    if (!demo && userId && phase === 'enabled' && validChat(chatId) && window.galinkaDesktop)
-      void window.galinkaDesktop.notifications.show({ chatId }).catch(() => {});
+  function notify(chatId: string, messageId?: string) {
+    if (!demo && userId && phase === 'enabled' && validChat(chatId) && window.galinkaDesktop) {
+      const desktop = window.galinkaDesktop;
+      // Author and text as chosen in settings; a failed lookup still shows a plain notice.
+      void (
+        messageId && validChat(messageId)
+          ? api<{ title: string; body: string }>(`/messages/${messageId}/notification`)
+          : Promise.reject()
+      )
+        .catch(() => ({ title: undefined, body: undefined }))
+        .then((text) => desktop.notifications.show({ chatId, ...text }))
+        .catch(() => {});
+    }
   }
   return { phase, toggle, notify, background };
 }

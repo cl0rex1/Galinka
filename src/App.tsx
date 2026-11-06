@@ -41,7 +41,7 @@ import {
   SquarePen,
 } from 'lucide-react';
 import { useConversationGestures } from './gestures';
-import { Avatar } from './Avatar';
+import { Avatar, seenText } from './Avatar';
 import { MessageList, type MessageActions } from './MessageList';
 import { AttachmentPreview, type Transfer } from './AttachmentPreview';
 import { GroupSettings } from './GroupSettings';
@@ -58,6 +58,7 @@ import { Settings } from './Settings';
 import { ProfileHero } from './ProfileHero';
 import { PersonCard } from './PersonCard';
 import { listTime, SearchResults } from './SearchResults';
+import { installedApp, touchDevice } from './platform';
 import { currentAccent, ShareSheet } from './Share';
 import { lookPrefs, ThemeImport } from './Appearance';
 import { LoginApprove } from './QrLogin';
@@ -671,6 +672,18 @@ export default function App() {
           deletedId?: string;
           removedUserId?: string;
         };
+        // Someone in our chats came online or left: refresh statuses, not the conversation.
+        if (change.type === 'presence') {
+          refreshChats().catch(reportLive);
+          const open = activeRef.current;
+          if (open)
+            api<Person[]>(`/chats/${open}/members`)
+              .then((people) => {
+                if (live && activeRef.current === open) setMembers(people);
+              })
+              .catch(() => {});
+          return;
+        }
         if (change.event === 'message.created' && change.chatId && change.senderId !== me.id) {
           const target = chatsRef.current.find((chat) => chat.id === change.chatId);
           const notifyIncoming = (chat: Chat | undefined) => {
@@ -685,7 +698,7 @@ export default function App() {
                 sectionRef.current === 'chats'
               )
             )
-              notificationRef.current.notify(chat.id);
+              notificationRef.current.notify(chat.id, change.messageId);
           };
           if (target) notifyIncoming(target);
           else if (window.galinkaDesktop)
@@ -815,6 +828,14 @@ export default function App() {
       ++requestEpoch.current;
     };
   }, [activeId, me?.id, loadMessages, refreshChats, report]);
+  /** Scroll to the bottom, marking it as ours so onScroll does not mistake it for the user. */
+  const autoScroll = useRef(false);
+  function stickToBottom(el: HTMLElement) {
+    const bottom = el.scrollHeight - el.clientHeight;
+    if (Math.abs(el.scrollTop - bottom) < 1) return;
+    autoScroll.current = true;
+    el.scrollTop = bottom;
+  }
   const glide = useRef<{ id: string | null; last?: string; height: number }>({
     id: null,
     height: 0,
@@ -826,7 +847,8 @@ export default function App() {
     if (cached && cached.id === activeId) {
       // The chat-change effect queues its messages first; wait for that DOM to commit.
       if (messages !== cached.messages) return;
-      el.scrollTop = cached.following ? el.scrollHeight : cached.top;
+      if (cached.following) stickToBottom(el);
+      else el.scrollTop = cached.top;
       cachedScroll.current = null;
       return;
     }
@@ -838,7 +860,7 @@ export default function App() {
       el.scrollTop = restore.top + el.scrollHeight - restore.height;
       scrollRestore.current = null;
     } else if (followBottom.current) {
-      el.scrollTop = el.scrollHeight;
+      stickToBottom(el);
       // A message arrived at the bottom: instead of jumping, the list slides up by the new
       // height. Quick bursts add up into one continuous movement rather than a series of jerks.
       const list = el.querySelector<HTMLElement>('.message-list');
@@ -932,7 +954,7 @@ export default function App() {
     const el = scroller.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
-      if (followBottom.current) el.scrollTop = el.scrollHeight;
+      if (followBottom.current) stickToBottom(el);
     });
     observer.observe(el);
     const content = el.querySelector('.message-list');
@@ -1692,12 +1714,17 @@ export default function App() {
               : file?.name || (c.last_message?.file_id ? 'Файл' : 'Нет сообщений'))
     );
   };
-  const subtitle = (chat: Chat) =>
-    chat.kind === 'saved'
-      ? 'Заметки и файлы'
-      : chat.kind === 'group'
-        ? `${chat.member_count} ${plural(chat.member_count, 'участник', 'участника', 'участников')}`
-        : `@${chat.peer?.username || ''}`;
+  const subtitle = (chat: Chat) => {
+    if (chat.kind === 'saved') return 'Заметки и файлы';
+    if (chat.kind === 'direct') return seenText(chat.peer?.seen) || `@${chat.peer?.username || ''}`;
+    const total = `${chat.member_count} ${plural(chat.member_count, 'участник', 'участника', 'участников')}`;
+    // Others online in the open group, as in Telegram: "5 участников, 2 в сети".
+    const online =
+      chat.id === activeId
+        ? members.filter((person) => person.id !== me.id && person.seen === 'online').length
+        : 0;
+    return online ? `${total}, ${online} в сети` : total;
+  };
   // On a phone the Chats tab returns to the list; wider layouts keep the open conversation.
   const openSection = (next: Section) => {
     setSection(next);
@@ -1721,9 +1748,12 @@ export default function App() {
               <Download size={19} />
             </IconButton>
           )}
-          <IconButton label="Сканировать QR-код" onClick={() => setScanning(true)}>
-            <ScanLine size={20} />
-          </IconButton>
+          {/* Phones scan codes; computers show them (sign-in, sharing). */}
+          {touchDevice() && (
+            <IconButton label="Сканировать QR-код" onClick={() => setScanning(true)}>
+              <ScanLine size={20} />
+            </IconButton>
+          )}
           <IconButton label="Новый чат" className="new-chat" onClick={() => setModal('new')}>
             <SquarePen size={20} />
           </IconButton>
@@ -1944,7 +1974,13 @@ export default function App() {
                 <Avatar person={active.peer} chat={active} size="small" />
                 <span>
                   <h2>{active.title}</h2>
-                  <p>{subtitle(active)}</p>
+                  <p
+                    className={
+                      active.kind === 'direct' && active.peer?.seen === 'online' ? 'is-online' : ''
+                    }
+                  >
+                    {subtitle(active)}
+                  </p>
                 </span>
               </button>
               <div className="header-actions">
@@ -2098,6 +2134,12 @@ export default function App() {
                   }}
                   onScroll={() => {
                     const el = scroller.current!;
+                    // Our own jump to the bottom: content may have grown meanwhile (a photo
+                    // decoding), which must not read as the user scrolling up.
+                    if (autoScroll.current) {
+                      autoScroll.current = false;
+                      return;
+                    }
                     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
                     if (jumpingToLatest.current && !atBottom) return;
                     jumpingToLatest.current = false;
@@ -2434,7 +2476,9 @@ export default function App() {
                               {p.name}
                               {p.id === me.id && <small> · вы</small>}
                             </strong>
-                            <small>@{p.username}</small>
+                            <small className={p.seen === 'online' ? 'is-online' : ''}>
+                              {p.id === me.id ? 'в сети' : seenText(p.seen) || `@${p.username}`}
+                            </small>
                           </span>
                           {p.id === active.owner_id && active.kind === 'group' && (
                             <span className="owner-label">владелец</span>
@@ -2492,8 +2536,9 @@ export default function App() {
               setName(me.name);
               setModal('profile');
             }}
-            onInstall={() => setModal('install')}
-            onScan={() => setScanning(true)}
+            onInstall={installedApp() ? undefined : () => setModal('install')}
+            onScan={touchDevice() ? () => setScanning(true) : undefined}
+            onMe={(person) => setMe((current) => (current ? { ...current, ...person } : person))}
             onLogout={logout}
           />
         )}

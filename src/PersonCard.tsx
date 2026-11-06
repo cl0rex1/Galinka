@@ -3,6 +3,7 @@ import { Crown, LoaderCircle, MessageCircle, QrCode, UserMinus } from 'lucide-re
 import { currentAccent, profileLink, ShareSheet } from './Share';
 import { api } from './api';
 import { ProfileHero } from './ProfileHero';
+import { seenText } from './Avatar';
 import { Confirm, Modal } from './ui';
 import type { Chat, Person } from './types';
 
@@ -35,7 +36,13 @@ export function PersonCard({
   const manage = Boolean(group && group.owner_id === me.id && !self);
   return (
     <Modal title="Профиль" onClose={onClose} error={error} open={open} closeDisabled={busy}>
-      <ProfileHero person={person} title={person.name} subtitle={`@${person.username}`}>
+      <ProfileHero
+        person={person}
+        title={person.name}
+        subtitle={[`@${person.username}`, person.id === me.id ? '' : seenText(person.seen)]
+          .filter(Boolean)
+          .join(' · ')}
+      >
         {group?.owner_id === person.id && (
           <span className="person-role">
             <Crown size={14} />

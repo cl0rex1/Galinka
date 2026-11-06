@@ -85,11 +85,60 @@ export const browserPushAvailable = webPushConfig !== null;
 export const webPushPublicKey = webPushConfig?.publicKey ?? null;
 export const anyPushEnabled = pushEnabled || browserPushAvailable;
 
-export function pushPayload(tokens: string[], chatId: string, messageId: string): MulticastMessage {
+/** What a notification may say, chosen by each recipient in Settings → Notifications. */
+export type Preview = 'full' | 'sender' | 'none';
+export type MessageInfo = {
+  body: string;
+  file_name: string | null;
+  mime: string | null;
+  kind: string;
+  title: string;
+  sender: string;
+};
+export type NotificationText = { title: string; body: string };
+const generic: NotificationText = { title: 'Galinka', body: 'Новое сообщение' };
+const attachmentWord = (info: MessageInfo) =>
+  !info.file_name
+    ? 'Новое сообщение'
+    : info.mime?.startsWith('image/')
+      ? 'Фотография'
+      : info.mime?.startsWith('video/')
+        ? info.file_name.startsWith('Кружок')
+          ? 'Кружок'
+          : 'Видео'
+        : info.mime?.startsWith('audio/')
+          ? 'Голосовое сообщение'
+          : `Файл: ${info.file_name}`;
+/**
+ * Title and text for one recipient. "full": author and text, as in Telegram; "sender": only who
+ * wrote; "none": nothing but "New message". In a group the chat is the title and the author
+ * leads the text; in a direct chat the author is the title.
+ */
+export function previewText(info: MessageInfo | undefined, mode: Preview): NotificationText {
+  if (!info || mode === 'none') return generic;
+  const group = info.kind === 'group';
+  const title = group ? info.title : info.sender;
+  if (mode === 'sender')
+    return { title, body: group ? `${info.sender}: новое сообщение` : 'Новое сообщение' };
+  const content = info.body.trim() || attachmentWord(info);
+  const text = content.length > 180 ? `${content.slice(0, 177)}…` : content;
+  return { title, body: group ? `${info.sender}: ${text}` : text };
+}
+export const messageInfoSQL = `SELECT m.body,f.name AS file_name,f.mime,c.kind,c.title,COALESCE(u.name,'Неля') AS sender
+  FROM messages m JOIN chats c ON c.id=m.chat_id LEFT JOIN users u ON u.id=m.sender_id
+  LEFT JOIN files f ON f.id=m.file_id WHERE m.id=$1`;
+
+export function pushPayload(
+  tokens: string[],
+  chatId: string,
+  messageId: string,
+  text: NotificationText = generic,
+): MulticastMessage {
   return {
     tokens,
-    // Keep private message text off the lock screen and out of the provider payload.
-    notification: { title: 'Galinka', body: 'Новое сообщение' },
+    // What the text says follows the recipient's preview setting; 'private' visibility keeps
+    // it off a locked screen.
+    notification: text,
     data: { chatId, messageId },
     android: {
       priority: 'high',
@@ -104,8 +153,12 @@ export function pushPayload(tokens: string[], chatId: string, messageId: string)
   };
 }
 
-export function browserPushPayload(chatId: string, messageId: string) {
-  return JSON.stringify({ title: 'Galinka', body: 'Новое сообщение', chatId, messageId });
+export function browserPushPayload(
+  chatId: string,
+  messageId: string,
+  text: NotificationText = generic,
+) {
+  return JSON.stringify({ ...text, chatId, messageId });
 }
 
 export function invalidPushToken(code?: string) {
@@ -185,6 +238,9 @@ export async function deliverPushJob(pool: Pool, transports: PushTransports) {
       [job.message_id],
     );
     const delivered = new Set(receipts.map((row) => `${row.transport}:${row.destination}`));
+    const {
+      rows: [info],
+    } = await db.query(messageInfoSQL, [job.message_id]);
     let retry = false;
     if (transports.android) {
       const { rows } = await db.query(`SELECT d.token ${recipients('push_devices')}`, [
@@ -194,32 +250,38 @@ export async function deliverPushJob(pool: Pool, transports: PushTransports) {
       for (let i = 0; i < pending.length; i += 100) {
         await deliveryTransaction(pool, job.message_id, async (recipientDb) => {
           const { rows: devices } = await recipientDb.query(
-            `SELECT d.token,m.chat_id ${recipients('push_devices')} AND d.token=ANY($2::text[]) FOR SHARE OF d,recipient,s`,
+            `SELECT d.token,m.chat_id,recipient.notify_preview ${recipients('push_devices')} AND d.token=ANY($2::text[]) FOR SHARE OF d,recipient,s`,
             [job.message_id, pending.slice(i, i + 100).map((device) => device.token)],
           );
           if (!devices.length) return;
-          let result: BatchResponse;
-          try {
-            result = await transports.android!(
-              pushPayload(
-                devices.map((device) => device.token),
-                devices[0].chat_id,
-                job.message_id,
-              ),
-            );
-          } catch {
-            retry = true;
-            return;
-          }
-          for (let n = 0; n < devices.length; n++) {
-            const response = result.responses[n];
-            if (invalidPushToken(response?.error?.code))
-              await recipientDb.query('DELETE FROM push_devices WHERE token=$1', [
-                devices[n].token,
-              ]);
-            else if (response?.success)
-              await markDelivered(recipientDb, job.message_id, 'android', devices[n].token);
-            else retry = true;
+          // One multicast per preview setting: everyone in it gets the same text.
+          for (const mode of ['full', 'sender', 'none'] as const) {
+            const group = devices.filter((device) => (device.notify_preview ?? 'none') === mode);
+            if (!group.length) continue;
+            let result: BatchResponse;
+            try {
+              result = await transports.android!(
+                pushPayload(
+                  group.map((device) => device.token),
+                  group[0].chat_id,
+                  job.message_id,
+                  previewText(info, mode),
+                ),
+              );
+            } catch {
+              retry = true;
+              continue;
+            }
+            for (let n = 0; n < group.length; n++) {
+              const response = result.responses[n];
+              if (invalidPushToken(response?.error?.code))
+                await recipientDb.query('DELETE FROM push_devices WHERE token=$1', [
+                  group[n].token,
+                ]);
+              else if (response?.success)
+                await markDelivered(recipientDb, job.message_id, 'android', group[n].token);
+              else retry = true;
+            }
           }
         });
       }
@@ -238,7 +300,7 @@ export async function deliverPushJob(pool: Pool, transports: PushTransports) {
           pending.slice(i, i + 8).map((candidate) =>
             deliveryTransaction(pool, job.message_id, async (recipientDb) => {
               const { rows: subscriptions } = await recipientDb.query(
-                `SELECT d.endpoint,d.p256dh,d.auth,m.chat_id ${recipients('web_push_subscriptions')}
+                `SELECT d.endpoint,d.p256dh,d.auth,m.chat_id,recipient.notify_preview ${recipients('web_push_subscriptions')}
                AND d.endpoint=$2 AND (d.expires_at IS NULL OR d.expires_at>now()) FOR SHARE OF d,recipient,s`,
                 [job.message_id, candidate.endpoint],
               );
@@ -258,7 +320,11 @@ export async function deliverPushJob(pool: Pool, transports: PushTransports) {
               try {
                 await transports.browser!(
                   parsed.data,
-                  browserPushPayload(subscription.chat_id, job.message_id),
+                  browserPushPayload(
+                    subscription.chat_id,
+                    job.message_id,
+                    previewText(info, subscription.notify_preview ?? 'none'),
+                  ),
                 );
               } catch (error) {
                 const status = (error as { statusCode?: number })?.statusCode;

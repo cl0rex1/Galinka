@@ -46,10 +46,18 @@ test.use({
 });
 
 test('scanner finds a code anywhere in the picture, frames it and opens the Galinka link', async ({
-  page,
+  browser,
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', 'The fake camera file is a Chromium switch.');
+  // The scanner belongs to phones: a computer shows codes instead of scanning them.
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    permissions: ['camera'],
+  });
+  const page = await context.newPage();
   await page.goto('/?demo=1');
   await page.getByRole('button', { name: 'Сканировать QR-код', exact: true }).click();
   const scanner = page.getByRole('dialog', { name: 'Сканер QR-кода' });
@@ -64,6 +72,26 @@ test('scanner finds a code anywhere in the picture, frames it and opens the Gali
       page.evaluate(() => document.documentElement.style.getPropertyValue('--color-accent')),
     )
     .toBe('#0f7f86');
+  await context.close();
+});
+
+test('a computer offers no scanner; a phone has no code to show on the sign-in screen', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/?demo=1');
+  await expect(page.locator('.chat-item').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Сканировать QR-код' })).toHaveCount(0);
+  const phone = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const mobile = await phone.newPage();
+  await mobile.goto('/app');
+  await expect(mobile.getByRole('tab', { name: 'Регистрация' })).toBeVisible();
+  await expect(mobile.getByRole('tab', { name: 'QR-код' })).toHaveCount(0);
+  await phone.close();
 });
 
 test('signing in by QR: the new device shows a code and enters once the phone approves', async ({

@@ -62,6 +62,14 @@ type RowProps = {
 };
 const interactive =
   'button, a, input, textarea, audio, video, details, [role="button"], [role="slider"]';
+// The message's own content (a photo, a file, a round video, a quote) is a button for a tap,
+// but a long press or right click on it still opens the message menu. Real controls do not.
+const content = '.image-preview, .file-attachment, .video-note, .video-attachment, .message-quote';
+const holdable = (target: EventTarget | null) => {
+  if (!(target instanceof Element)) return false;
+  const control = target.closest(interactive);
+  return !control || control.matches(content) || Boolean(control.closest(content));
+};
 
 const MessageRow = memo(function MessageRow({
   message: m,
@@ -103,13 +111,7 @@ const MessageRow = memo(function MessageRow({
   function pointerDown(event: ReactPointerEvent<HTMLElement>) {
     cancelPress();
     held.current = false;
-    if (
-      event.pointerType === 'mouse' ||
-      !event.isPrimary ||
-      !(event.target instanceof Element) ||
-      event.target.closest(interactive)
-    )
-      return;
+    if (event.pointerType === 'mouse' || !event.isPrimary || !holdable(event.target)) return;
     press.current = {
       x: event.clientX,
       y: event.clientY,
@@ -154,7 +156,7 @@ const MessageRow = memo(function MessageRow({
           actions.react(m, '❤');
         }}
         onContextMenu={(event) => {
-          if (!(event.target instanceof Element) || event.target.closest(interactive)) return;
+          if (!holdable(event.target)) return;
           event.preventDefault();
           cancelPress();
           openMenu({ x: event.clientX, y: event.clientY });

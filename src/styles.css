@@ -126,6 +126,20 @@ progress::-moz-progress-bar {
   background: var(--color-accent-soft);
 }
 
+/* ========== Scrollbars ==========
+   Thin and quiet, as in Telegram. Panels that can start scrolling (an avatar expands, a list
+   grows) keep the room for the bar from the start, so their content never jumps sideways. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-ink) 22%, transparent) transparent;
+}
+.chat-info,
+.content-page,
+.modal,
+.chat-list {
+  scrollbar-gutter: stable;
+}
+
 /* ========== Utilities ========== */
 .muted {
   color: var(--color-muted);
@@ -965,6 +979,37 @@ form.stack > :not(:last-child, .fold),
   background: var(--tone-2-bg);
   user-select: none;
 }
+/* "в сети" reads in the accent colour wherever a status is shown. */
+.is-online,
+.chat-heading p.is-online {
+  color: var(--color-accent);
+}
+/* A photo fills the circle; the green dot marks someone online. */
+.avatar {
+  position: relative;
+}
+.avatar > img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+.avatar.online::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 26%;
+  aspect-ratio: 1;
+  min-width: 9px;
+  border-radius: 50%;
+  background: #3cc26d;
+  box-shadow: 0 0 0 2px var(--color-surface);
+  animation: badge-in 220ms var(--ease-out);
+}
+.chat-item.selected .avatar.online::after {
+  box-shadow: 0 0 0 2px var(--color-selected);
+}
 .avatar.small {
   width: 36px;
   height: 36px;
@@ -1698,9 +1743,10 @@ form.stack > :not(:last-child, .fold),
 :root[data-theme='dark'] .message-row:has(.message-menu[open]) .bubble {
   filter: brightness(1.15);
 }
+/* Touch screens open the menu with a long press, as in Telegram: no dots beside every bubble. */
 @media (hover: none) {
-  .message-menu > summary {
-    opacity: 0.5;
+  .message-menu:not([open]) > summary {
+    display: none;
   }
 }
 
@@ -1899,10 +1945,14 @@ form.stack > :not(:last-child, .fold),
   margin-top: 4px;
 }
 .media-dialog {
-  width: 100vw;
+  /* 100vw would count the page's scrollbar and make the viewer scroll; fill the screen instead. */
+  inset: 0;
+  width: 100%;
   max-width: none;
-  height: 100dvh;
+  height: 100%;
   max-height: none;
+  margin: 0;
+  overflow: hidden;
   background: rgb(8 8 9 / 94%);
   color: #fff;
 }
@@ -2212,6 +2262,9 @@ form.stack > :not(:last-child, .fold),
   position: relative;
   z-index: 3;
   display: grid;
+  /* One column that never grows past the screen: a long unbroken file name in the reply bar
+     used to widen it and push the send button off the edge. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
   width: min(calc(var(--column-width) + 36px), 100%);
   margin: 0 auto;
@@ -3249,6 +3302,55 @@ input[type='range'] {
   background: #fff;
 }
 
+/* ---- Photo editor: a circle to frame the picture ---- */
+.avatar-editor {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-md);
+}
+.avatar-stage {
+  position: relative;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--color-paper-2);
+  cursor: grab;
+  touch-action: none;
+  box-shadow: 0 0 0 4px var(--color-accent-soft);
+}
+.avatar-stage:active {
+  cursor: grabbing;
+}
+.avatar-stage img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  user-select: none;
+  pointer-events: none;
+}
+.avatar-editor .range-row {
+  width: 100%;
+}
+.group-photo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px;
+  margin: -6px;
+  border-radius: var(--radius-lg);
+  color: var(--color-accent);
+  font-weight: 600;
+  text-align: left;
+  transition: background var(--dur-fast);
+}
+.group-photo:hover {
+  background: var(--color-paper-2);
+}
+.group-photo .avatar.large {
+  width: 64px;
+  height: 64px;
+}
+
 /* ---- Voice and video ---- */
 .settings-hint {
   font-size: var(--text-xs);
@@ -3770,6 +3872,16 @@ mark {
 .chat-filters::after {
   width: calc(var(--tab-w, 12px) - 12px);
   translate: calc(var(--tab-x, 0px) + 6px) 0;
+}
+/* More tabs hide past a faded edge. */
+:is(.chat-filters, .settings-tabs)[data-more='right'] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+}
+:is(.chat-filters, .settings-tabs)[data-more='left'] {
+  mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent);
+}
+:is(.chat-filters, .settings-tabs)[data-more='both'] {
+  mask-image: linear-gradient(to right, transparent, #000 48px calc(100% - 48px), transparent);
 }
 .chat-filters.ready::after,
 .settings-tabs.ready::after {

@@ -19,7 +19,7 @@ declare global {
       notifications: {
         status: () => Promise<DesktopNotificationStatus>;
         setEnabled: (enabled: boolean) => Promise<DesktopNotificationStatus>;
-        show: (options: { chatId: string }) => Promise<boolean>;
+        show: (options: { chatId: string; title?: string; body?: string }) => Promise<boolean>;
         clear: () => Promise<void>;
         onOpen: (callback: (chatId: string) => void) => () => void;
       };

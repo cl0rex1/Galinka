@@ -3,9 +3,12 @@ import { LoaderCircle } from 'lucide-react';
 import { api } from './api';
 import { ThemeToggle } from './theme';
 import { QrLogin } from './QrLogin';
+import { touchDevice } from './platform';
 import type { Person } from './types';
 
 const signup = new URLSearchParams(location.search).get('signup') || '';
+// A phone signs in by scanning, so it has no use for showing a code itself.
+const showQr = !touchDevice();
 
 export function Auth({
   onLogin,
@@ -60,10 +63,10 @@ export function Auth({
         <h1 key={`${register}${qr}`}>
           {qr ? 'Вход по QR-коду' : register ? 'Регистрация' : 'Вход'}
         </h1>
-        <div className="auth-tabs" role="tablist">
+        <div className="auth-tabs" role="tablist" style={{ '--options': showQr ? 3 : 2 } as never}>
           {tab(false, 'Вход')}
           {tab(true, 'Регистрация')}
-          {tab(false, 'QR-код', true)}
+          {showQr && tab(false, 'QR-код', true)}
         </div>
         {qr ? (
           <QrLogin onLogin={onLogin} />

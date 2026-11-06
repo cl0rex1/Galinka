@@ -212,15 +212,30 @@ export function usePresence(open: boolean, ms = 200) {
  */
 export function useTabIndicator(selected: unknown) {
   const list = useRef<HTMLElement | null>(null);
+  // Tabs that do not fit fade out at the edge where more of them hide, so it is clear the row
+  // scrolls; the next tab peeks out half-cut, as in Telegram.
+  const edges = useCallback(() => {
+    const el = list.current;
+    if (!el) return;
+    const left = el.scrollLeft > 2;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    el.dataset.more = left && right ? 'both' : left ? 'left' : right ? 'right' : '';
+  }, []);
   const measure = useCallback(() => {
     const el = list.current;
     if (!el) return;
     const tab = el.querySelector<HTMLElement>('[aria-selected="true"], [aria-pressed="true"]');
     el.style.setProperty('--tab-x', `${tab?.offsetLeft ?? 0}px`);
     el.style.setProperty('--tab-w', `${tab?.offsetWidth ?? 0}px`);
-    tab?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    // Bring the chosen tab towards the middle, so its neighbours on both sides show.
+    if (tab && el.scrollWidth > el.clientWidth)
+      el.scrollTo({
+        left: tab.offsetLeft - (el.clientWidth - tab.offsetWidth) / 2,
+        behavior: el.classList.contains('ready') && motionAllowed() ? 'smooth' : 'auto',
+      });
+    edges();
     requestAnimationFrame(() => el.classList.add('ready'));
-  }, []);
+  }, [edges]);
   useLayoutEffect(measure, [selected, measure]);
   return useCallback(
     (el: HTMLElement | null) => {
@@ -229,8 +244,24 @@ export function useTabIndicator(selected: unknown) {
       measure();
       // Tab widths change once the web font arrives.
       void document.fonts?.ready.then(measure);
+      // A mouse wheel scrolls the row sideways.
+      const wheel = (event: WheelEvent) => {
+        if (el.scrollWidth <= el.clientWidth || Math.abs(event.deltaX) > Math.abs(event.deltaY))
+          return;
+        event.preventDefault();
+        el.scrollBy({ left: event.deltaY });
+      };
+      const resize = new ResizeObserver(edges);
+      resize.observe(el);
+      el.addEventListener('scroll', edges, { passive: true });
+      el.addEventListener('wheel', wheel, { passive: false });
+      return () => {
+        resize.disconnect();
+        el.removeEventListener('scroll', edges);
+        el.removeEventListener('wheel', wheel);
+      };
     },
-    [measure],
+    [measure, edges],
   );
 }
 

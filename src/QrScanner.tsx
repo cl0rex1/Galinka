@@ -18,12 +18,19 @@ function decode(
   width: number,
   height: number,
   canvas: HTMLCanvasElement,
+  crop = 1,
 ): Found {
-  const scale = Math.min(1, 720 / Math.max(width, height));
-  canvas.width = Math.round(width * scale);
-  canvas.height = Math.round(height * scale);
+  // `crop` < 1 reads only the middle of the frame at a higher resolution: small or distant codes
+  // that vanish when the whole frame is shrunk become readable.
+  const cropWidth = width * crop,
+    cropHeight = height * crop;
+  const left = (width - cropWidth) / 2,
+    top = (height - cropHeight) / 2;
+  const scale = Math.min(1, 800 / Math.max(cropWidth, cropHeight));
+  canvas.width = Math.round(cropWidth * scale);
+  canvas.height = Math.round(cropHeight * scale);
   const context = canvas.getContext('2d', { willReadFrequently: true })!;
-  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  context.drawImage(source, left, top, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
   const image = context.getImageData(0, 0, canvas.width, canvas.height);
   const code = jsQR(image.data, image.width, image.height, { inversionAttempts: 'attemptBoth' });
   if (!code) return null;
@@ -31,8 +38,8 @@ function decode(
   return {
     text: code.data,
     corners: [topLeftCorner, topRightCorner, bottomRightCorner, bottomLeftCorner].map((p) => ({
-      x: p.x / scale,
-      y: p.y / scale,
+      x: p.x / scale + left,
+      y: p.y / scale + top,
     })),
   };
 }
@@ -76,9 +83,12 @@ export function QrScanner({
     let shown: Point[] | null = null;
     let target: Point[] | null = null;
     let seenAt = 0;
-    let last = '';
+    // A code counts once read twice within a second (frames alternate whole and middle views,
+    // so a miss in between must not reset it).
+    let last = { text: '', at: 0 };
     let busy = false;
 
+    let frameCount = 0;
     async function detect(element: HTMLVideoElement): Promise<Found> {
       if (detector) {
         const [code] = await detector.detect(element).catch(() => []);
@@ -86,7 +96,15 @@ export function QrScanner({
           ? { text: code.rawValue, corners: code.cornerPoints }
           : null;
       }
-      return decode(element, element.videoWidth, element.videoHeight, canvas);
+      // Alternate the whole frame and its enlarged middle.
+      frameCount++;
+      return decode(
+        element,
+        element.videoWidth,
+        element.videoHeight,
+        canvas,
+        frameCount % 2 ? 1 : 0.5,
+      );
     }
     function draw() {
       const box = stage.current;
@@ -144,9 +162,10 @@ export function QrScanner({
           const dy = (box.clientHeight - element.videoHeight * scale) / 2;
           target = result.corners.map((p) => ({ x: p.x * scale + dx, y: p.y * scale + dy }));
           seenAt = performance.now();
-          if (result.text === last) finish(result.text);
-          last = result.text;
-        } else last = '';
+          const now = performance.now();
+          if (result.text === last.text && now - last.at < 1000) finish(result.text);
+          last = { text: result.text, at: now };
+        }
       }
       draw();
       frame = requestAnimationFrame(() => void tick());
@@ -157,8 +176,8 @@ export function QrScanner({
         audio: false,
         video: {
           facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
         },
       })
       .then(async (media) => {
@@ -168,6 +187,14 @@ export function QrScanner({
         }
         stream = media;
         track.current = media.getVideoTracks()[0];
+        // Keep refocusing as the phone moves; many cameras start fixed at infinity.
+        const focus = track.current.getCapabilities?.() as { focusMode?: string[] } | undefined;
+        if (focus?.focusMode?.includes('continuous'))
+          await track.current
+            .applyConstraints({
+              advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+            })
+            .catch(() => {});
         const capabilities = track.current.getCapabilities?.() as { torch?: boolean } | undefined;
         if (capabilities?.torch) setTorch(false);
         video.current!.srcObject = media;

@@ -5,6 +5,7 @@ import {
   allowedPushEndpoint,
   browserPushPayload,
   invalidPushToken,
+  previewText,
   pushPayload,
   readWebPushConfig,
   webPushSubscriptionSchema,
@@ -94,4 +95,26 @@ test('browser subscriptions and VAPID configuration require valid matching curve
     chatId: 'chat',
     messageId: 'message',
   });
+});
+
+test('notification text follows each recipient: author and text, author only, or nothing', () => {
+  const group = {
+    body: 'Буду к восьми',
+    file_name: null,
+    mime: null,
+    kind: 'group',
+    title: 'Свои люди',
+    sender: 'Макс',
+  };
+  assert.deepEqual(previewText(group, 'full'), { title: 'Свои люди', body: 'Макс: Буду к восьми' });
+  assert.deepEqual(previewText(group, 'sender'), {
+    title: 'Свои люди',
+    body: 'Макс: новое сообщение',
+  });
+  assert.deepEqual(previewText(group, 'none'), { title: 'Galinka', body: 'Новое сообщение' });
+  const photo = { ...group, kind: 'direct', body: '', file_name: 'a.jpg', mime: 'image/jpeg' };
+  assert.deepEqual(previewText(photo, 'full'), { title: 'Макс', body: 'Фотография' });
+  const long = previewText({ ...group, body: 'я'.repeat(400) }, 'full').body;
+  assert.ok(long.length < 200 && long.endsWith('…'));
+  assert.deepEqual(previewText(undefined, 'full'), { title: 'Galinka', body: 'Новое сообщение' });
 });

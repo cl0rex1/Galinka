@@ -93,9 +93,12 @@ self.addEventListener('push', (event) => {
   }
   const chatId = validId(data.chatId) ? data.chatId : undefined;
   const messageId = validId(data.messageId) ? data.messageId : undefined;
+  // The server writes the text according to the recipient's preview setting.
+  const text = (value, fallback, limit) =>
+    typeof value === 'string' && value.trim() ? value.slice(0, limit) : fallback;
   event.waitUntil(
-    self.registration.showNotification('Galinka', {
-      body: 'Новое сообщение',
+    self.registration.showNotification(text(data.title, 'Galinka', 80), {
+      body: text(data.body, 'Новое сообщение', 200),
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       tag: chatId ? `galinka-${chatId}` : 'galinka-message',

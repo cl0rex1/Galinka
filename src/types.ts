@@ -4,6 +4,10 @@ export type Person = {
   username: string;
   color: number;
   role?: 'admin' | 'user';
+  /** Profile photo id, served from /avatars/:id. */
+  avatar?: string | null;
+  /** 'online', 'recently', an ISO time of the last visit, or null when unknown. */
+  seen?: string | null;
 };
 export type AdminUser = Person & { role: 'admin' | 'user'; blocked: boolean; created_at: string };
 export type Announcement = {
@@ -43,6 +47,7 @@ export type Chat = {
   id: string;
   kind: 'direct' | 'group' | 'saved';
   title: string;
+  avatar?: string | null;
   owner_id: string;
   nelya: boolean;
   pinned?: boolean;

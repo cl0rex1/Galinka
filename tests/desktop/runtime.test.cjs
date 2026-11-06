@@ -253,11 +253,14 @@ test('native notifications are opt-in, private, grouped by chat, open the chat a
       app.invoke('notifications:show', { chatId, body: 'private message', title: 'private name' }),
       true,
     );
+    // Text written by the server for the user's preview setting; bounded, never markup-bearing.
     const first = app.shown[0];
-    assert.equal(first.config.title, 'Galinka');
-    assert.equal(first.config.body, 'Новое сообщение');
-    app.invoke('notifications:show', { chatId });
+    assert.equal(first.config.title, 'private name');
+    assert.equal(first.config.body, 'private message');
+    app.invoke('notifications:show', { chatId, title: 42, body: 'x'.repeat(900) });
     assert.equal(first.closed, true);
+    assert.equal(app.shown[1].config.title, 'Galinka');
+    assert.equal(app.shown[1].config.body.length, 200);
     app.shown[1].emit('click');
     assert.equal(app.window.visible, true);
     assert.equal(

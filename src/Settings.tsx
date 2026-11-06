@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import {
+  Camera,
   ChevronRight,
   Download,
   History,
@@ -16,6 +17,9 @@ import { ProfileHero } from './ProfileHero';
 import { useTabIndicator } from './ui';
 import { Security } from './Security';
 import { Appearance, LookSettings } from './Appearance';
+import { api, upload } from './api';
+import { PhotoPicker, photoForm } from './AvatarEditor';
+import { PreviewSettings, PrivacySettings } from './Privacy';
 import { currentAccent, profileLink, ShareSheet, themeLink } from './Share';
 import { Updates } from './updates';
 import type { Person } from './types';
@@ -24,6 +28,7 @@ const tabs = [
   ['general', 'Основные'],
   ['look', 'Оформление'],
   ['media', 'Голос и видео'],
+  ['privacy', 'Конфиденциальность'],
   ['security', 'Безопасность'],
   ['app', 'Приложение'],
 ] as const;
@@ -46,15 +51,17 @@ export function Settings({
   onInstall,
   onLogout,
   onScan,
+  onMe,
 }: {
   me: Person;
   demo: boolean;
   notifications: ReturnType<typeof useNotifications>;
   hasDraft: boolean;
   onEditName: () => void;
-  onInstall: () => void;
+  onInstall?: () => void;
   onLogout: () => void;
-  onScan: () => void;
+  onScan?: () => void;
+  onMe: (person: Person) => void;
 }) {
   const [tab, setTab] = useState<Tab>(stored);
   const [share, setShare] = useState<Omit<Parameters<typeof ShareSheet>[0], 'onClose'> | null>(
@@ -84,6 +91,22 @@ export function Settings({
       <h1>Настройки</h1>
       <ProfileHero person={me} title={me.name} subtitle={`@${me.username}`}>
         <div className="hero-tiles">
+          <PhotoPicker
+            hasPhoto={Boolean(me.avatar)}
+            onUpload={async (blob) =>
+              onMe(await upload<Person>('/me/avatar', photoForm(blob), () => {}))
+            }
+            onRemove={async () => onMe(await api<Person>('/me/avatar', 'DELETE'))}
+            trigger={(open) => (
+              <button
+                onClick={open}
+                aria-label={me.avatar ? 'Фото профиля' : 'Добавить фото профиля'}
+              >
+                <Camera size={20} />
+                Фото
+              </button>
+            )}
+          />
           <button onClick={onEditName} aria-label="Изменить имя">
             <Pencil size={20} />
             Имя
@@ -102,10 +125,12 @@ export function Settings({
             <QrCode size={20} />
             QR-код
           </button>
-          <button onClick={onScan}>
-            <ScanLine size={20} />
-            Сканер
-          </button>
+          {onScan && (
+            <button onClick={onScan}>
+              <ScanLine size={20} />
+              Сканер
+            </button>
+          )}
         </div>
       </ProfileHero>
       <div
@@ -144,7 +169,13 @@ export function Settings({
         key={tab}
         data-dir={move.current.dir}
       >
-        {tab === 'general' && <NotificationSettings state={notifications} demo={demo} />}
+        {tab === 'general' && (
+          <>
+            <NotificationSettings state={notifications} demo={demo} />
+            <PreviewSettings />
+          </>
+        )}
+        {tab === 'privacy' && <PrivacySettings />}
         {tab === 'look' && (
           <>
             <Appearance
@@ -179,11 +210,13 @@ export function Settings({
               <Updates hasDraft={hasDraft} />
             </section>
             <nav className="settings-section action-list rows" aria-label="Ещё">
-              <button onClick={onInstall}>
-                <Download size={19} />
-                Установить Galinka
-                <ChevronRight size={17} className="row-chevron" />
-              </button>
+              {onInstall && (
+                <button onClick={onInstall}>
+                  <Download size={19} />
+                  Установить Galinka
+                  <ChevronRight size={17} className="row-chevron" />
+                </button>
+              )}
               <a href="/changelog">
                 <History size={19} />
                 История изменений

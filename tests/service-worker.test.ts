@@ -43,14 +43,22 @@ function worker(windows: unknown[] = []) {
   return { emit, notifications, opened };
 }
 
-test('service worker presents generic private pushes and opens exact safe chat URLs', async () => {
+test('service worker shows the server-written preview, bounded, and opens exact safe chat URLs', async () => {
   const sw = worker();
+  // The text is what the recipient chose in settings; the server writes it.
   await sw.emit('push', {
-    data: { json: () => ({ chatId, messageId, title: 'Injected', body: 'Private text' }) },
+    data: { json: () => ({ chatId, messageId, title: 'Свои люди', body: 'Макс: буду к восьми' }) },
   });
-  assert.equal(sw.notifications[0].title, 'Galinka');
-  assert.equal(sw.notifications[0].options.body, 'Новое сообщение');
+  assert.equal(sw.notifications[0].title, 'Свои люди');
+  assert.equal(sw.notifications[0].options.body, 'Макс: буду к восьми');
   assert.equal(sw.notifications[0].options.data.chatId, chatId);
+  await sw.emit('push', {
+    data: { json: () => ({ chatId, messageId, title: ' ', body: 'x'.repeat(5000) }) },
+  });
+  assert.equal(sw.notifications[1].title, 'Galinka');
+  assert.equal(sw.notifications[1].options.body.length, 200);
+  await sw.emit('push', { data: { json: () => ({ chatId, messageId }) } });
+  assert.equal(sw.notifications[2].options.body, 'Новое сообщение');
   let closed = false;
   await sw.emit('notificationclick', {
     notification: {

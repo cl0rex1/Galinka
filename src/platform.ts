@@ -35,3 +35,16 @@ export function newerVersion(remote: string, installed: string) {
   }
   return false;
 }
+
+// What this device can usefully do. Buttons that make no sense here are not shown.
+const query = (media: string) => typeof matchMedia === 'function' && matchMedia(media).matches;
+/** Finger-driven phone or tablet: scans QR codes rather than showing them. */
+export const touchDevice = () => query('(pointer: coarse)') && !query('(pointer: fine)');
+/** Already running as an installed app: no point offering to install it. */
+export const installedApp = () =>
+  Boolean((window as { galinkaDesktop?: unknown }).galinkaDesktop) ||
+  query('(display-mode: standalone)') ||
+  /Galinka|wv\)/.test(navigator.userAgent) ||
+  (
+    window as { Capacitor?: { isNativePlatform?: () => boolean } }
+  ).Capacitor?.isNativePlatform?.() === true;

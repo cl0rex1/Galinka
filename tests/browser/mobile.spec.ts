@@ -49,7 +49,7 @@ for (const width of [320, 375, 414, 768]) {
     await expect(input).toHaveValue('');
     await insideViewport(page, '.message-row:last-of-type');
     const menu = page.locator('.message-menu').last();
-    await menu.locator('summary').click();
+    await page.locator('.message-row').last().locator('.bubble').click({ button: 'right' });
     await insideViewport(page, '.message-menu[open] .message-menu-content');
     await page.keyboard.press('Escape');
     await expect(menu).not.toHaveAttribute('open');

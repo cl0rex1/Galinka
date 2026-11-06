@@ -23,6 +23,7 @@ mac:
   icon: public/icon-512.png
   extendInfo:
     NSMicrophoneUsageDescription: Galinka использует микрофон для записи голосовых сообщений по вашему нажатию.
+    NSCameraUsageDescription: Galinka использует камеру для кружков и сканера QR-кодов по вашему нажатию.
 win:
   target:
     - target: nsis
