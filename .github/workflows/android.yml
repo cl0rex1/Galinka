@@ -42,8 +42,10 @@ jobs:
             echo 'Android release signing key is required.' >&2
             exit 1
           fi
-      - name: Verify APK signature
-        run: '"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs release/*.apk'
+      - name: Verify APK signature and camera permission
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs release/*.apk
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump permissions release/*.apk | grep -Fx "uses-permission: name='android.permission.CAMERA'"
       - name: Enable emulator acceleration
         run: sudo chmod 666 /dev/kvm
       - name: Verify bundled Android UI can reach the real API
