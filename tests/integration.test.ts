@@ -399,6 +399,144 @@ test(
         404,
         'Nobody moderates a direct chat',
       );
+      // Pinned message: the group owner pins, the list carries it, deletion clears it.
+      const pin = (chat: string, messageId: string | null, cookie: string) =>
+        request(`/chats/${chat}/pin`, 'PUT', { messageId }, cookie);
+      const pinnedIn = async (chat: string, cookie: string) =>
+        (await request('/chats', 'GET', undefined, cookie)).data.find((c: any) => c.id === chat)
+          .pinned_message;
+      assert.equal((await pin(id, sent.data.id, bob.cookie)).status, 403);
+      assert.equal((await pin(id, fromBob.data.id, alice.cookie)).status, 404);
+      assert.equal((await pin(id, sent.data.id, alice.cookie)).status, 200);
+      assert.equal((await pinnedIn(id, bob.cookie)).id, sent.data.id);
+      assert.equal((await pin(direct.data.id, fromBob.data.id, alice.cookie)).status, 200);
+      assert.equal((await pin(id, null, alice.cookie)).status, 200);
+      assert.equal(await pinnedIn(id, bob.cookie), null);
+      // Forwarding: the copy names the author, and its attachment opens for people outside
+      // the original chat, also after the original message and its chat are gone.
+      const dan = await register('dan');
+      const withFile = await request(
+        `/chats/${id}/messages`,
+        'POST',
+        { body: 'с файлом', fileId: uploaded.data.id, nonce: randomUUID() },
+        alice.cookie,
+      );
+      assert.equal(withFile.status, 201);
+      const eveDan = await request(
+        '/chats',
+        'POST',
+        { kind: 'direct', userIds: [dan.data.id] },
+        eve.cookie,
+      );
+      const forward = (chat: string, ids: string[], cookie: string) =>
+        request(`/chats/${chat}/forward`, 'POST', { messageIds: ids }, cookie);
+      assert.equal((await forward(eveDan.data.id, [withFile.data.id], dan.cookie)).status, 404);
+      const forwarded = await forward(eveDan.data.id, [withFile.data.id, sent.data.id], eve.cookie);
+      assert.equal(forwarded.status, 201, JSON.stringify(forwarded.data));
+      const copies = (
+        await request(`/chats/${eveDan.data.id}/messages`, 'GET', undefined, dan.cookie)
+      ).data;
+      assert.deepEqual(
+        copies.map((m: any) => [m.body, m.forwarded_from, m.sender_id]),
+        [
+          ['@неля выбери чай | кофе', 'alice', eve.data.id],
+          ['с файлом', 'alice', eve.data.id],
+        ],
+      );
+      const download = (fileId: string, cookie: string) =>
+        fetch(`${base}/api/files/${fileId}`, { headers: { Cookie: cookie } });
+      assert.equal(
+        await (await download(uploaded.data.id, dan.cookie)).text(),
+        'test file contents',
+      );
+      assert.equal(
+        (
+          await request(
+            `/chats/${id}/messages/${withFile.data.id}`,
+            'DELETE',
+            undefined,
+            alice.cookie,
+          )
+        ).status,
+        200,
+      );
+      assert.equal((await download(uploaded.data.id, dan.cookie)).status, 200);
+      // A forward of a forward keeps the first author.
+      const again = await forward(id, [copies[1].id], eve.cookie);
+      assert.equal(again.status, 201);
+      assert.equal(
+        (await request(`/chats/${id}/messages`, 'GET', undefined, bob.cookie)).data.at(-1)
+          .forwarded_from,
+        'alice',
+      );
+      const solo = await request(
+        '/chats',
+        'POST',
+        { kind: 'group', title: 'solo', userIds: [] },
+        dan.cookie,
+      );
+      const danForm = new FormData();
+      danForm.set('file', new Blob(['dan file']), 'dan.txt');
+      const danFile = await request(`/chats/${solo.data.id}/files`, 'POST', danForm, dan.cookie);
+      const danMessage = await request(
+        `/chats/${solo.data.id}/messages`,
+        'POST',
+        { body: '', fileId: danFile.data.id, nonce: randomUUID() },
+        dan.cookie,
+      );
+      assert.equal((await forward(eveDan.data.id, [danMessage.data.id], dan.cookie)).status, 201);
+      assert.equal(
+        (
+          await request(
+            `/chats/${solo.data.id}/members/${dan.data.id}`,
+            'DELETE',
+            undefined,
+            dan.cookie,
+          )
+        ).status,
+        200,
+        'Deleting a chat keeps attachments forwarded elsewhere',
+      );
+      assert.equal(await (await download(danFile.data.id, eve.cookie)).text(), 'dan file');
+      // Typing goes to the other members only, through any replica, and is never stored.
+      const typingController = new AbortController();
+      const typingStream = await fetch('http://localhost:3009/api/events', {
+        headers: { Cookie: bob.cookie },
+        signal: typingController.signal,
+      });
+      const typingReader = typingStream.body!.getReader();
+      await typingReader.read();
+      assert.equal(
+        (await request(`/chats/${id}/typing`, 'POST', { action: 'shout' }, alice.cookie)).status,
+        400,
+      );
+      assert.equal(
+        (await request(`/chats/${direct.data.id}/typing`, 'POST', { action: 'typing' }, eve.cookie))
+          .status,
+        404,
+      );
+      assert.equal(
+        (await request(`/chats/${id}/typing`, 'POST', { action: 'voice' }, alice.cookie)).status,
+        200,
+      );
+      const typed = await Promise.race([
+        typingReader.read(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(Error('No typing event')), 4000).unref(),
+        ),
+      ]);
+      const typingEvent = JSON.parse(new TextDecoder().decode(typed.value).split('\n')[0].slice(6));
+      assert.deepEqual(
+        [
+          typingEvent.type,
+          typingEvent.chatId,
+          typingEvent.userId,
+          typingEvent.name,
+          typingEvent.action,
+        ],
+        ['typing', id, alice.data.id, 'alice', 'voice'],
+      );
+      typingController.abort();
       assert.equal(
         (await request(`/chats/${id}/messages/${sent.data.id}`, 'DELETE', undefined, alice.cookie))
           .status,
@@ -417,8 +555,8 @@ test(
         undefined,
         bob.cookie,
       );
-      assert.equal(second.data.length, 6);
-      assert.equal(new Set([...first.data, ...second.data].map((m) => m.id)).size, 66);
+      assert.equal(second.data.length, 7);
+      assert.equal(new Set([...first.data, ...second.data].map((m) => m.id)).size, 67);
       const csrf = await fetch(base + '/api/chats', {
         method: 'POST',
         headers: {

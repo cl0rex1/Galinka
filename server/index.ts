@@ -808,7 +808,9 @@ app.get('/api/chats', auth, async (req, res) => {
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
  CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color,'avatar',peer.avatar,'last_seen_at',peer.last_seen_at,'show_last_seen',peer.show_last_seen) END AS peer,
  CASE WHEN last.created_at IS NULL THEN NULL ELSE json_build_object('body',last.body,'created_at',last.created_at,'sender_id',last.sender_id,'file_id',last.file_id,'file',last.file) END AS last_message,
- (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread
+ (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread,
+ (SELECT json_build_object('id',pm.id,'body',pm.body,'file_name',pf.name) FROM messages pm LEFT JOIN files pf ON pf.id=pm.file_id
+   WHERE pm.id=c.pinned_message_id) AS pinned_message
  FROM chats c JOIN members m ON m.chat_id=c.id
  LEFT JOIN LATERAL (SELECT u.id,u.name,u.username,u.color,u.avatar,u.last_seen_at,u.show_last_seen FROM members mm JOIN users u ON u.id=mm.user_id
    WHERE c.kind='direct' AND mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) peer ON true
@@ -976,6 +978,12 @@ app.delete('/api/chats/:id/members/:userId', auth, async (req, res) => {
         chat.id,
       ]);
       requireValue(size.rows[0].n === 1, 409, 'Сначала передайте владение другому участнику.');
+      // Attachments forwarded to other chats move there instead of disappearing.
+      await db.query(
+        `UPDATE files f SET chat_id=used.chat_id FROM (SELECT DISTINCT ON (file_id) file_id,chat_id
+         FROM messages WHERE file_id IS NOT NULL AND chat_id<>$1) used WHERE f.id=used.file_id AND f.chat_id=$1`,
+        [chat.id],
+      );
       const files = await db.query('SELECT id FROM files WHERE chat_id=$1', [chat.id]);
       await db.query('DELETE FROM chats WHERE id=$1', [chat.id]);
       await notify(db, chat.id, undefined, targetId);
@@ -1059,7 +1067,7 @@ app.post('/api/join', auth, async (req, res) => {
   });
   res.json({ id });
 });
-const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.nonce,
+const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.nonce,m.forwarded_from,
  CASE WHEN u.id IS NULL THEN json_build_object('id','nelya','name','Неля','username','nelya','color',5) ELSE json_build_object('id',u.id,'name',u.name,'username',u.username,'color',u.color) END AS sender,
  CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file,
  CASE WHEN replied.id IS NULL THEN NULL ELSE json_build_object('id',replied.id,'body',replied.body,'sender',json_build_object('id',COALESCE(reply_user.id::text,'nelya'),'name',COALESCE(reply_user.name,'Неля')),'file_name',reply_file.name) END AS reply,
@@ -1236,6 +1244,88 @@ app.post('/api/chats/:id/messages/:messageId/reactions', auth, async (req, res) 
       senderId: user(req).id,
     });
   });
+  res.json({ ok: true });
+});
+// One pinned message per chat. In a group the owner pins; in a personal chat either side.
+app.put('/api/chats/:id/pin', auth, async (req, res) => {
+  const { messageId } = z.object({ messageId: uuid.nullable() }).strict().parse(req.body);
+  await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    requireValue(
+      chat.kind !== 'group' || chat.owner_id === user(req).id,
+      403,
+      'Закрепляет владелец группы.',
+    );
+    if (messageId) {
+      const target = await db.query('SELECT 1 FROM messages WHERE id=$1 AND chat_id=$2', [
+        messageId,
+        chat.id,
+      ]);
+      requireValue(target.rowCount, 404, 'Сообщение не найдено.');
+    }
+    await db.query('UPDATE chats SET pinned_message_id=$1 WHERE id=$2', [messageId, chat.id]);
+    await notify(db, chat.id);
+  });
+  res.json({ ok: true });
+});
+// Copies messages from chats the user reads into this chat, oldest first, marked with
+// the original author. Attachments are shared, not copied (see fileAccessSQL).
+app.post('/api/chats/:id/forward', auth, async (req, res) => {
+  const { messageIds } = z
+    .object({ messageIds: z.array(uuid).min(1).max(100) })
+    .strict()
+    .parse(req.body);
+  const ids = await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    const { rows } = await db.query(
+      `SELECT m.body,m.file_id,COALESCE(m.forwarded_from,u.name,'Неля') AS origin FROM messages m
+       JOIN members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=$2
+       LEFT JOIN users u ON u.id=m.sender_id WHERE m.id=ANY($1::uuid[]) ORDER BY m.created_at,m.id`,
+      [[...new Set(messageIds)], user(req).id],
+    );
+    requireValue(rows.length === new Set(messageIds).size, 404, 'Сообщение не найдено.');
+    const ids: string[] = [];
+    for (const row of rows) {
+      const id = randomUUID();
+      await db.query(
+        'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,forwarded_from) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [id, chat.id, user(req).id, row.body, row.file_id, randomUUID(), row.origin],
+      );
+      ids.push(id);
+    }
+    // One notification for the batch, as for a single message.
+    if (anyPushEnabled)
+      await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [ids.at(-1)]);
+    // A single message travels with its event; a batch makes open chats refetch.
+    await notify(
+      db,
+      chat.id,
+      undefined,
+      undefined,
+      ids.length === 1
+        ? { event: 'message.created', messageId: ids[0], senderId: user(req).id }
+        : undefined,
+    );
+    return ids;
+  });
+  res.status(201).json({ ids });
+});
+// "Typing…", "recording a voice message…": relayed to the chat, never stored.
+app.post('/api/chats/:id/typing', auth, async (req, res) => {
+  const { action } = z
+    .object({ action: z.enum(['typing', 'voice', 'video']) })
+    .strict()
+    .parse(req.body);
+  const chat = await member(String(req.params.id), user(req).id);
+  await pool.query("SELECT pg_notify('galinka', $1)", [
+    JSON.stringify({
+      type: 'typing',
+      chatId: chat.id,
+      userId: user(req).id,
+      name: user(req).name,
+      action,
+    }),
+  ]);
   res.json({ ok: true });
 });
 const upload = multer({
@@ -1477,11 +1567,14 @@ app.get('/api/avatars/:id', auth, async (req, res) => {
     res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
   res.sendFile(file);
 });
+// A file is readable in the chat it was uploaded to and in every chat it was forwarded to.
+const fileAccessSQL = `(EXISTS(SELECT 1 FROM members WHERE chat_id=f.chat_id AND user_id=$2)
+ OR EXISTS(SELECT 1 FROM messages msg JOIN members mm ON mm.chat_id=msg.chat_id WHERE msg.file_id=f.id AND mm.user_id=$2))`;
 app.get('/api/files/:id', auth, async (req, res) => {
-  const { rows } = await pool.query(
-    'SELECT f.* FROM files f JOIN members m ON m.chat_id=f.chat_id WHERE f.id=$1 AND m.user_id=$2',
-    [uuid.parse(req.params.id), user(req).id],
-  );
+  const { rows } = await pool.query(`SELECT f.* FROM files f WHERE f.id=$1 AND ${fileAccessSQL}`, [
+    uuid.parse(req.params.id),
+    user(req).id,
+  ]);
   requireValue(rows[0], 404, 'Файл не найден.');
   const original = path.join(directory, rows[0].id);
   const mime =
@@ -1504,8 +1597,9 @@ app.get('/api/files/:id', auth, async (req, res) => {
       res.once('close', preview.release);
       res.once('error', preview.release);
       const access = await pool.query(
-        'SELECT 1 FROM members m JOIN sessions s ON s.user_id=m.user_id JOIN users u ON u.id=m.user_id WHERE m.chat_id=$1 AND m.user_id=$2 AND s.token=$3 AND s.expires_at>now() AND NOT u.blocked',
-        [rows[0].chat_id, user(req).id, (req as AuthedRequest).sessionToken],
+        `SELECT 1 FROM files f JOIN sessions s ON s.user_id=$2 JOIN users u ON u.id=s.user_id
+         WHERE f.id=$1 AND s.token=$3 AND s.expires_at>now() AND NOT u.blocked AND ${fileAccessSQL}`,
+        [rows[0].id, user(req).id, (req as AuthedRequest).sessionToken],
       );
       requireValue(access.rowCount, 404, 'Файл недоступен.');
     }
@@ -1593,7 +1687,7 @@ async function listen() {
     try {
       if (!event.payload) return;
       const change = JSON.parse(event.payload) as {
-        type?: 'read' | 'refresh';
+        type?: 'read' | 'refresh' | 'typing';
         chatId: string;
         deletedId?: string;
         revokedUserId?: string;
@@ -1633,6 +1727,7 @@ async function listen() {
       };
       for (const [res, info] of streams)
         if (ids.has(info.userId)) {
+          if (change.type === 'typing' && info.userId === change.userId) continue;
           if (res.writableLength > 1024 * 1024) {
             res.end();
             continue;

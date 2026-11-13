@@ -1,7 +1,7 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { api } from './api';
 import { reconcileMessages, withUpdated, type CachedConversation } from './conversation';
-import { useSync, type Refetch, type SyncEvent } from './useSync';
+import { useSync, type Refetch, type SyncEvent, type Typing } from './useSync';
 import type { Chat, Message, Person } from './types';
 
 /** What live events need from the app: its state, refs and setters, passed in, not owned here. */
@@ -30,6 +30,7 @@ export type LiveContext = {
     modal: Dispatch<SetStateAction<any>>;
     error: Dispatch<SetStateAction<string>>;
     connected: Dispatch<SetStateAction<boolean>>;
+    typing: Dispatch<SetStateAction<Typing>>;
   };
   refreshChats: () => Promise<Chat[]>;
   loadMessages: (id: string) => Promise<unknown>;
@@ -61,7 +62,17 @@ export function useLiveMessages(c: LiveContext) {
     setActiveId = set.activeId,
     setInfoOpen = set.infoOpen,
     setModal = set.modal,
-    setError = set.error;
+    setError = set.error,
+    setTyping = set.typing;
+  /** Someone stopped typing (sent the message) or started: keep one entry per person. */
+  const typingChanged = (chatId: string, userId: string, entry?: Typing[string][number]) =>
+    setTyping((previous) => {
+      if (!entry && !previous[chatId]?.some((item) => item.userId === userId)) return previous;
+      const others = (previous[chatId] ?? []).filter((item) => item.userId !== userId);
+      const next = { ...previous, [chatId]: entry ? [...others, entry] : others };
+      if (!next[chatId].length) delete next[chatId];
+      return next;
+    });
   const notifyIncoming = (chatId: string, messageId: string) => {
     const show = (chat: Chat | undefined) => {
       if (
@@ -116,6 +127,18 @@ export function useLiveMessages(c: LiveContext) {
       event.messageId
     )
       notifyIncoming(chatId, event.messageId);
+    if (event.type === 'typing') {
+      // Senders repeat the event every few seconds while they type; a gap means they stopped.
+      typingChanged(event.chatId, event.userId, {
+        userId: event.userId,
+        name: event.name,
+        action: event.action,
+        until: Date.now() + 6000,
+      });
+      return { list: false, conversation: false };
+    }
+    if (chatId && 'event' in event && event.event === 'message.created' && event.senderId)
+      typingChanged(chatId, event.senderId);
     if (event.type === 'presence') {
       // Someone in our chats came online or left: refresh statuses, not the conversation.
       const openId = activeRef.current;

@@ -16,10 +16,13 @@ const maxBytes = 20 * 1024 * 1024;
 export function VoiceRecorder({
   onRecorded,
   onError,
+  onActive,
   disabled = false,
 }: {
   onRecorded: (file: File) => void;
   onError: (error: string) => void;
+  /** Called a few times a second while recording (for the "recording…" status). */
+  onActive?: () => void;
   disabled?: boolean;
 }) {
   const [phase, setPhase] = useState<'idle' | 'permission' | 'recording' | 'finishing'>('idle');
@@ -27,8 +30,8 @@ export function VoiceRecorder({
   const current = useRef<Recording | null>(null);
   const generation = useRef(0);
   const alive = useRef(true);
-  const callbacks = useRef({ onRecorded, onError });
-  callbacks.current = { onRecorded, onError };
+  const callbacks = useRef({ onRecorded, onError, onActive });
+  callbacks.current = { onRecorded, onError, onActive };
 
   function finish(discard: boolean) {
     const session = current.current;
@@ -171,6 +174,7 @@ export function VoiceRecorder({
       session.timer = setInterval(() => {
         const elapsed = Math.floor((Date.now() - started) / 1000);
         setSeconds(elapsed);
+        callbacks.current.onActive?.();
         if (elapsed >= maxSeconds) finish(false);
       }, 250);
     } catch (error) {

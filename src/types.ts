@@ -36,6 +36,8 @@ export type Message = {
     file_name?: string | null;
   } | null;
   read_by?: number;
+  /** Name of the original author when the message was forwarded. */
+  forwarded_from?: string | null;
   nonce: string;
   file: Attachment | null;
   reactions: { emoji: string; count: number; mine: boolean }[];
@@ -57,6 +59,7 @@ export type Chat = {
   peer: Person | null;
   unread: number;
   created_at: string;
+  pinned_message?: { id: string; body: string; file_name?: string | null } | null;
   last_message: {
     body: string;
     created_at: string;

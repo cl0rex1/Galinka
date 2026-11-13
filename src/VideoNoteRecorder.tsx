@@ -51,10 +51,13 @@ function mirrorCamera(video: HTMLVideoElement, source: MediaStream) {
 export function VideoNoteRecorder({
   onRecorded,
   onError,
+  onActive,
   disabled = false,
 }: {
   onRecorded: (file: File) => void;
   onError: (error: string) => void;
+  /** Called a few times a second while recording (for the "recording…" status). */
+  onActive?: () => void;
   disabled?: boolean;
 }) {
   const [phase, setPhase] = useState<'idle' | 'starting' | 'recording'>('idle');
@@ -63,8 +66,8 @@ export function VideoNoteRecorder({
   const preview = useRef<HTMLVideoElement>(null);
   const session = useRef<Session | null>(null);
   const attempt = useRef(0);
-  const callbacks = useRef({ onRecorded, onError });
-  callbacks.current = { onRecorded, onError };
+  const callbacks = useRef({ onRecorded, onError, onActive });
+  callbacks.current = { onRecorded, onError, onActive };
 
   function release() {
     const current = session.current;
@@ -203,6 +206,7 @@ export function VideoNoteRecorder({
       current.timer = setInterval(() => {
         const elapsed = Math.floor((Date.now() - started) / 1000);
         setSeconds(elapsed);
+        callbacks.current.onActive?.();
         if (elapsed >= maxSeconds) stopRef.current(false);
       }, 250);
     } catch (error) {

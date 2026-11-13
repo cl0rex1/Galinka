@@ -4,10 +4,14 @@ import {
   Check,
   CheckCheck,
   Clock3,
+  CircleCheck,
   Copy,
   Download,
+  Forward,
   MoreHorizontal,
   Pencil,
+  Pin,
+  PinOff,
   Reply,
   RotateCw,
   Trash2,
@@ -47,12 +51,22 @@ export type MessageActions = {
   mention: (username: string) => void;
   retry: (message: Message) => void;
   discard: (message: Message) => void;
+  /** Pin this message, or unpin it when it is the pinned one. */
+  pin: (message: Message) => void;
+  forward: (message: Message) => void;
+  /** Start selecting with this message, or toggle it while selecting. */
+  select: (message: Message) => void;
 };
 type RowProps = {
   message: Message;
   own: boolean;
   /** Own message, or any message for the group owner. */
   canDelete: boolean;
+  /** null when this user may not pin in this chat. */
+  pinned: boolean | null;
+  /** In selection mode taps toggle the message instead of opening anything. */
+  selecting: boolean;
+  selected: boolean;
   kind: Chat['kind'];
   continued: boolean;
   showAvatar: boolean;
@@ -79,6 +93,9 @@ const MessageRow = memo(function MessageRow({
   message: m,
   own,
   canDelete,
+  pinned,
+  selecting,
+  selected,
   kind,
   continued,
   showAvatar,
@@ -116,7 +133,8 @@ const MessageRow = memo(function MessageRow({
   function pointerDown(event: ReactPointerEvent<HTMLElement>) {
     cancelPress();
     held.current = false;
-    if (event.pointerType === 'mouse' || !event.isPrimary || !holdable(event.target)) return;
+    if (selecting || event.pointerType === 'mouse' || !event.isPrimary || !holdable(event.target))
+      return;
     press.current = {
       x: event.clientX,
       y: event.clientY,
@@ -132,7 +150,8 @@ const MessageRow = memo(function MessageRow({
     <div className="message-group-item">
       <article
         data-message-id={m.id}
-        className={`message-row ${fresh ? 'is-new' : ''} ${own ? 'own' : ''} ${bot ? 'bot' : ''} ${continued ? 'continued' : ''} ${showAvatar ? 'last' : ''}`}
+        className={`message-row ${fresh ? 'is-new' : ''} ${own ? 'own' : ''} ${bot ? 'bot' : ''} ${continued ? 'continued' : ''} ${showAvatar ? 'last' : ''} ${selected ? 'selected' : ''}`}
+        aria-selected={selecting ? selected : undefined}
         onPointerDown={pointerDown}
         onPointerMove={(event) => {
           if (
@@ -144,6 +163,12 @@ const MessageRow = memo(function MessageRow({
         onPointerUp={cancelPress}
         onPointerCancel={cancelPress}
         onClickCapture={(event) => {
+          if (selecting && !m.pending) {
+            event.preventDefault();
+            event.stopPropagation();
+            actions.select(m);
+            return;
+          }
           if (held.current) {
             held.current = false;
             event.preventDefault();
@@ -161,6 +186,10 @@ const MessageRow = memo(function MessageRow({
           actions.react(m, '❤');
         }}
         onContextMenu={(event) => {
+          if (selecting) {
+            event.preventDefault();
+            return;
+          }
           if (!holdable(event.target)) return;
           event.preventDefault();
           cancelPress();
@@ -170,6 +199,11 @@ const MessageRow = memo(function MessageRow({
         <span className="swipe-reply-indicator" aria-hidden="true">
           <Reply size={17} />
         </span>
+        {selecting && !m.pending && (
+          <span className="select-mark" aria-hidden="true">
+            {selected && <Check size={14} strokeWidth={3} />}
+          </span>
+        )}
         {!own && (
           <div className="message-avatar">
             {showAvatar &&
@@ -192,6 +226,12 @@ const MessageRow = memo(function MessageRow({
               <div className={`sender-name tone-text-${(m.sender.color ?? 2) % 6}`}>
                 {m.sender.name}
                 {bot && <span className="bot-tag">бот</span>}
+              </div>
+            )}
+            {m.forwarded_from && (
+              <div className="forwarded-from">
+                <Forward size={13} />
+                Переслано от <strong>{m.forwarded_from}</strong>
               </div>
             )}
             {m.reply && (
@@ -291,7 +331,7 @@ const MessageRow = memo(function MessageRow({
             </button>
           </div>
         )}
-        {!m.pending && (
+        {!m.pending && !selecting && (
           <details ref={menu} className="message-menu">
             <summary
               aria-label="Действия с сообщением"
@@ -329,6 +369,16 @@ const MessageRow = memo(function MessageRow({
                 <Reply size={16} />
                 Ответить
               </button>
+              <button className="message-action" onClick={() => actions.forward(m)}>
+                <Forward size={16} />
+                Переслать
+              </button>
+              {pinned !== null && (
+                <button className="message-action" onClick={() => actions.pin(m)}>
+                  {pinned ? <PinOff size={16} /> : <Pin size={16} />}
+                  {pinned ? 'Открепить' : 'Закрепить'}
+                </button>
+              )}
               {m.body && (
                 <button className="message-action" onClick={() => actions.copy(m)}>
                   {copied ? <Check size={16} /> : <Copy size={16} />}
@@ -357,6 +407,10 @@ const MessageRow = memo(function MessageRow({
                   Редактировать
                 </button>
               )}
+              <button className="message-action" onClick={() => actions.select(m)}>
+                <CircleCheck size={16} />
+                Выбрать
+              </button>
               {canDelete && (
                 <button className="delete-action" onClick={() => actions.remove(m)}>
                   <Trash2 size={15} />
@@ -377,6 +431,9 @@ export const MessageList = memo(function MessageList({
   kind,
   moderator,
   unreadFrom,
+  pinnedId,
+  canPin,
+  selection,
   newMessageIds,
   copiedId,
   sending,
@@ -391,6 +448,10 @@ export const MessageList = memo(function MessageList({
   moderator?: boolean;
   /** A "new messages" divider goes above this message. */
   unreadFrom?: string | null;
+  pinnedId?: string | null;
+  canPin: boolean;
+  /** Selected message ids, or null outside selection mode. */
+  selection: Set<string> | null;
   newMessageIds: string[];
   copiedId: string | null;
   sending: boolean;
@@ -434,6 +495,9 @@ export const MessageList = memo(function MessageList({
                   message={message}
                   own={message.sender_id === meId}
                   canDelete={message.sender_id === meId || Boolean(moderator)}
+                  pinned={canPin ? message.id === pinnedId : null}
+                  selecting={Boolean(selection)}
+                  selected={Boolean(selection?.has(message.id))}
                   kind={kind}
                   continued={grouped(messages[index - 1], message)}
                   showAvatar={!grouped(message, messages[index + 1])}

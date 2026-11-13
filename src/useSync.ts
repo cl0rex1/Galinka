@@ -14,6 +14,7 @@ export type SyncEvent =
     }
   | { type: 'read'; chatId: string; userId?: string; lastMessageId?: string }
   | { type: 'presence'; userId: string }
+  | { type: 'typing'; chatId: string; userId: string; name: string; action: TypingAction }
   | { type: 'connected' }
   | {
       type: 'refresh';
@@ -24,6 +25,13 @@ export type SyncEvent =
       messageId?: string;
       senderId?: string;
     };
+
+export type TypingAction = 'typing' | 'voice' | 'video';
+/** Who is typing or recording in each chat, until when (ms). */
+export type Typing = Record<
+  string,
+  { userId: string; name: string; action: TypingAction; until: number }[]
+>;
 
 /** What still has to be fetched after an event was applied locally. */
 export type Refetch = { list: boolean; conversation: boolean };

@@ -41,6 +41,8 @@ import {
   ChevronUp,
   Megaphone,
   SquarePen,
+  Forward,
+  Trash2,
 } from 'lucide-react';
 import { useConversationGestures } from './gestures';
 import { Avatar, seenText } from './Avatar';
@@ -56,6 +58,8 @@ import { api, upload, ApiError, isDemo, API_BASE } from './api';
 import { useUpdates } from './updates';
 import { useLiveMessages } from './useLiveMessages';
 import { NewChat } from './NewChat';
+import { ForwardDialog } from './ForwardDialog';
+import { typingText, useTyping, useTypingSender } from './typing';
 import { reconcileMessages, firstUnread, type CachedConversation } from './conversation';
 import { useNotifications, isNative, clearPushDevice } from './notifications';
 import { Auth } from './Auth';
@@ -144,7 +148,10 @@ export default function App() {
     [mentionIndex, setMentionIndex] = useState(0),
     [install, setInstall] = useState<InstallEvent | null>(null),
     [inviteUrl, setInviteUrl] = useState(''),
-    [deleteId, setDeleteId] = useState(''),
+    [deleteIds, setDeleteIds] = useState<string[]>([]),
+    /** Selected message ids while selecting several, otherwise null. */
+    [selection, setSelection] = useState<Set<string> | null>(null),
+    [forwarding, setForwarding] = useState<string[] | null>(null),
     [name, setName] = useState(''),
     [emojiOpen, setEmojiOpen] = useState(false),
     [person, setPerson] = useState<Person | null>(null),
@@ -160,6 +167,8 @@ export default function App() {
     [scanning, setScanning] = useState(false),
     [scanned, setScanned] = useState(''),
     [working, setWorking] = useState(false);
+  const [typing, setTyping] = useTyping();
+  const sendTyping = useTypingSender(Boolean(me) && !demo);
   const initialized = useRef(false);
   const conversationCache = useRef(new Map<string, CachedConversation>());
   const cacheOwner = useRef<string | null>(null);
@@ -363,6 +372,7 @@ export default function App() {
     if (!isNative) return;
     const back = NativeApp.addListener('backButton', () => {
       if (modal) setModal(null);
+      else if (selection) setSelection(null);
       else if (emojiOpen) setEmojiOpen(false);
       else if (edit) setEditing(null);
       else if (document.querySelector('details.message-menu[open], details.chat-actions[open]'))
@@ -380,7 +390,7 @@ export default function App() {
     return () => {
       void back.then((handle) => handle.remove());
     };
-  }, [modal, emojiOpen, infoOpen, searchOpen, section, activeId, edit]);
+  }, [modal, emojiOpen, infoOpen, searchOpen, section, activeId, edit, selection]);
   useEffect(() => {
     if (!textarea.current) return;
     textarea.current.style.height = 'auto';
@@ -533,6 +543,7 @@ export default function App() {
       modal: setModal,
       error: setError,
       connected: setConnected,
+      typing: setTyping,
     },
     refreshChats,
     loadMessages,
@@ -561,6 +572,7 @@ export default function App() {
     setAwayFromBottom(cached ? !cached.following : false);
     setNewMessageIds([]);
     setUnreadFrom(null);
+    setSelection(null);
     const unread = chatsRef.current.find((chat) => chat.id === activeId)?.unread ?? 0;
     jumpingToLatest.current = false;
     scrollRestore.current = null;
@@ -722,6 +734,7 @@ export default function App() {
       if (!editRequest.current) setEditing(null);
       setEmojiOpen(false);
       setInfoOpen(false);
+      setSelection(null);
     };
     document.addEventListener('pointerdown', dismiss);
     document.addEventListener('keydown', escape);
@@ -964,8 +977,10 @@ export default function App() {
       setEditing((previous) => (previous ? { ...previous, body: value } : null));
       return;
     }
-    if (activeId) setDrafts((prev) => ({ ...prev, [activeId]: value }));
-    if (activeId) delete nonces.current[activeId];
+    if (!activeId) return;
+    setDrafts((prev) => ({ ...prev, [activeId]: value }));
+    delete nonces.current[activeId];
+    if (value.trim() && active?.kind !== 'saved') sendTyping(activeId);
   }
   function chooseMention(member: Person) {
     const field = textarea.current;
@@ -1267,6 +1282,32 @@ export default function App() {
         );
       });
   }
+  async function togglePin(message: Message) {
+    closeMenus();
+    const chat = chatsRef.current.find((item) => item.id === message.chat_id);
+    const unpin = chat?.pinned_message?.id === message.id;
+    try {
+      await api(`/chats/${message.chat_id}/pin`, 'PUT', { messageId: unpin ? null : message.id });
+      await refreshChats();
+    } catch (error) {
+      report(error);
+    }
+  }
+  /** Selected messages in the order they were written. */
+  const selectedMessages = selection ? messages.filter((message) => selection.has(message.id)) : [];
+  async function copySelection() {
+    try {
+      await navigator.clipboard.writeText(
+        selectedMessages
+          .map((message) => message.body || message.file?.name || '')
+          .filter(Boolean)
+          .join('\n\n'),
+      );
+      setSelection(null);
+    } catch {
+      setError('Не удалось скопировать. Выделите текст сообщения и скопируйте вручную.');
+    }
+  }
   async function react(message: Message, emoji: string) {
     try {
       await api(`/chats/${message.chat_id}/messages/${message.id}/reactions`, 'POST', { emoji });
@@ -1360,6 +1401,8 @@ export default function App() {
         row.classList.remove('flash');
         void row.offsetWidth;
         row.classList.add('flash');
+        // The flash isolates the row; left on, it would trap the row's menu under its neighbours.
+        setTimeout(() => row.classList.remove('flash'), 1200);
         return;
       }
       if (!(await loadOlder())) break;
@@ -1448,9 +1491,23 @@ export default function App() {
     download: downloadFile,
     menu: positionMessageMenu,
     remove: (message) => {
-      setDeleteId(message.id);
+      setDeleteIds([message.id]);
       closeMenus();
       setModal('delete');
+    },
+    pin: (message) => void togglePin(message),
+    forward: (message) => {
+      closeMenus();
+      setForwarding([message.id]);
+    },
+    select: (message) => {
+      closeMenus();
+      setSelection((previous) => {
+        const next = new Set(previous);
+        if (previous?.has(message.id)) next.delete(message.id);
+        else next.add(message.id);
+        return next.size ? next : null;
+      });
     },
     profile: (sender) => {
       closeMenus();
@@ -1489,6 +1546,9 @@ export default function App() {
       mention: (username) => latestMessageActions.current.mention(username),
       retry: (message) => latestMessageActions.current.retry(message),
       discard: (message) => latestMessageActions.current.discard(message),
+      pin: (message) => latestMessageActions.current.pin(message),
+      forward: (message) => latestMessageActions.current.forward(message),
+      select: (message) => latestMessageActions.current.select(message),
     }),
     [],
   );
@@ -1540,8 +1600,11 @@ export default function App() {
               : file?.name || (c.last_message?.file_id ? 'Файл' : 'Нет сообщений'))
     );
   };
+  const typingIn = (chat: Chat) => typingText(typing[chat.id], chat.kind === 'group');
   const subtitle = (chat: Chat) => {
     if (chat.kind === 'saved') return 'Заметки и файлы';
+    const typingNow = typingIn(chat);
+    if (typingNow) return typingNow;
     if (chat.kind === 'direct') return seenText(chat.peer?.seen) || `@${chat.peer?.username || ''}`;
     const total = `${chat.member_count} ${plural(chat.member_count, 'участник', 'участника', 'участников')}`;
     // Others online in the open group, as in Telegram: "5 участников, 2 в сети".
@@ -1681,7 +1744,9 @@ export default function App() {
                   </span>
                   <span className="chat-item-preview">
                     <span>
-                      {drafts[c.id] || attachments[c.id] ? (
+                      {typingIn(c) ? (
+                        <span className="chat-typing">{typingIn(c)}</span>
+                      ) : drafts[c.id] || attachments[c.id] ? (
                         <>
                           <span className="chat-draft">Черновик:</span>{' '}
                           {drafts[c.id] || fileLabel(attachments[c.id].file.name)}
@@ -1788,7 +1853,48 @@ export default function App() {
         )}
         {section === 'chats' && active ? (
           <>
-            <header className="chat-header">
+            {selection && (
+              <header className="chat-header selection-header" aria-label="Выбранные сообщения">
+                <IconButton label="Отменить выбор" onClick={() => setSelection(null)}>
+                  <X size={22} />
+                </IconButton>
+                <strong role="status">
+                  {selection.size} {plural(selection.size, 'сообщение', 'сообщения', 'сообщений')}
+                </strong>
+                <div className="header-actions">
+                  <IconButton
+                    label="Копировать выбранные"
+                    disabled={!selectedMessages.some((message) => message.body || message.file)}
+                    onClick={() => void copySelection()}
+                  >
+                    <Copy size={20} />
+                  </IconButton>
+                  <IconButton
+                    label="Переслать выбранные"
+                    onClick={() => setForwarding(selectedMessages.map((message) => message.id))}
+                  >
+                    <Forward size={20} />
+                  </IconButton>
+                  {selectedMessages.every(
+                    (message) =>
+                      message.sender_id === me.id ||
+                      (active.kind === 'group' && active.owner_id === me.id),
+                  ) && (
+                    <IconButton
+                      label="Удалить выбранные"
+                      className="danger-icon"
+                      onClick={() => {
+                        setDeleteIds(selectedMessages.map((message) => message.id));
+                        setModal('delete');
+                      }}
+                    >
+                      <Trash2 size={20} />
+                    </IconButton>
+                  )}
+                </div>
+              </header>
+            )}
+            <header className="chat-header" hidden={Boolean(selection)}>
               <IconButton
                 label="Назад к чатам"
                 className="mobile-back"
@@ -1802,7 +1908,11 @@ export default function App() {
                   <h2>{active.title}</h2>
                   <p
                     className={
-                      active.kind === 'direct' && active.peer?.seen === 'online' ? 'is-online' : ''
+                      typingIn(active)
+                        ? 'is-typing'
+                        : active.kind === 'direct' && active.peer?.seen === 'online'
+                          ? 'is-online'
+                          : ''
                     }
                   >
                     {subtitle(active)}
@@ -1923,6 +2033,39 @@ export default function App() {
                 </IconButton>
               </div>
             )}
+            {active.pinned_message && (
+              <div className="pinned-bar">
+                <button
+                  type="button"
+                  className="pinned-open"
+                  onClick={() => void showMessage(active.pinned_message!.id)}
+                >
+                  <Pin size={16} />
+                  <span>
+                    <strong>Закреплённое сообщение</strong>
+                    <span>
+                      {active.pinned_message.body ||
+                        (active.pinned_message.file_name &&
+                          fileLabel(active.pinned_message.file_name)) ||
+                        'Сообщение'}
+                    </span>
+                  </span>
+                </button>
+                {(active.kind !== 'group' || active.owner_id === me.id) && (
+                  <IconButton
+                    label="Открепить сообщение"
+                    onClick={() =>
+                      void togglePin({
+                        id: active.pinned_message!.id,
+                        chat_id: active.id,
+                      } as Message)
+                    }
+                  >
+                    <X size={17} />
+                  </IconButton>
+                )}
+              </div>
+            )}
             <div className="conversation-layout">
               <section
                 className={`conversation ${dropping ? 'dropping' : ''}`}
@@ -2020,6 +2163,9 @@ export default function App() {
                         kind={active.kind}
                         moderator={active.kind === 'group' && active.owner_id === me.id}
                         unreadFrom={unreadFrom}
+                        pinnedId={active.pinned_message?.id}
+                        canPin={active.kind !== 'group' || active.owner_id === me.id}
+                        selection={selection}
                         newMessageIds={newMessageIds}
                         copiedId={copiedMessageId}
                         sending={sending}
@@ -2307,6 +2453,7 @@ export default function App() {
                         <VideoNoteRecorder
                           key={active.id}
                           disabled={sending}
+                          onActive={() => sendTyping(active.id, 'video')}
                           onRecorded={(file) => void attachFile(file)}
                           onError={setError}
                         />
@@ -2316,6 +2463,7 @@ export default function App() {
                       <VoiceRecorder
                         key={active.id}
                         disabled={sending}
+                        onActive={() => sendTyping(active.id, 'voice')}
                         onRecorded={(file) => void attachFile(file)}
                         onError={setError}
                       />
@@ -2489,6 +2637,20 @@ export default function App() {
           }}
         />
       )}
+      {forwarding && (
+        <ForwardDialog
+          chats={chats}
+          messageIds={forwarding}
+          onClose={() => setForwarding(null)}
+          onDone={async (id) => {
+            setForwarding(null);
+            setSelection(null);
+            await refreshChats();
+            if (id === activeRef.current) await loadMessages(id);
+            else select(id);
+          }}
+        />
+      )}
       {modal === 'group' && active?.kind === 'group' && (
         <GroupSettings
           chat={active}
@@ -2613,8 +2775,18 @@ export default function App() {
       )}
       {scanned && <ScannedText text={scanned} onClose={() => setScanned('')} />}
       {modal === 'delete' && (
-        <Modal error={error} title="Удалить сообщение?" onClose={() => setModal(null)}>
-          <p className="muted">Сообщение удалится у всех участников.</p>
+        <Modal
+          error={error}
+          title={
+            deleteIds.length > 1
+              ? `Удалить ${deleteIds.length} ${plural(deleteIds.length, 'сообщение', 'сообщения', 'сообщений')}?`
+              : 'Удалить сообщение?'
+          }
+          onClose={() => setModal(null)}
+        >
+          <p className="muted">
+            {deleteIds.length > 1 ? 'Сообщения удалятся' : 'Сообщение удалится'} у всех участников.
+          </p>
           <div className="modal-actions">
             <CloseButton>Отмена</CloseButton>
             <button
@@ -2622,36 +2794,50 @@ export default function App() {
               disabled={working}
               onClick={async () => {
                 setWorking(true);
+                const removed: string[] = [];
                 try {
-                  await api(`/chats/${activeId}/messages/${deleteId}`, 'DELETE');
-                  setModal(null);
-                  // Fold the row away before it leaves the list.
-                  const row = scroller.current
-                    ?.querySelector(`[data-message-id="${deleteId}"]`)
-                    ?.closest<HTMLElement>('.message-group-item');
-                  if (row && motionAllowed()) {
-                    row.style.overflow = 'hidden';
-                    const fold = row
-                      .animate(
-                        [
-                          { height: `${row.offsetHeight}px`, opacity: 1 },
-                          { height: '0px', opacity: 0, transform: 'scale(0.96)' },
-                        ],
-                        {
-                          duration: 220,
-                          easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
-                          fill: 'forwards',
-                        },
-                      )
-                      .finished.catch(() => undefined);
-                    // Background tabs pause animations; never let that hold the deletion.
-                    await Promise.race([fold, new Promise((done) => setTimeout(done, 300))]);
+                  for (const id of deleteIds) {
+                    await api(`/chats/${activeId}/messages/${id}`, 'DELETE');
+                    removed.push(id);
                   }
-                  setMessages((prev) => prev.filter((m) => m.id !== deleteId));
-                  await refreshChats();
+                  setModal(null);
+                  setSelection(null);
+                  // Fold the rows away before they leave the list.
+                  const rows = removed
+                    .map((id) =>
+                      scroller.current
+                        ?.querySelector(`[data-message-id="${id}"]`)
+                        ?.closest<HTMLElement>('.message-group-item'),
+                    )
+                    .filter((row): row is HTMLElement => Boolean(row));
+                  if (rows.length && motionAllowed()) {
+                    const folds = rows.map((row) => {
+                      row.style.overflow = 'hidden';
+                      return row
+                        .animate(
+                          [
+                            { height: `${row.offsetHeight}px`, opacity: 1 },
+                            { height: '0px', opacity: 0, transform: 'scale(0.96)' },
+                          ],
+                          {
+                            duration: 220,
+                            easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
+                            fill: 'forwards',
+                          },
+                        )
+                        .finished.catch(() => undefined);
+                    });
+                    // Background tabs pause animations; never let that hold the deletion.
+                    await Promise.race([
+                      Promise.all(folds),
+                      new Promise((done) => setTimeout(done, 300)),
+                    ]);
+                  }
                 } catch (e) {
                   report(e);
                 } finally {
+                  setMessages((prev) => prev.filter((m) => !removed.includes(m.id)));
+                  if (removed.length) await refreshChats().catch(report);
                   setWorking(false);
                 }
               }}

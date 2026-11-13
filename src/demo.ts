@@ -272,7 +272,37 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         if (typeof data[key] === 'boolean') chat[key] = data[key];
       result = { pinned: !!chat.pinned, muted: !!chat.muted, archived: !!chat.archived };
     } else if (parts[2] === 'read') chat.unread = 0;
-    else if (parts[2] === 'invite') result = { url: `${location.origin}/?demo=1` };
+    else if (parts[2] === 'pin') {
+      if (chat.kind === 'group' && chat.owner_id !== self.id)
+        throw Error('Закрепляет владелец группы.');
+      const target = state.messages.find((m) => m.id === data.messageId && m.chat_id === chat.id);
+      chat.pinned_message = target
+        ? { id: target.id, body: target.body, file_name: target.file?.name || null }
+        : null;
+    } else if (parts[2] === 'forward') {
+      const sources = state.messages.filter((m) => data.messageIds.includes(m.id));
+      result = {
+        ids: sources.map((source, index) => {
+          const copy: Message = {
+            ...structuredClone(source),
+            id: crypto.randomUUID(),
+            chat_id: chat.id,
+            sender_id: self.id,
+            sender: self,
+            created_at: new Date(Date.now() + index).toISOString(),
+            nonce: crypto.randomUUID(),
+            reactions: [],
+            reply: null,
+            edited_at: null,
+            read_by: 0,
+            forwarded_from: source.forwarded_from || source.sender.name,
+          };
+          state.messages.push(copy);
+          chat.last_message = copy;
+          return copy.id;
+        }),
+      };
+    } else if (parts[2] === 'invite') result = { url: `${location.origin}/?demo=1` };
     else if (parts.length === 2 && method === 'PATCH') {
       if (chat.owner_id !== self.id) throw Error('Настройки меняет владелец группы.');
       if (data.ownerId) chat.owner_id = data.ownerId;
@@ -324,6 +354,7 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         if (chat.last_message?.created_at === target.created_at) chat.last_message = target;
       } else if (method === 'DELETE') {
         state.messages = state.messages.filter((m) => m.id !== parts[3]);
+        if (chat.pinned_message?.id === parts[3]) chat.pinned_message = null;
         for (const message of state.messages)
           if (message.reply?.id === parts[3]) message.reply = null;
         chat.last_message =
