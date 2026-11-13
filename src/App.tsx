@@ -54,7 +54,9 @@ import { getDemoFileUrl } from './demo';
 import { Announcements } from './Announcements';
 import { api, upload, ApiError, isDemo, API_BASE } from './api';
 import { useUpdates } from './updates';
-import { useSync, type Refetch, type SyncEvent } from './useSync';
+import { useLiveMessages } from './useLiveMessages';
+import { NewChat } from './NewChat';
+import { reconcileMessages, firstUnread, type CachedConversation } from './conversation';
 import { useNotifications, isNative, clearPushDevice } from './notifications';
 import { Auth } from './Auth';
 import { Settings } from './Settings';
@@ -102,206 +104,6 @@ type Section = 'chats' | 'announcements' | 'settings';
 // Keep in sync with the one-pane breakpoint in styles.css.
 const narrowLayout =
   '(max-width: 800px), (max-width: 960px) and (max-height: 500px) and (pointer: coarse)';
-// Reuse unchanged API objects so receipts/polling do not repaint every message.
-function reconcileMessages(previous: Message[], incoming: Message[]) {
-  const byId = new Map(previous.map((message) => [message.id, message]));
-  const next = incoming.map((message) => {
-    const old = byId.get(message.id);
-    return old && JSON.stringify(old) === JSON.stringify(message) ? old : message;
-  });
-  return next.length === previous.length &&
-    next.every((message, index) => message === previous[index])
-    ? previous
-    : next;
-}
-/** Swap in an updated message and refresh the quotes of replies to it. */
-function withUpdated(list: Message[], message: Message) {
-  return list.map((m) =>
-    m.id === message.id
-      ? message
-      : m.reply?.id === message.id
-        ? { ...m, reply: { ...m.reply, body: message.body, file_name: message.file?.name } }
-        : m,
-  );
-}
-/** Id of the oldest of the last `count` messages from others, as far as `messages` reach. */
-function firstUnread(messages: Message[], count: number, meId: string) {
-  let found: string | null = null;
-  for (let i = messages.length - 1; i >= 0 && count > 0; i--)
-    if (messages[i].sender_id !== meId) {
-      found = messages[i].id;
-      count--;
-    }
-  return found;
-}
-type CachedConversation = {
-  messages: Message[];
-  hasOlder: boolean;
-  top: number;
-  following: boolean;
-};
-function NewChat({
-  onCreated,
-  onClose,
-}: {
-  onCreated: (id: string) => void | Promise<void>;
-  onClose: () => void;
-}) {
-  const [kind, setKind] = useState<'direct' | 'group'>('direct'),
-    [query, setQuery] = useState(''),
-    [title, setTitle] = useState(''),
-    [results, setResults] = useState<Person[]>([]),
-    [selected, setSelected] = useState<Person[]>([]),
-    [error, setError] = useState(''),
-    [busy, setBusy] = useState(false),
-    [searching, setSearching] = useState(false);
-  useEffect(() => {
-    let valid = true;
-    setError('');
-    if (query.trim().length < 2) {
-      setSearching(false);
-      setResults([]);
-      return;
-    }
-    setSearching(true);
-    const timer = setTimeout(() => {
-      api<Person[]>(`/users?q=${encodeURIComponent(query)}`)
-        .then((data) => {
-          if (valid) setResults(data);
-        })
-        .catch((e) => {
-          if (valid) setError(e.message);
-        })
-        .finally(() => {
-          if (valid) setSearching(false);
-        });
-    }, 250);
-    return () => {
-      valid = false;
-      clearTimeout(timer);
-    };
-  }, [query]);
-  async function create(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const result = await api<{ id: string }>('/chats', 'POST', {
-        kind,
-        title: kind === 'group' ? title : undefined,
-        userIds: selected.map((p) => p.id),
-      });
-      await onCreated(result.id);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <Modal title="Новый чат" onClose={onClose}>
-      <div className="segmented">
-        <button
-          className={kind === 'direct' ? 'selected' : ''}
-          onClick={() => {
-            setKind('direct');
-            setSelected([]);
-          }}
-        >
-          Личный чат
-        </button>
-        <button
-          className={kind === 'group' ? 'selected' : ''}
-          onClick={() => {
-            setKind('group');
-            setSelected([]);
-          }}
-        >
-          Новая группа
-        </button>
-      </div>
-      <form className="stack" onSubmit={create}>
-        <div className="fold" data-open={kind === 'group'} inert={kind !== 'group'}>
-          <div>
-            <label>
-              Название группы
-              <input
-                required
-                maxLength={70}
-                value={title}
-                disabled={kind !== 'group'}
-                onChange={(e) => setTitle(e.target.value)}
-              />
-            </label>
-          </div>
-        </div>
-        <label>
-          Найти пользователя
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Имя или логин"
-          />
-        </label>
-        {selected.length > 0 && (
-          <div className="selected-people">
-            {selected.map((p) => (
-              <button
-                type="button"
-                key={p.id}
-                onClick={() => setSelected((s) => s.filter((v) => v.id !== p.id))}
-              >
-                {p.name}
-                <X size={14} />
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="people-results">
-          {searching && <span className="muted">Поиск…</span>}
-          {results.map((p) => (
-            <button
-              type="button"
-              key={p.id}
-              onClick={() =>
-                setSelected((s) =>
-                  kind === 'direct'
-                    ? [p]
-                    : s.some((v) => v.id === p.id)
-                      ? s.filter((v) => v.id !== p.id)
-                      : [...s, p],
-                )
-              }
-            >
-              <Avatar person={p} />
-              <span>
-                <strong>{p.name}</strong>
-                <small>@{p.username}</small>
-              </span>
-              {selected.some((v) => v.id === p.id) && <Check size={19} />}
-            </button>
-          ))}
-          {query.length >= 2 && !searching && results.length === 0 && (
-            <p className="muted">Никого не найдено.</p>
-          )}
-          {query.length < 2 && <p className="muted">Минимум 2 символа.</p>}
-        </div>
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-        <button className="primary wide" disabled={busy || (kind === 'direct' && !selected.length)}>
-          {busy ? (
-            <LoaderCircle className="spin" size={18} />
-          ) : kind === 'group' ? (
-            'Создать группу'
-          ) : (
-            'Написать'
-          )}
-        </button>
-      </form>
-    </Modal>
-  );
-}
 export default function App() {
   const updates = useUpdates();
   const [me, setMe] = useState<Person | null>(null),
@@ -706,133 +508,36 @@ export default function App() {
       live = false;
     };
   }, [me?.id, demo, refreshChats, report]);
-  const notifyIncoming = (chatId: string, messageId: string) => {
-    const show = (chat: Chat | undefined) => {
-      if (
-        chat &&
-        !chat.muted &&
-        !(
-          document.visibilityState === 'visible' &&
-          document.hasFocus() &&
-          activeRef.current === chat.id &&
-          sectionRef.current === 'chats'
-        )
-      )
-        notificationRef.current.notify(chat.id, messageId);
-    };
-    const target = chatsRef.current.find((chat) => chat.id === chatId);
-    if (target) show(target);
-    else if (window.galinkaDesktop)
-      void refreshChats()
-        .then((items) => show(items.find((chat) => chat.id === chatId)))
-        .catch(report);
-  };
-  /** Puts a server row into the open conversation; false when it cannot be placed locally. */
-  const placeMessage = (message: Message, created: boolean) => {
-    const current = messagesRef.current;
-    if (current.some((m) => m.id === message.id)) {
-      setMessages((prev) => reconcileMessages(prev, withUpdated(prev, message)));
-      return true;
-    }
-    const confirmed = current.filter((m) => !m.pending);
-    const latest = confirmed.at(-1);
-    // Only a message newer than everything shown is appended; anything else is a gap.
-    if (!created || (latest && message.created_at < latest.created_at)) return false;
-    setMessages((prev) =>
-      reconcileMessages(prev, [
-        ...prev.filter((m) => !m.pending),
-        message,
-        ...prev.filter((m) => m.pending && m.nonce !== message.nonce),
-      ]),
-    );
-    setNewMessageIds([message.id]);
-    return true;
-  };
-  const applySyncEvent = (event: SyncEvent): Refetch => {
-    const chatId = 'chatId' in event ? event.chatId : undefined;
-    const open = Boolean(activeRef.current && (!chatId || chatId === activeRef.current));
-    // Notify by the event name: a row is attached only when the viewer can still read it.
-    if (
-      chatId &&
-      'event' in event &&
-      event.event === 'message.created' &&
-      event.senderId !== me?.id &&
-      event.messageId
-    )
-      notifyIncoming(chatId, event.messageId);
-    if (event.type === 'presence') {
-      // Someone in our chats came online or left: refresh statuses, not the conversation.
-      const openId = activeRef.current;
-      if (openId)
-        api<Person[]>(`/chats/${openId}/members`)
-          .then((people) => {
-            if (activeRef.current === openId) setMembers(people);
-          })
-          .catch(() => {});
-      return { list: true, conversation: false };
-    }
-    if (event.type === 'message') {
-      const { message } = event;
-      const created = event.event === 'message.created';
-      const cached = conversationCache.current.get(event.chatId);
-      if (cached?.messages.some((m) => m.id === message.id))
-        conversationCache.current.set(event.chatId, {
-          ...cached,
-          messages: withUpdated(cached.messages, message),
-        });
-      // The list shows the last message: refresh it for a new one or an edit of the last one.
-      const last = chatsRef.current.find((chat) => chat.id === event.chatId)?.last_message;
-      const list = created || last?.created_at === message.created_at;
-      if (!open) return { list, conversation: false };
-      if (!placeMessage(message, created)) return { list, conversation: true };
-      setReplies((previous) =>
-        previous[event.chatId]?.id === message.id
-          ? { ...previous, [event.chatId]: message }
-          : previous,
-      );
-      if (created && event.senderId !== me?.id) void markRead(event.chatId, message.id);
-      return { list, conversation: false };
-    }
-    if (event.type === 'refresh') {
-      if (event.removedUserId === me?.id && event.chatId) {
-        const removedId = event.chatId;
-        conversationCache.current.delete(removedId);
-        ++chatRequestEpoch.current;
-        setChats((previous) => previous.filter((chat) => chat.id !== removedId));
-        if (activeRef.current === removedId) {
-          ++requestEpoch.current;
-          activeRef.current = null;
-          setActiveId(null);
-          setMessages([]);
-          setMembers([]);
-          setInfoOpen(false);
-          setModal(null);
-          setEditing(null);
-          setError('Вы больше не участвуете в этой группе.');
-        }
-      }
-      if (event.deletedId) {
-        setMessages((prev) => prev.filter((m) => m.id !== event.deletedId));
-        setEditing((previous) => (previous?.message.id === event.deletedId ? null : previous));
-        setReplies((previous) =>
-          Object.fromEntries(
-            Object.entries(previous).filter(([, message]) => message.id !== event.deletedId),
-          ),
-        );
-      }
-    }
-    // Receipts change read_by on many rows; refetch the open conversation only.
-    if (event.type === 'read') return { list: false, conversation: open };
-    return { list: true, conversation: open };
-  };
-  useSync(Boolean(me) && !demo, {
-    onEvent: applySyncEvent,
-    refetch: ({ list, conversation }) => {
-      if (list) refreshChats().catch(report);
-      if (conversation && activeRef.current) loadMessages(activeRef.current).catch(report);
+  useLiveMessages({
+    enabled: Boolean(me) && !demo,
+    meId: me?.id,
+    refs: {
+      active: activeRef,
+      section: sectionRef,
+      messages: messagesRef,
+      chats: chatsRef,
+      cache: conversationCache,
+      requestEpoch,
+      chatRequestEpoch,
+      notification: notificationRef,
     },
-    onConnected: setConnected,
-    onSessionLost: report,
+    set: {
+      messages: setMessages,
+      newMessageIds: setNewMessageIds,
+      replies: setReplies,
+      editing: setEditing,
+      chats: setChats,
+      members: setMembers,
+      activeId: setActiveId,
+      infoOpen: setInfoOpen,
+      modal: setModal,
+      error: setError,
+      connected: setConnected,
+    },
+    refreshChats,
+    loadMessages,
+    markRead,
+    report,
   });
   useEffect(() => {
     if (!activeId || (!infoOpen && modal !== 'group') || !me) return;
