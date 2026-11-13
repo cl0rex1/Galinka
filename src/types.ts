@@ -44,6 +44,8 @@ export type Message = {
   /** Shown before the server confirms it (optimistic send); `failed` when it did not go. */
   pending?: boolean;
   failed?: boolean;
+  /** Sent without a notification (kept on the local copy for a retry). */
+  silent?: boolean;
 };
 export type Chat = {
   id: string;

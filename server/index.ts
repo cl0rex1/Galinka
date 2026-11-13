@@ -263,6 +263,7 @@ async function notify(
     event: 'message.created' | 'message.updated';
     messageId: string;
     senderId: string;
+    silent?: boolean;
   },
 ) {
   await db.query("SELECT pg_notify('galinka', $1)", [
@@ -1107,6 +1108,8 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       fileId: uuid.optional(),
       nonce: uuid,
       replyTo: uuid.optional(),
+      /** Delivered without a notification. */
+      silent: z.boolean().optional(),
     })
     .parse(req.body);
   requireValue(data.body || data.fileId, 400, 'Напишите сообщение или выберите файл.');
@@ -1145,7 +1148,7 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       [randomUUID(), chat.id, user(req).id, data.body, data.fileId, data.nonce, data.replyTo],
     );
     if (rows[0]) {
-      if (anyPushEnabled)
+      if (anyPushEnabled && !data.silent)
         await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [rows[0].id]);
       const reply = chat.nelya ? nelyaReply(data.body) : null;
       if (reply)
@@ -1159,6 +1162,7 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
         event: 'message.created',
         messageId: rows[0].id,
         senderId: user(req).id,
+        silent: data.silent || undefined,
       });
       return rows[0].id;
     }

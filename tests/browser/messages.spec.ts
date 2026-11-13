@@ -174,4 +174,15 @@ test('typing and recording show in the chat header and the chat list', async ({ 
   );
   await page.getByRole('textbox', { name: 'Сообщение', exact: true }).fill('привет');
   expect((await announced).postDataJSON()).toEqual({ action: 'typing' });
+  // Right click on send offers sending without a notification.
+  const posted = page.waitForRequest(
+    (request) =>
+      request.method() === 'POST' && request.url().endsWith(`/chats/${chat.id}/messages`),
+  );
+  await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click({
+    button: 'right',
+  });
+  await page.getByRole('menuitem', { name: 'Отправить без звука' }).click();
+  expect((await posted).postDataJSON()).toMatchObject({ body: 'привет', silent: true });
+  await expect(page.getByRole('menuitem', { name: 'Отправить без звука' })).toHaveCount(0);
 });

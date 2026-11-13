@@ -152,6 +152,8 @@ export default function App() {
     /** Selected message ids while selecting several, otherwise null. */
     [selection, setSelection] = useState<Set<string> | null>(null),
     [forwarding, setForwarding] = useState<string[] | null>(null),
+    /** The "send without sound" option over the send button. */
+    [sendOptions, setSendOptions] = useState(false),
     [name, setName] = useState(''),
     [emojiOpen, setEmojiOpen] = useState(false),
     [person, setPerson] = useState<Person | null>(null),
@@ -716,6 +718,7 @@ export default function App() {
           if (!menu.contains(target)) closeMenu(menu);
         });
       if (!target.closest('.emoji-wrap')) setEmojiOpen(false);
+      if (!target.closest('.send-options')) setSendOptions(false);
     };
     const escape = (event: KeyboardEvent) => {
       if (
@@ -735,6 +738,7 @@ export default function App() {
       setEmojiOpen(false);
       setInfoOpen(false);
       setSelection(null);
+      setSendOptions(false);
     };
     document.addEventListener('pointerdown', dismiss);
     document.addEventListener('keydown', escape);
@@ -1078,7 +1082,7 @@ export default function App() {
       setPreferenceBusy(false);
     }
   }
-  async function send(e?: FormEvent) {
+  async function send(e?: FormEvent, silent = false) {
     e?.preventDefault();
     if (edit) {
       await saveEdit();
@@ -1086,7 +1090,7 @@ export default function App() {
     }
     if (!activeId || (!draft.trim() && !attachment)) return;
     if (!attachment) {
-      sendText(activeId, draft.trim(), replies[activeId]);
+      sendText(activeId, draft.trim(), replies[activeId], undefined, silent);
       return;
     }
     if (sendingChats.current.has(activeId)) return;
@@ -1123,6 +1127,7 @@ export default function App() {
         fileId: file?.id,
         demoFile: demo ? file : undefined,
         replyTo: replyDraft?.id,
+        silent: silent || undefined,
       });
       delivered = true;
       setTransfers((previous) => {
@@ -1173,7 +1178,7 @@ export default function App() {
    * stays usable, and sends in one chat queue up so they arrive in order. The server's copy
    * replaces the bubble by its nonce; a failed one stays with a retry button.
    */
-  function sendText(id: string, text: string, replyTo?: Message, nonce?: string) {
+  function sendText(id: string, text: string, replyTo?: Message, nonce?: string, silent = false) {
     const messageNonce = nonce ?? nonces.current[id] ?? crypto.randomUUID();
     delete nonces.current[id];
     const local: Message = {
@@ -1196,6 +1201,7 @@ export default function App() {
           }
         : null,
       pending: true,
+      silent,
     };
     if (activeRef.current === id) {
       followBottom.current = true;
@@ -1219,6 +1225,7 @@ export default function App() {
         body: text,
         nonce: messageNonce,
         replyTo: replyTo?.id,
+        silent: silent || undefined,
       });
     const queued = (textQueue.current[id] ?? Promise.resolve()).then(post);
     textQueue.current[id] = queued.catch(() => {});
@@ -1412,7 +1419,7 @@ export default function App() {
       const original = message.reply
         ? messagesRef.current.find((item) => item.id === message.reply!.id)
         : undefined;
-      sendText(message.chat_id, message.body, original, message.nonce);
+      sendText(message.chat_id, message.body, original, message.nonce, message.silent);
     },
     discard: (message) =>
       setMessages((previous) => previous.filter((item) => item.id !== message.id)),
@@ -2271,27 +2278,67 @@ export default function App() {
                         onError={setError}
                       />
                     ) : (
-                      <button
-                        className="send-button"
-                        onMouseDown={(e) => e.preventDefault()}
-                        aria-label={edit ? 'Сохранить изменения' : 'Отправить сообщение'}
-                        title={edit ? 'Сохранить изменения' : 'Отправить сообщение'}
-                        disabled={
-                          sending ||
-                          savingCurrentEdit ||
-                          (edit
-                            ? !edit.body.trim() && !edit.message.file
-                            : !draft.trim() && !attachment)
-                        }
-                      >
-                        {sending || savingCurrentEdit ? (
-                          <LoaderCircle size={20} className="spin" />
-                        ) : edit ? (
-                          <Check size={21} />
-                        ) : (
-                          <ArrowUp size={21} />
+                      <>
+                        {sendOptions && !edit && (
+                          <div className="send-options chat-actions-menu" role="menu">
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => {
+                                setSendOptions(false);
+                                void send(undefined, true);
+                              }}
+                            >
+                              <BellOff size={17} />
+                              Отправить без звука
+                            </button>
+                          </div>
                         )}
-                      </button>
+                        <button
+                          className="send-button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          // The click that ends a long press only opens the options.
+                          onClick={(e) => {
+                            if (sendOptions) e.preventDefault();
+                          }}
+                          // Right click or a long press offers sending without a notification.
+                          onContextMenu={(e) => {
+                            if (edit || e.currentTarget.disabled) return;
+                            e.preventDefault();
+                            setSendOptions(true);
+                          }}
+                          onPointerDown={(e) => {
+                            if (e.pointerType === 'mouse' || edit) return;
+                            const button = e.currentTarget;
+                            const timer = setTimeout(() => {
+                              navigator.vibrate?.(8);
+                              setSendOptions(true);
+                            }, 450);
+                            const stop = () => clearTimeout(timer);
+                            button.addEventListener('pointerup', stop, { once: true });
+                            button.addEventListener('pointercancel', stop, { once: true });
+                            button.addEventListener('pointerleave', stop, { once: true });
+                          }}
+                          aria-label={edit ? 'Сохранить изменения' : 'Отправить сообщение'}
+                          title={edit ? 'Сохранить изменения' : 'Отправить сообщение'}
+                          disabled={
+                            sending ||
+                            savingCurrentEdit ||
+                            (edit
+                              ? !edit.body.trim() && !edit.message.file
+                              : !draft.trim() && !attachment)
+                          }
+                        >
+                          {sending || savingCurrentEdit ? (
+                            <LoaderCircle size={20} className="spin" />
+                          ) : edit ? (
+                            <Check size={21} />
+                          ) : (
+                            <ArrowUp size={21} />
+                          )}
+                        </button>
+                      </>
                     )}
                   </form>
                 </div>

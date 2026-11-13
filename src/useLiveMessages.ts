@@ -124,7 +124,8 @@ export function useLiveMessages(c: LiveContext) {
       'event' in event &&
       event.event === 'message.created' &&
       event.senderId !== me?.id &&
-      event.messageId
+      event.messageId &&
+      !('silent' in event && event.silent)
     )
       notifyIncoming(chatId, event.messageId);
     if (event.type === 'typing') {

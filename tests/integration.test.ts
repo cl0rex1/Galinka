@@ -536,6 +536,21 @@ test(
         ],
         ['typing', id, alice.data.id, 'alice', 'voice'],
       );
+      // A silent message says so in its event, so apps skip the notification.
+      await request(
+        `/chats/${id}/messages`,
+        'POST',
+        { body: 'тихо', nonce: randomUUID(), silent: true },
+        alice.cookie,
+      );
+      const quiet = await Promise.race([
+        typingReader.read(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(Error('No silent message event')), 4000).unref(),
+        ),
+      ]);
+      const quietEvent = JSON.parse(new TextDecoder().decode(quiet.value).split('\n')[0].slice(6));
+      assert.deepEqual([quietEvent.message.body, quietEvent.silent], ['тихо', true]);
       typingController.abort();
       assert.equal(
         (await request(`/chats/${id}/messages/${sent.data.id}`, 'DELETE', undefined, alice.cookie))
@@ -555,8 +570,8 @@ test(
         undefined,
         bob.cookie,
       );
-      assert.equal(second.data.length, 7);
-      assert.equal(new Set([...first.data, ...second.data].map((m) => m.id)).size, 67);
+      assert.equal(second.data.length, 8);
+      assert.equal(new Set([...first.data, ...second.data].map((m) => m.id)).size, 68);
       const csrf = await fetch(base + '/api/chats', {
         method: 'POST',
         headers: {

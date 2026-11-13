@@ -4903,3 +4903,16 @@ div.message-text {
   text-decoration: none;
   pointer-events: none;
 }
+.send-options {
+  right: 0;
+  top: auto;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  transform-origin: bottom right;
+}
+@starting-style {
+  .send-options {
+    opacity: 0;
+    scale: 0.94;
+  }
+}

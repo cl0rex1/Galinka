@@ -10,6 +10,8 @@ export type SyncEvent =
       chatId: string;
       messageId: string;
       senderId: string;
+      /** Sent without a notification. */
+      silent?: boolean;
       message: Message;
     }
   | { type: 'read'; chatId: string; userId?: string; lastMessageId?: string }
