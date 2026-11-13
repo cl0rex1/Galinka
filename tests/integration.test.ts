@@ -254,6 +254,25 @@ test(
       assert.equal(messages.data.length, 2);
       assert.match(messages.data[1].body, /Я выбираю/);
       assert.equal(messages.data[1].sender_id, null);
+      // Search treats % and _ literally, not as LIKE wildcards.
+      const q = (text: string) => encodeURIComponent(text);
+      const inChat = (text: string) =>
+        request(`/chats/${id}/messages?q=${q(text)}`, 'GET', undefined, bob.cookie);
+      assert.deepEqual(
+        (await inChat('ЧАЙ | к')).data.map((m: any) => m.id),
+        [sent.data.id],
+      );
+      assert.equal((await inChat('%')).data.length, 0);
+      assert.equal((await inChat('_')).data.length, 0);
+      const global = await request(`/search?q=${q('выбери')}`, 'GET', undefined, bob.cookie);
+      assert.deepEqual(
+        global.data.map((m: any) => m.id),
+        [sent.data.id],
+      );
+      assert.equal(
+        (await request(`/search?q=${q('%%')}`, 'GET', undefined, bob.cookie)).data.length,
+        0,
+      );
       assert.equal(
         (
           await request(

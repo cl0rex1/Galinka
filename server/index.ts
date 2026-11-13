@@ -1064,20 +1064,22 @@ app.get('/api/chats/:id/messages', auth, async (req, res) => {
   const q = z.string().trim().max(100).optional().parse(req.query.q);
   const before = uuid.optional().parse(req.query.before);
   const { rows } = await pool.query(
-    `${messageSQL} WHERE m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) AND ($3::text IS NULL OR strpos(lower(m.body),lower($3))>0) AND ($4::uuid IS NULL OR (m.created_at,m.id)<(SELECT created_at,id FROM messages WHERE id=$4 AND chat_id=$1)) ORDER BY m.created_at DESC,m.id DESC LIMIT 60`,
-    [req.params.id, user(req).id, q || null, before || null],
+    `${messageSQL} WHERE m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) AND ($3::text IS NULL OR m.body ILIKE $3) AND ($4::uuid IS NULL OR (m.created_at,m.id)<(SELECT created_at,id FROM messages WHERE id=$4 AND chat_id=$1)) ORDER BY m.created_at DESC,m.id DESC LIMIT 60`,
+    [req.params.id, user(req).id, q ? contains(q) : null, before || null],
   );
   res.json(rows.reverse());
 });
 // Search across every chat the user is in; the client opens a hit in its conversation.
+// ILIKE pattern for a literal substring; the messages_body_trgm index serves it.
+const contains = (text: string) => `%${text.replace(/[\\%_]/g, '\\$&')}%`;
 app.get('/api/search', auth, async (req, res) => {
   const q = z.string().trim().min(2).max(100).parse(req.query.q);
   const { rows } = await pool.query(
     `SELECT m.id,m.chat_id,m.body,m.created_at,m.sender_id,COALESCE(u.name,'Неля') AS sender_name
      FROM messages m JOIN members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=$1
      LEFT JOIN users u ON u.id=m.sender_id
-     WHERE strpos(lower(m.body),lower($2))>0 ORDER BY m.created_at DESC,m.id DESC LIMIT 50`,
-    [user(req).id, q],
+     WHERE m.body ILIKE $2 ORDER BY m.created_at DESC,m.id DESC LIMIT 50`,
+    [user(req).id, contains(q)],
   );
   res.json(rows);
 });
