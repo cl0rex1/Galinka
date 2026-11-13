@@ -241,7 +241,15 @@ test(
           setTimeout(() => reject(Error('No cross-replica event')), 4000).unref(),
         ),
       ]);
-      assert.match(new TextDecoder().decode(event.value), new RegExp(id));
+      // The event carries the message row itself, so open chats need no refetch.
+      const data = JSON.parse(new TextDecoder().decode(event.value).split('\n')[0].slice(6));
+      assert.equal(data.type, 'message');
+      assert.equal(data.event, 'message.created');
+      assert.equal(data.chatId, id);
+      assert.equal(data.senderId, alice.data.id);
+      assert.equal(data.message.id, sent.data.id);
+      assert.equal(data.message.body, '@неля выбери чай | кофе');
+      assert.deepEqual(data.message.reactions, []);
       controller.abort();
       const retry = await request(
         `/chats/${id}/messages`,

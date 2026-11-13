@@ -259,14 +259,18 @@ async function notify(
   chatId: string,
   deletedId?: string,
   removedUserId?: string,
-  createdMessage?: { messageId: string; senderId: string },
+  changedMessage?: {
+    event: 'message.created' | 'message.updated';
+    messageId: string;
+    senderId: string;
+  },
 ) {
   await db.query("SELECT pg_notify('galinka', $1)", [
     JSON.stringify({
       chatId,
       deletedId,
       removedUserId,
-      ...(createdMessage ? { event: 'message.created', ...createdMessage } : {}),
+      ...(changedMessage ? changedMessage : {}),
     }),
   ]);
 }
@@ -998,7 +1002,12 @@ app.post('/api/chats/:id/read', auth, async (req, res) => {
     );
     if (updated.rowCount)
       await db.query("SELECT pg_notify('galinka', $1)", [
-        JSON.stringify({ type: 'read', chatId: String(req.params.id) }),
+        JSON.stringify({
+          type: 'read',
+          chatId: String(req.params.id),
+          userId: user(req).id,
+          lastMessageId: String(lastMessageId),
+        }),
       ]);
   });
   res.json({ ok: true });
@@ -1139,6 +1148,7 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
           randomUUID(),
         ]);
       await notify(db, chat.id, undefined, undefined, {
+        event: 'message.created',
         messageId: rows[0].id,
         senderId: user(req).id,
       });
@@ -1171,7 +1181,11 @@ app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
         body,
         req.params.messageId,
       ]);
-      await notify(db, chat.id);
+      await notify(db, chat.id, undefined, undefined, {
+        event: 'message.updated',
+        messageId: String(req.params.messageId),
+        senderId: user(req).id,
+      });
     }
   });
   res.json({ ok: true });
@@ -1214,7 +1228,11 @@ app.post('/api/chats/:id/messages/:messageId/reactions', auth, async (req, res) 
         user(req).id,
         emoji,
       ]);
-    await notify(db, String(req.params.id));
+    await notify(db, String(req.params.id), undefined, undefined, {
+      event: 'message.updated',
+      messageId: String(req.params.messageId),
+      senderId: user(req).id,
+    });
   });
   res.json({ ok: true });
 });
@@ -1578,9 +1596,11 @@ async function listen() {
         deletedId?: string;
         revokedUserId?: string;
         removedUserId?: string;
-        event?: 'message.created';
+        event?: 'message.created' | 'message.updated';
         messageId?: string;
         senderId?: string;
+        userId?: string;
+        lastMessageId?: string;
       };
       if (change.revokedUserId) {
         for (const [res, info] of streams) if (info.userId === change.revokedUserId) res.end();
@@ -1591,13 +1611,31 @@ async function listen() {
       ]);
       const ids = new Set(rows.map((r) => r.user_id));
       if (change.removedUserId) ids.add(change.removedUserId);
+      // A new or changed message travels with the event, so open chats need no refetch.
+      // The row embeds reactions.mine, so it is read once per viewer, not once per stream.
+      // event/messageId/senderId stay at the top level for clients older than 0.13.
+      const messageCache = new Map<string, unknown>();
+      const payloadFor = async (viewerId: string) => {
+        if (change.event && change.messageId) {
+          if (!messageCache.has(viewerId)) {
+            const { rows: found } = await pool.query(
+              `${messageSQL} WHERE m.id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2)`,
+              [change.messageId, viewerId],
+            );
+            messageCache.set(viewerId, found[0] ?? null);
+          }
+          const message = messageCache.get(viewerId);
+          if (message) return { ...change, type: 'message', message };
+        }
+        return { type: 'refresh', ...change };
+      };
       for (const [res, info] of streams)
         if (ids.has(info.userId)) {
           if (res.writableLength > 1024 * 1024) {
             res.end();
             continue;
           }
-          res.write(`data: ${JSON.stringify({ type: 'refresh', ...change })}\n\n`);
+          res.write(`data: ${JSON.stringify(await payloadFor(info.userId))}\n\n`);
         }
     } catch (error) {
       console.error('Notification delivery failed', error);

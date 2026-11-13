@@ -141,13 +141,13 @@ test('two real clients exchange group messages; retry and chat switching preserv
     const retryText = `Повтор без дубликата ${suffix}`;
     await composeAlice.fill(retryText);
     await alice.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
-    await expect(alice.getByRole('alert')).toContainText('Нет соединения');
-    await expect(composeAlice).toHaveValue(retryText);
-    await expect(bob.locator('.bubble p', { hasText: retryText })).toBeVisible();
-    await alice.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
     await expect(composeAlice).toHaveValue('');
-    expect(nonces).toHaveLength(2);
-    expect(nonces[1]).toBe(nonces[0]);
+    await expect(bob.locator('.bubble p', { hasText: retryText })).toBeVisible();
+    // The live event brings the saved row, which replaces the optimistic bubble by nonce:
+    // no failure mark and no duplicate, even though the POST response was lost.
+    await expect(alice.locator('.bubble p', { hasText: retryText })).toHaveCount(1);
+    await expect(alice.locator('.failed-mark')).toHaveCount(0);
+    expect(nonces).toHaveLength(1);
     const saved = await db.query(
       'SELECT count(*)::int AS n FROM messages WHERE sender_id=$1 AND body=$2',
       [accounts[0], retryText],
