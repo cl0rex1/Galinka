@@ -2588,9 +2588,9 @@ form.stack > :not(:last-child, .fold),
   height: 100%;
   border-radius: 50%;
   object-fit: cover;
-  scale: -1 1;
   background: #000;
 }
+/* Preview = result: it is flipped only when the recording is flipped too. */
 .camera-mirrored {
   transform: scaleX(-1);
 }

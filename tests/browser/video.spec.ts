@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 
 // Chromium's fake camera and microphone: never the user's real devices.
 test.use({
@@ -7,6 +7,29 @@ test.use({
   },
   permissions: ['camera', 'microphone'],
   viewport: { width: 1280, height: 820 },
+});
+
+async function flipOf(video: Locator) {
+  return video.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const scaleX = style.scale === 'none' ? 1 : Number(style.scale.split(' ')[0]);
+    const transformX = style.transform === 'none' ? 1 : new DOMMatrix(style.transform).a;
+    return Math.sign(scaleX * transformX);
+  });
+}
+
+test('round video preview is not flipped unless the recording is', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', 'Fake capture devices are a Chromium switch.');
+  await page.goto('/?demo=1');
+  await page.locator('.chat-item', { hasText: 'На выходные' }).click();
+  await page.getByRole('button', { name: 'Записать кружок', exact: true }).click();
+  const recorder = page.getByRole('dialog', { name: 'Запись кружка', exact: true });
+  await expect(recorder.locator('.recording-time')).toHaveText('0:01', { timeout: 10000 });
+  expect(await flipOf(recorder.locator('video'))).toBe(1);
+  await recorder.getByRole('button', { name: 'Отменить кружок', exact: true }).click();
 });
 
 test('round video: record, attach, send and play', async ({ page, browserName }) => {
@@ -21,6 +44,8 @@ test('round video: record, attach, send and play', async ({ page, browserName })
   await page.getByRole('button', { name: 'Записать кружок', exact: true }).click();
   const recorder = page.getByRole('dialog', { name: 'Запись кружка', exact: true });
   await expect(recorder.locator('video')).toHaveClass('camera-mirrored');
+  // One flip, not two: the preview shows what the recording will contain.
+  expect(await flipOf(recorder.locator('video'))).toBe(-1);
   await expect(recorder.locator('.recording-time')).toHaveText('0:02', { timeout: 10000 });
   await recorder.getByRole('button', { name: 'Завершить кружок', exact: true }).click();
   await expect(recorder).toHaveCount(0);
