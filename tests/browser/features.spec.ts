@@ -1,5 +1,5 @@
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,10 @@ import { Pool } from 'pg';
 import { syntheticMicrophone } from './helpers/media';
 
 test.use({ actionTimeout: 10000 });
+
+const ffmpegAvailable = await new Promise<boolean>((resolve) =>
+  execFile(process.env.FFMPEG_PATH || 'ffmpeg', ['-version'], (error) => resolve(!error)),
+);
 
 async function freePort() {
   const server = createServer();
@@ -132,7 +136,8 @@ test('real messenger features synchronize replies, edits, media and group permis
     const originalBob = bob
       .locator('.message-row')
       .filter({ has: bob.locator('.bubble > p', { hasText: original }) });
-    await originalBob.locator('summary').click();
+    // The action button appears on hover only; right click and long press are the way in.
+    await originalBob.locator('.bubble').click({ button: 'right' });
     await originalBob.getByRole('button', { name: 'Ответить', exact: true }).click();
     await expect(bob.locator('.composer-context')).toContainText('Алиса');
     const answer = `Буду к шести ${suffix}`;
@@ -156,8 +161,9 @@ test('real messenger features synchronize replies, edits, media and group permis
     await expect(bob.locator('.message-quote')).toContainText(corrected);
 
     async function chatAction(page: Page, label: string) {
-      await page.locator('.chat-actions > summary').click();
-      await page.locator('.chat-actions').getByRole('button', { name: label, exact: true }).click();
+      const menu = page.locator('.chat-actions:not(.attachment-menu)');
+      await menu.locator('> summary').click();
+      await menu.getByRole('button', { name: label, exact: true }).click();
     }
     await chatAction(alice, 'Закрепить чат');
     await expect(
@@ -201,45 +207,52 @@ test('real messenger features synchronize replies, edits, media and group permis
     await lightbox.getByRole('button', { name: 'Закрыть фотографию', exact: true }).click();
     await expect(lightbox).not.toBeVisible();
 
-    // Exercise the full private media path with this engine's real audio encoder.
-    // Bob receives the uploaded recording through SSE and loads it with his own session.
-    await alice.getByRole('button', { name: 'Записать голосовое сообщение', exact: true }).click();
-    await expect(alice.locator('.recording-time')).toHaveText('00:01', { timeout: 10000 });
-    await alice.getByRole('button', { name: 'Завершить запись', exact: true }).click();
-    await expect(alice.locator('.pending-file')).toContainText('Голосовое сообщение');
-    await alice.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
-    const voice = bob.locator('.audio-attachment audio');
-    await expect(bob.locator('.audio-attachment .voice-play')).toBeVisible();
-    await bob.locator('.audio-attachment .voice-play').click();
-    await expect
-      .poll(() => voice.evaluate((element) => element.readyState))
-      .toBeGreaterThanOrEqual(1);
-    await expect.poll(() => voice.evaluate((element) => element.currentTime)).toBeGreaterThan(0.1);
-    expect(
-      await alice.evaluate(
-        () => (window as unknown as { testStreams: MediaStream[] }).testStreams.length,
-      ),
-    ).toBe(1);
-    const recording = await db.query(
-      'SELECT id,mime FROM files WHERE chat_id=$1 AND mime LIKE $2',
-      [chatId, 'audio/%'],
-    );
-    expect(recording.rows).toHaveLength(1);
-    expect(['audio/webm', 'audio/mp4', 'audio/ogg']).toContain(recording.rows[0].mime);
-    await test.info().attach('voice-playback.json', {
-      body: JSON.stringify({
-        browser: browser.browserType().name(),
-        mime: recording.rows[0].mime,
-        readyState: await voice.evaluate((element) => element.readyState),
-      }),
-      contentType: 'application/json',
-    });
-    const audioUrl = `${origin}/api/files/${recording.rows[0].id}?inline=1`;
-    const range = await bobContext.request.get(audioUrl, { headers: { Range: 'bytes=0-15' } });
-    expect(range.status()).toBe(206);
-    expect(range.headers()['content-type']).toContain(recording.rows[0].mime);
-    expect(range.headers()['content-range']).toMatch(/^bytes 0-15\//);
-    expect((await carolContext.request.get(audioUrl)).status()).toBe(404);
+    // Voice messages are converted with ffmpeg, as in tests/audio.test.ts: skip without it.
+    if (ffmpegAvailable) {
+      // Exercise the full private media path with this engine's real audio encoder.
+      // Bob receives the uploaded recording through SSE and loads it with his own session.
+      await alice
+        .getByRole('button', { name: 'Записать голосовое сообщение', exact: true })
+        .click();
+      await expect(alice.locator('.recording-time')).toHaveText('00:01', { timeout: 10000 });
+      await alice.getByRole('button', { name: 'Завершить запись', exact: true }).click();
+      await expect(alice.locator('.pending-file')).toContainText('Голосовое сообщение');
+      await alice.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+      const voice = bob.locator('.audio-attachment audio');
+      await expect(bob.locator('.audio-attachment .voice-play')).toBeVisible();
+      await bob.locator('.audio-attachment .voice-play').click();
+      await expect
+        .poll(() => voice.evaluate((element) => element.readyState))
+        .toBeGreaterThanOrEqual(1);
+      await expect
+        .poll(() => voice.evaluate((element) => element.currentTime))
+        .toBeGreaterThan(0.1);
+      expect(
+        await alice.evaluate(
+          () => (window as unknown as { testStreams: MediaStream[] }).testStreams.length,
+        ),
+      ).toBe(1);
+      const recording = await db.query(
+        'SELECT id,mime FROM files WHERE chat_id=$1 AND mime LIKE $2',
+        [chatId, 'audio/%'],
+      );
+      expect(recording.rows).toHaveLength(1);
+      expect(['audio/webm', 'audio/mp4', 'audio/ogg']).toContain(recording.rows[0].mime);
+      await test.info().attach('voice-playback.json', {
+        body: JSON.stringify({
+          browser: browser.browserType().name(),
+          mime: recording.rows[0].mime,
+          readyState: await voice.evaluate((element) => element.readyState),
+        }),
+        contentType: 'application/json',
+      });
+      const audioUrl = `${origin}/api/files/${recording.rows[0].id}?inline=1`;
+      const range = await bobContext.request.get(audioUrl, { headers: { Range: 'bytes=0-15' } });
+      expect(range.status()).toBe(206);
+      expect(range.headers()['content-type']).toContain(recording.rows[0].mime);
+      expect(range.headers()['content-range']).toMatch(/^bytes 0-15\//);
+      expect((await carolContext.request.get(audioUrl)).status()).toBe(404);
+    }
 
     await chatAction(alice, 'Управление группой');
     const settings = alice.getByRole('dialog', { name: 'Управление группой', exact: true });

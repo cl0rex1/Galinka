@@ -114,6 +114,16 @@ function reconcileMessages(previous: Message[], incoming: Message[]) {
     ? previous
     : next;
 }
+/** Swap in an updated message and refresh the quotes of replies to it. */
+function withUpdated(list: Message[], message: Message) {
+  return list.map((m) =>
+    m.id === message.id
+      ? message
+      : m.reply?.id === message.id
+        ? { ...m, reply: { ...m.reply, body: message.body, file_name: message.file?.name } }
+        : m,
+  );
+}
 /** Id of the oldest of the last `count` messages from others, as far as `messages` reach. */
 function firstUnread(messages: Message[], count: number, meId: string) {
   let found: string | null = null;
@@ -721,12 +731,7 @@ export default function App() {
   const placeMessage = (message: Message, created: boolean) => {
     const current = messagesRef.current;
     if (current.some((m) => m.id === message.id)) {
-      setMessages((prev) =>
-        reconcileMessages(
-          prev,
-          prev.map((m) => (m.id === message.id ? message : m)),
-        ),
-      );
+      setMessages((prev) => reconcileMessages(prev, withUpdated(prev, message)));
       return true;
     }
     const confirmed = current.filter((m) => !m.pending);
@@ -773,7 +778,7 @@ export default function App() {
       if (cached?.messages.some((m) => m.id === message.id))
         conversationCache.current.set(event.chatId, {
           ...cached,
-          messages: cached.messages.map((m) => (m.id === message.id ? message : m)),
+          messages: withUpdated(cached.messages, message),
         });
       // The list shows the last message: refresh it for a new one or an edit of the last one.
       const last = chatsRef.current.find((chat) => chat.id === event.chatId)?.last_message;

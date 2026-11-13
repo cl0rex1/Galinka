@@ -43,7 +43,7 @@ test('administrator manages users and published mobile content through the real 
   async function login(username: string, target = '/admin') {
     await page.goto(`${origin}${target}`);
     await page.getByLabel('Логин', { exact: true }).fill(username);
-    await page.getByLabel('Пароль', { exact: true }).fill(password);
+    await page.locator('input[name="password"]').fill(password);
     await page.getByRole('button', { name: 'Войти', exact: true }).last().click();
   }
   try {
