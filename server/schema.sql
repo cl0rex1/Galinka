@@ -48,8 +48,12 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id uuid REFERENCES messag
 CREATE INDEX IF NOT EXISTS messages_reply_to ON messages(reply_to_id) WHERE reply_to_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_chat_time ON messages(chat_id,created_at DESC,id DESC);
 -- 0.13: trigram index for message search (ILIKE '%text%'; strpos/lower cannot use it).
+-- The operator class is qualified with the extension's schema, which may be off search_path.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE INDEX IF NOT EXISTS messages_body_trgm ON messages USING gin (body gin_trgm_ops);
+DO $$ BEGIN
+  EXECUTE format('CREATE INDEX IF NOT EXISTS messages_body_trgm ON messages USING gin (body %I.gin_trgm_ops)',
+    (SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='pg_trgm'));
+END $$;
 CREATE TABLE IF NOT EXISTS reactions (
  message_id uuid REFERENCES messages(id) ON DELETE CASCADE, user_id uuid REFERENCES users(id) ON DELETE CASCADE,
  emoji text NOT NULL CHECK(emoji IN ('❤','👍','😂','🔥')), PRIMARY KEY(message_id,user_id,emoji)
