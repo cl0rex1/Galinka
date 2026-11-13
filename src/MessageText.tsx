@@ -1,4 +1,4 @@
-import { Fragment, memo, type ReactNode } from 'react';
+import { Fragment, memo, useState, type ReactNode } from 'react';
 
 /** Wrap every case-insensitive occurrence of `query` in <mark>, for search results. */
 export function marked(text: string, query?: string): ReactNode {
@@ -15,16 +15,25 @@ export function marked(text: string, query?: string): ReactNode {
   return parts;
 }
 
+/**
+ * Message text without formatting marks, for one-line previews. Spoilers stay hidden.
+ * Keep in sync with plainText in server/push.ts.
+ */
+export const plainText = (text: string) =>
+  text
+    .replace(/\|\|(.+?)\|\|/gs, '•••')
+    .replace(/\*\*|__|~~|```|`/g, '')
+    .replace(/^> /gm, '');
+
+type Leaf = (text: string, key: string) => ReactNode;
+
 // Render addresses and @usernames without interpreting message text as HTML.
-export const MessageText = memo(function MessageText({
-  text,
-  highlight,
-  onMention,
-}: {
-  text: string;
-  highlight?: string;
-  onMention?: (username: string) => void;
-}) {
+function linkify(
+  text: string,
+  key: string,
+  highlight?: string,
+  onMention?: (username: string) => void,
+): ReactNode[] {
   const parts: ReactNode[] = [];
   let position = 0;
   for (const match of text.matchAll(
@@ -34,9 +43,11 @@ export const MessageText = memo(function MessageText({
     if (match[1]) {
       const username = match[1].toLowerCase();
       parts.push(
-        <Fragment key={`t${position}`}>{marked(text.slice(position, start), highlight)}</Fragment>,
+        <Fragment key={`${key}t${position}`}>
+          {marked(text.slice(position, start), highlight)}
+        </Fragment>,
         <a
-          key={start}
+          key={`${key}m${start}`}
           href={`/app?u=${encodeURIComponent(username)}`}
           className="message-mention"
           onClick={
@@ -68,10 +79,10 @@ export const MessageText = memo(function MessageText({
       const url = new URL(address);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
       parts.push(
-        <Fragment key={`t${position}`}>{marked(text.slice(position, start), highlight)}</Fragment>,
-      );
-      parts.push(
-        <a key={start} href={url.href} target="_blank" rel="noopener noreferrer">
+        <Fragment key={`${key}t${position}`}>
+          {marked(text.slice(position, start), highlight)}
+        </Fragment>,
+        <a key={`${key}a${start}`} href={url.href} target="_blank" rel="noopener noreferrer">
           {address}
         </a>,
       );
@@ -80,6 +91,115 @@ export const MessageText = memo(function MessageText({
       // Invalid addresses stay part of the next text segment.
     }
   }
-  parts.push(<Fragment key="end">{marked(text.slice(position), highlight)}</Fragment>);
-  return <p className="message-text">{parts}</p>;
+  parts.push(<Fragment key={`${key}end`}>{marked(text.slice(position), highlight)}</Fragment>);
+  return parts;
+}
+
+function Spoiler({ children }: { children: ReactNode }) {
+  const [shown, setShown] = useState(false);
+  if (shown) return <span className="spoiler shown">{children}</span>;
+  return (
+    <span
+      className="spoiler"
+      role="button"
+      tabIndex={0}
+      aria-label="Скрытый текст, нажмите, чтобы показать"
+      onClick={(event) => {
+        event.stopPropagation();
+        setShown(true);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          setShown(true);
+        }
+      }}
+    >
+      <span aria-hidden="true">{children}</span>
+    </span>
+  );
+}
+
+// Addresses are matched too, only so that marks inside them (a__b) stay part of the link.
+const inlineMarks =
+  /`([^`\n]+)`|https?:\/\/[^\s<>"']+|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\|\|(.+?)\|\|/gs;
+
+/** **bold**, __italic__, ~~strike~~, `code` and ||spoiler||, nested except inside code. */
+function formatInline(text: string, key: string, leaf: Leaf): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let at = 0;
+  for (const match of text.matchAll(inlineMarks)) {
+    const [whole, code, bold, italic, strike, spoiler] = match;
+    if (whole.startsWith('http')) continue;
+    const start = match.index;
+    const k = `${key}f${start}`;
+    parts.push(leaf(text.slice(at, start), `${key}t${start}`));
+    if (code !== undefined) parts.push(<code key={k}>{code}</code>);
+    else if (bold) parts.push(<strong key={k}>{formatInline(bold, k, leaf)}</strong>);
+    else if (italic) parts.push(<em key={k}>{formatInline(italic, k, leaf)}</em>);
+    else if (strike) parts.push(<s key={k}>{formatInline(strike, k, leaf)}</s>);
+    else parts.push(<Spoiler key={k}>{formatInline(spoiler, k, leaf)}</Spoiler>);
+    at = start + whole.length;
+  }
+  parts.push(leaf(text.slice(at), `${key}e`));
+  return parts;
+}
+
+type Block = { kind: 'text' | 'quote' | 'code'; text: string };
+/** Lines in ``` fences are code, lines starting with "> " a quote, the rest text. */
+function blocks(text: string): Block[] {
+  const lines = text.split('\n');
+  const result: Block[] = [];
+  const add = (kind: Block['kind'], line: string) => {
+    const last = result.at(-1);
+    if (last?.kind === kind && kind !== 'code') last.text += `\n${line}`;
+    else result.push({ kind, text: line });
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('```')) {
+      const end = lines.findIndex((other, j) => j > i && other.trimEnd() === '```');
+      if (end > i) {
+        result.push({ kind: 'code', text: lines.slice(i + 1, end).join('\n') });
+        i = end;
+        continue;
+      }
+    }
+    if (line.startsWith('> ')) add('quote', line.slice(2));
+    else add('text', line);
+  }
+  return result;
+}
+
+export const MessageText = memo(function MessageText({
+  text,
+  highlight,
+  onMention,
+}: {
+  text: string;
+  highlight?: string;
+  onMention?: (username: string) => void;
+}) {
+  const leaf: Leaf = (part, key) => linkify(part, key, highlight, onMention);
+  const parts = blocks(text);
+  // Plain text stays one inline paragraph, so the time can sit at the end of its last line.
+  if (parts.every((part) => part.kind === 'text'))
+    return <p className="message-text">{formatInline(text, 'p', leaf)}</p>;
+  return (
+    <div className="message-text">
+      {parts.map((part, index) =>
+        part.kind === 'code' ? (
+          <pre key={index}>
+            <code>{part.text}</code>
+          </pre>
+        ) : part.kind === 'quote' ? (
+          <blockquote key={index}>{formatInline(part.text, `q${index}`, leaf)}</blockquote>
+        ) : (
+          <span key={index} className="message-paragraph">
+            {formatInline(part.text, `p${index}`, leaf)}
+          </span>
+        ),
+      )}
+    </div>
+  );
 });

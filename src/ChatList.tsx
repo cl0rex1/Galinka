@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'react';
 import { Archive, ArrowLeft, BellOff, Pin } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { fileLabel, isVideoNote } from './MediaAttachment';
+import { plainText } from './MessageText';
 import { listTime } from './SearchResults';
 import { motionAllowed } from './ui';
 import type { Chat } from './types';
@@ -12,7 +13,7 @@ export const folders = ['Все', 'Непрочитанные', 'Личные', 
 function preview(chat: Chat) {
   const file = chat.last_message?.file;
   return (
-    chat.last_message?.body ||
+    plainText(chat.last_message?.body || '') ||
     (file?.mime?.startsWith('audio/')
       ? 'Голосовое сообщение'
       : file && isVideoNote(file)

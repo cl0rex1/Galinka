@@ -51,6 +51,7 @@ import { GroupSettings } from './GroupSettings';
 import { VoiceRecorder } from './VoiceRecorder';
 import { VideoNoteRecorder } from './VideoNoteRecorder';
 import { fileLabel } from './MediaAttachment';
+import { plainText } from './MessageText';
 import { Announcements } from './Announcements';
 import { api, upload, ApiError, isDemo } from './api';
 import { useUpdates } from './updates';
@@ -1821,7 +1822,7 @@ export default function App() {
                   <span>
                     <strong>Закреплённое сообщение</strong>
                     <span>
-                      {active.pinned_message.body ||
+                      {plainText(active.pinned_message.body) ||
                         (active.pinned_message.file_name &&
                           fileLabel(active.pinned_message.file_name)) ||
                         'Сообщение'}
@@ -1981,7 +1982,7 @@ export default function App() {
                         <p>
                           {shownContext.edit
                             ? shownContext.edit.message.body || shownContext.edit.message.file?.name
-                            : shownContext.reply!.body ||
+                            : plainText(shownContext.reply!.body) ||
                               (shownContext.reply!.file &&
                                 fileLabel(shownContext.reply!.file.name)) ||
                               'Сообщение'}
@@ -2171,6 +2172,31 @@ export default function App() {
                               setMentionCursor(null);
                               return;
                             }
+                          }
+                          // Ctrl+B and Ctrl+I wrap the selection in bold or italic marks.
+                          const mark = e.code === 'KeyB' ? '**' : e.code === 'KeyI' ? '__' : '';
+                          const field = e.currentTarget;
+                          if (
+                            mark &&
+                            (e.ctrlKey || e.metaKey) &&
+                            !e.altKey &&
+                            !e.shiftKey &&
+                            field.selectionStart !== field.selectionEnd
+                          ) {
+                            e.preventDefault();
+                            const { selectionStart: from, selectionEnd: to } = field;
+                            const value =
+                              composerValue.slice(0, from) +
+                              mark +
+                              composerValue.slice(from, to) +
+                              mark +
+                              composerValue.slice(to);
+                            if (value.length > 8000) return;
+                            changeDraft(value);
+                            requestAnimationFrame(() =>
+                              field.setSelectionRange(from + mark.length, to + mark.length),
+                            );
+                            return;
                           }
                           // As in Telegram Desktop: ↑ in an empty field edits your last message.
                           if (e.key === 'ArrowUp' && !composerValue && !edit && !attachment) {

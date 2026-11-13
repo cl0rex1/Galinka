@@ -114,13 +114,19 @@ const attachmentWord = (info: MessageInfo) =>
  * wrote; "none": nothing but "New message". In a group the chat is the title and the author
  * leads the text; in a direct chat the author is the title.
  */
+/** Message text without formatting marks; spoilers stay hidden. Keep in sync with src/MessageText. */
+export const plainText = (text: string) =>
+  text
+    .replace(/\|\|(.+?)\|\|/gs, '•••')
+    .replace(/\*\*|__|~~|```|`/g, '')
+    .replace(/^> /gm, '');
 export function previewText(info: MessageInfo | undefined, mode: Preview): NotificationText {
   if (!info || mode === 'none') return generic;
   const group = info.kind === 'group';
   const title = group ? info.title : info.sender;
   if (mode === 'sender')
     return { title, body: group ? `${info.sender}: новое сообщение` : 'Новое сообщение' };
-  const content = info.body.trim() || attachmentWord(info);
+  const content = plainText(info.body).trim() || attachmentWord(info);
   const text = content.length > 180 ? `${content.slice(0, 177)}…` : content;
   return { title, body: group ? `${info.sender}: ${text}` : text };
 }

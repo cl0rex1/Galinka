@@ -117,4 +117,9 @@ test('notification text follows each recipient: author and text, author only, or
   const long = previewText({ ...group, body: 'я'.repeat(400) }, 'full').body;
   assert.ok(long.length < 200 && long.endsWith('…'));
   assert.deepEqual(previewText(undefined, 'full'), { title: 'Galinka', body: 'Новое сообщение' });
+  // Formatting marks are dropped and a spoiler stays hidden on the lock screen.
+  assert.equal(
+    previewText({ ...group, body: '**Пароль** от `wifi`: ||котик||' }, 'full').body,
+    'Макс: Пароль от wifi: •••',
+  );
 });

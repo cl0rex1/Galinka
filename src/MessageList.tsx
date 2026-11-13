@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { fileLabel, MediaAttachment } from './MediaAttachment';
-import { MessageText } from './MessageText';
+import { MessageText, plainText } from './MessageText';
 import { closeMenu, openMenu as showMenu } from './ui';
 import type { Attachment, Chat, Message, Person } from './types';
 
@@ -252,7 +252,7 @@ const MessageRow = memo(function MessageRow({
                 <div>
                   <strong>{m.reply.sender.name}</strong>
                   <span>
-                    {m.reply.body ||
+                    {plainText(m.reply.body) ||
                       (m.reply.file_name && fileLabel(m.reply.file_name)) ||
                       'Сообщение'}
                   </span>

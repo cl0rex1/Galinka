@@ -4850,3 +4850,56 @@ html[data-motion='reduced'] *::after {
   max-height: min(50vh, 420px);
   overflow-y: auto;
 }
+
+/* Formatting inside messages: **bold**, __italic__, `code`, ```blocks```, > quotes, ||spoilers||. */
+div.message-text {
+  display: block;
+}
+.message-text > .message-paragraph {
+  display: block;
+}
+.message-text blockquote {
+  margin: 2px 0;
+  padding: 1px 0 1px 9px;
+  border-left: 3px solid var(--color-accent);
+}
+.own .message-text blockquote {
+  border-left-color: var(--color-outgoing-meta);
+}
+.message-text code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--color-quote);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.message-text pre {
+  margin: 4px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-quote);
+  overflow-x: auto;
+  white-space: pre;
+}
+.message-text pre code {
+  padding: 0;
+  background: none;
+}
+.spoiler {
+  border-radius: 4px;
+  transition: background var(--dur-fast);
+}
+.spoiler:not(.shown) {
+  color: transparent;
+  background: var(--color-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.own .spoiler:not(.shown) {
+  background: var(--color-outgoing-meta);
+}
+.spoiler:not(.shown) * {
+  color: transparent;
+  text-decoration: none;
+  pointer-events: none;
+}

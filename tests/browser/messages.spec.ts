@@ -87,6 +87,47 @@ test.describe('in the demo', () => {
       page.getByRole('heading', { name: 'На выходные', exact: true }).first(),
     ).toBeVisible();
   });
+
+  test('formatting marks render as formatting, links stay whole, spoilers open on tap', async ({
+    page,
+  }) => {
+    const field = page.getByRole('textbox', { name: 'Сообщение', exact: true });
+    await field.fill('план жирный');
+    // Ctrl+B wraps the selection in bold marks.
+    await field.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(5, 11));
+    await field.press('Control+b');
+    await expect(field).toHaveValue('план **жирный**');
+    await field.press('End');
+    await field.pressSequentially(
+      ' __курсив__ ~~нет~~ `код` ||тайна|| https://example.com/__init__',
+    );
+    await field.press('Shift+Enter');
+    await field.pressSequentially('> цитата');
+    await field.press('Shift+Enter');
+    await field.pressSequentially('```');
+    await field.press('Shift+Enter');
+    await field.pressSequentially('let x = **1**');
+    await field.press('Shift+Enter');
+    await field.pressSequentially('```');
+    await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+    const text = page.locator('.message-row').last().locator('.message-text');
+    await expect(text.locator('strong')).toHaveText('жирный');
+    await expect(text.locator('em')).toHaveText('курсив');
+    await expect(text.locator('s')).toHaveText('нет');
+    await expect(text.locator(':not(pre) > code')).toHaveText('код');
+    await expect(text.locator('blockquote')).toHaveText('цитата');
+    // Nothing is formatted inside a code block.
+    await expect(text.locator('pre')).toHaveText('let x = **1**');
+    await expect(text.getByRole('link')).toHaveAttribute('href', 'https://example.com/__init__');
+    const spoiler = text.getByRole('button', { name: /Скрытый текст/ });
+    await expect(spoiler).toHaveCSS('color', 'rgba(0, 0, 0, 0)');
+    await spoiler.click();
+    await expect(text.locator('.spoiler.shown')).toHaveText('тайна');
+    // Previews show the words without marks and keep the spoiler hidden.
+    await expect(page.locator('.chat-item.selected .chat-item-preview')).toContainText(
+      'план жирный курсив нет код •••',
+    );
+  });
 });
 
 test('typing and recording show in the chat header and the chat list', async ({ page }) => {
