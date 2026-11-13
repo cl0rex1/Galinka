@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { Fragment, memo, useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   AlertCircle,
   Check,
@@ -376,6 +376,7 @@ export const MessageList = memo(function MessageList({
   meId,
   kind,
   moderator,
+  unreadFrom,
   newMessageIds,
   copiedId,
   sending,
@@ -388,6 +389,8 @@ export const MessageList = memo(function MessageList({
   kind: Chat['kind'];
   /** The group owner may delete anyone's messages. */
   moderator?: boolean;
+  /** A "new messages" divider goes above this message. */
+  unreadFrom?: string | null;
   newMessageIds: string[];
   copiedId: string | null;
   sending: boolean;
@@ -420,22 +423,28 @@ export const MessageList = memo(function MessageList({
           {day.items.map((index) => {
             const message = messages[index];
             return (
-              <MessageRow
-                // Keyed by nonce: the server's copy replaces a just-sent bubble without a remount.
-                key={message.nonce ? `n:${message.nonce}` : message.id}
-                message={message}
-                own={message.sender_id === meId}
-                canDelete={message.sender_id === meId || Boolean(moderator)}
-                kind={kind}
-                continued={grouped(messages[index - 1], message)}
-                showAvatar={!grouped(message, messages[index + 1])}
-                fresh={fresh.has(message.id)}
-                copied={copiedId === message.id}
-                sending={sending}
-                savingEdit={savingEdit}
-                actions={actions}
-                highlight={highlight}
-              />
+              // Keyed by nonce: the server's copy replaces a just-sent bubble without a remount.
+              <Fragment key={message.nonce ? `n:${message.nonce}` : message.id}>
+                {message.id === unreadFrom && (
+                  <div className="unread-divider" role="separator">
+                    <span>Новые сообщения</span>
+                  </div>
+                )}
+                <MessageRow
+                  message={message}
+                  own={message.sender_id === meId}
+                  canDelete={message.sender_id === meId || Boolean(moderator)}
+                  kind={kind}
+                  continued={grouped(messages[index - 1], message)}
+                  showAvatar={!grouped(message, messages[index + 1])}
+                  fresh={fresh.has(message.id)}
+                  copied={copiedId === message.id}
+                  sending={sending}
+                  savingEdit={savingEdit}
+                  actions={actions}
+                  highlight={highlight}
+                />
+              </Fragment>
             );
           })}
         </section>

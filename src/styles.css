@@ -1392,6 +1392,23 @@ form.stack > :not(:last-child, .fold),
   color: var(--color-pill-ink);
   background: var(--color-pill);
 }
+.unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 8px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-accent);
+}
+/* A rule on both sides tells it apart from the date pills. */
+.unread-divider::before,
+.unread-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-accent-soft);
+}
 
 /* ---- Rows ---- */
 .message-row {

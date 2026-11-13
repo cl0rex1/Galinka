@@ -114,6 +114,16 @@ function reconcileMessages(previous: Message[], incoming: Message[]) {
     ? previous
     : next;
 }
+/** Id of the oldest of the last `count` messages from others, as far as `messages` reach. */
+function firstUnread(messages: Message[], count: number, meId: string) {
+  let found: string | null = null;
+  for (let i = messages.length - 1; i >= 0 && count > 0; i--)
+    if (messages[i].sender_id !== meId) {
+      found = messages[i].id;
+      count--;
+    }
+  return found;
+}
 type CachedConversation = {
   messages: Message[];
   hasOlder: boolean;
@@ -311,6 +321,8 @@ export default function App() {
     >({}),
     [awayFromBottom, setAwayFromBottom] = useState(false),
     [newMessageIds, setNewMessageIds] = useState<string[]>([]),
+    /** The first message that was unread when the chat was opened; the divider goes above it. */
+    [unreadFrom, setUnreadFrom] = useState<string | null>(null),
     [error, setError] = useState(''),
     [connected, setConnected] = useState(true),
     [loading, setLoading] = useState(false),
@@ -658,6 +670,7 @@ export default function App() {
       // Expose older history again; retaining the old "fully loaded" flag would hide it.
       if (reset || boundary < 0 || data.length < 60) setHasOlder(data.length === 60);
       if (data.length) await markRead(id, data.at(-1)!.id);
+      return data;
     },
     [markRead],
   );
@@ -837,6 +850,8 @@ export default function App() {
     setMentionCursor(null);
     setAwayFromBottom(cached ? !cached.following : false);
     setNewMessageIds([]);
+    setUnreadFrom(null);
+    const unread = chatsRef.current.find((chat) => chat.id === activeId)?.unread ?? 0;
     jumpingToLatest.current = false;
     scrollRestore.current = null;
     cachedScroll.current = cached
@@ -853,8 +868,10 @@ export default function App() {
           if (valid) setMembers(data);
         }),
       ])
-        .then(() => {
-          if (valid) refreshChats().catch(() => {});
+        .then(([data]) => {
+          if (!valid) return;
+          if (unread && data) setUnreadFrom(firstUnread(data, unread, me.id));
+          refreshChats().catch(() => {});
         })
         .catch((e) => {
           if (!valid) return;
@@ -874,6 +891,19 @@ export default function App() {
       ++requestEpoch.current;
     };
   }, [activeId, me?.id, loadMessages, refreshChats, report]);
+  // Open on the first unread message when it would be above the screen at the bottom.
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    const divider = el?.querySelector<HTMLElement>('.unread-divider');
+    if (!el || !divider || !followBottom.current) return;
+    const top = el.scrollTop + divider.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    // Measured against the bottom position: this runs before the list sticks there.
+    if (top - 8 >= el.scrollHeight - el.clientHeight) return;
+    autoScroll.current = true;
+    el.scrollTop = Math.max(0, top - 8);
+    followBottom.current = false;
+    setAwayFromBottom(true);
+  }, [unreadFrom, loading]);
   /** Scroll to the bottom, marking it as ours so onScroll does not mistake it for the user. */
   const autoScroll = useRef(false);
   function stickToBottom(el: HTMLElement) {
@@ -2279,6 +2309,7 @@ export default function App() {
                         meId={me.id}
                         kind={active.kind}
                         moderator={active.kind === 'group' && active.owner_id === me.id}
+                        unreadFrom={unreadFrom}
                         newMessageIds={newMessageIds}
                         copiedId={copiedMessageId}
                         sending={sending}
