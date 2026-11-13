@@ -1193,8 +1193,10 @@ app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
 app.delete('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
   const removed = await transaction(async (db) => {
     await lockedMember(String(req.params.id), user(req).id, db);
+    // Authors delete their own messages; a group owner moderates any message in the group.
     const result = await db.query(
-      'DELETE FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 RETURNING file_id',
+      `DELETE FROM messages m USING chats c WHERE m.id=$1 AND m.chat_id=$2 AND c.id=m.chat_id
+       AND (m.sender_id=$3 OR (c.kind='group' AND c.owner_id=$3)) RETURNING m.file_id`,
       [uuid.parse(req.params.messageId), req.params.id, user(req).id],
     );
     requireValue(result.rowCount, 404, 'Можно удалить только своё сообщение.');

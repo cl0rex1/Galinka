@@ -51,6 +51,8 @@ export type MessageActions = {
 type RowProps = {
   message: Message;
   own: boolean;
+  /** Own message, or any message for the group owner. */
+  canDelete: boolean;
   kind: Chat['kind'];
   continued: boolean;
   showAvatar: boolean;
@@ -76,6 +78,7 @@ const holdable = (target: EventTarget | null) => {
 const MessageRow = memo(function MessageRow({
   message: m,
   own,
+  canDelete,
   kind,
   continued,
   showAvatar,
@@ -354,7 +357,7 @@ const MessageRow = memo(function MessageRow({
                   Редактировать
                 </button>
               )}
-              {own && (
+              {canDelete && (
                 <button className="delete-action" onClick={() => actions.remove(m)}>
                   <Trash2 size={15} />
                   Удалить
@@ -372,6 +375,7 @@ export const MessageList = memo(function MessageList({
   messages,
   meId,
   kind,
+  moderator,
   newMessageIds,
   copiedId,
   sending,
@@ -382,6 +386,8 @@ export const MessageList = memo(function MessageList({
   messages: Message[];
   meId: string;
   kind: Chat['kind'];
+  /** The group owner may delete anyone's messages. */
+  moderator?: boolean;
   newMessageIds: string[];
   copiedId: string | null;
   sending: boolean;
@@ -419,6 +425,7 @@ export const MessageList = memo(function MessageList({
                 key={message.nonce ? `n:${message.nonce}` : message.id}
                 message={message}
                 own={message.sender_id === meId}
+                canDelete={message.sender_id === meId || Boolean(moderator)}
                 kind={kind}
                 continued={grouped(messages[index - 1], message)}
                 showAvatar={!grouped(message, messages[index + 1])}

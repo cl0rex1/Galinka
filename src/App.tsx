@@ -2278,6 +2278,7 @@ export default function App() {
                         messages={messages}
                         meId={me.id}
                         kind={active.kind}
+                        moderator={active.kind === 'group' && active.owner_id === me.id}
                         newMessageIds={newMessageIds}
                         copiedId={copiedMessageId}
                         sending={sending}

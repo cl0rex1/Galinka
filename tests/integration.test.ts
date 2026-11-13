@@ -370,6 +370,35 @@ test(
           .status,
         404,
       );
+      // The group owner moderates others' messages; other members still cannot.
+      const fromEve = await request(
+        `/chats/${id}/messages`,
+        'POST',
+        { body: 'moderated', nonce: randomUUID() },
+        eve.cookie,
+      );
+      const removeEve = (cookie: string) =>
+        request(`/chats/${id}/messages/${fromEve.data.id}`, 'DELETE', undefined, cookie);
+      assert.equal((await removeEve(bob.cookie)).status, 404);
+      assert.equal((await removeEve(alice.cookie)).status, 200);
+      const fromBob = await request(
+        `/chats/${direct.data.id}/messages`,
+        'POST',
+        { body: 'direct', nonce: randomUUID() },
+        bob.cookie,
+      );
+      assert.equal(
+        (
+          await request(
+            `/chats/${direct.data.id}/messages/${fromBob.data.id}`,
+            'DELETE',
+            undefined,
+            alice.cookie,
+          )
+        ).status,
+        404,
+        'Nobody moderates a direct chat',
+      );
       assert.equal(
         (await request(`/chats/${id}/messages/${sent.data.id}`, 'DELETE', undefined, alice.cookie))
           .status,
