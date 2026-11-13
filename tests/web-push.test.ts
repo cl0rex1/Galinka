@@ -213,6 +213,10 @@ test(
           person.token,
         ]);
       }
+      // Text previews are on by default; this test checks private delivery, so it uses the generic text.
+      await db.query("UPDATE users SET notify_preview='none' WHERE id=ANY($1::uuid[])", [
+        [...people.values()].map((person) => person.id),
+      ]);
       await db.query("UPDATE sessions SET expires_at=now()-interval '1 second' WHERE token=$1", [
         people.get('expired')!.token,
       ]);

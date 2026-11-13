@@ -25,3 +25,4 @@ compose.casaos.yml
 ~$*
 
 .deploy/
+.pgtest/
