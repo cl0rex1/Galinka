@@ -31,7 +31,6 @@ import {
   Info,
   MoreVertical,
   Copy,
-  QrCode,
   ScanLine,
   LoaderCircle,
   WifiOff,
@@ -51,22 +50,24 @@ import { AttachmentPreview, type Transfer } from './AttachmentPreview';
 import { GroupSettings } from './GroupSettings';
 import { VoiceRecorder } from './VoiceRecorder';
 import { VideoNoteRecorder } from './VideoNoteRecorder';
-import { fileLabel, isVideoNote } from './MediaAttachment';
-import { getDemoFileUrl } from './demo';
+import { fileLabel } from './MediaAttachment';
 import { Announcements } from './Announcements';
-import { api, upload, ApiError, isDemo, API_BASE } from './api';
+import { api, upload, ApiError, isDemo } from './api';
 import { useUpdates } from './updates';
 import { useLiveMessages } from './useLiveMessages';
 import { NewChat } from './NewChat';
+import { ChatList, folders } from './ChatList';
+import { ChatInfo } from './ChatInfo';
+import { DeleteMessages } from './DeleteMessages';
+import { downloadAttachment } from './download';
 import { ForwardDialog } from './ForwardDialog';
 import { typingText, useTyping, useTypingSender } from './typing';
 import { reconcileMessages, firstUnread, type CachedConversation } from './conversation';
 import { useNotifications, isNative, clearPushDevice } from './notifications';
 import { Auth } from './Auth';
 import { Settings } from './Settings';
-import { ProfileHero } from './ProfileHero';
 import { PersonCard } from './PersonCard';
-import { listTime, SearchResults } from './SearchResults';
+import { SearchResults } from './SearchResults';
 import { installedApp, touchDevice } from './platform';
 import { currentAccent, ShareSheet } from './Share';
 import { lookPrefs, ThemeImport } from './Appearance';
@@ -75,7 +76,6 @@ import { QrScanner, ScannedText } from './QrScanner';
 import { decodeTheme, type CustomTheme } from './theme';
 import {
   closeMenu,
-  CloseButton,
   IconButton,
   Modal,
   motionAllowed,
@@ -103,7 +103,6 @@ const skeletonBubbles: [boolean, string][] = [
   [true, '55%'],
   [false, '40%'],
 ];
-const folders = ['Все', 'Непрочитанные', 'Личные', 'Группы', 'Архив'];
 type Section = 'chats' | 'announcements' | 'settings';
 // Keep in sync with the one-pane breakpoint in styles.css.
 const narrowLayout =
@@ -770,42 +769,6 @@ export default function App() {
     if (content) observer.observe(content);
     return () => observer.disconnect();
   }, [activeId, section, ready, me?.id, loading]);
-  // Chat list: when a conversation moves (new message, pin), slide rows to their new places.
-  // Filter and search changes rebuild the list and are not animated.
-  const chatList = useRef<HTMLDivElement>(null);
-  const chatTops = useRef<{ key: string; tops: Map<string, number> }>({ key: '', tops: new Map() });
-  const listKey = `${filter}|${listQuery}`;
-  const listOrder = chats.map((c) => `${c.id}:${c.pinned ? 1 : 0}`).join();
-  useLayoutEffect(() => {
-    const list = chatList.current;
-    if (!list) return;
-    const previous = chatTops.current;
-    const tops = new Map<string, number>();
-    const animate = previous.key === listKey && previous.tops.size > 0 && motionAllowed();
-    list.querySelectorAll<HTMLElement>('[data-chat-id]').forEach((row) => {
-      const id = row.dataset.chatId!;
-      tops.set(id, row.offsetTop);
-      if (!animate) return;
-      const before = previous.tops.get(id);
-      if (before === undefined)
-        row.animate(
-          [
-            { opacity: 0, translate: '0 -8px' },
-            { opacity: 1, translate: '0 0' },
-          ],
-          {
-            duration: 240,
-            easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
-          },
-        );
-      else if (before !== row.offsetTop)
-        row.animate([{ translate: `0 ${before - row.offsetTop}px` }, { translate: '0 0' }], {
-          duration: 320,
-          easing: 'cubic-bezier(0.77, 0, 0.175, 1)',
-        });
-    });
-    chatTops.current = { key: listKey, tops };
-  }, [listOrder, listKey]);
   /**
    * Galinka links, opened from the address bar or the QR scanner: sign-in approval, a shared
    * theme, someone's profile, a group invite. Returns false for anything else.
@@ -932,13 +895,6 @@ export default function App() {
   }, [jumpTarget, loading, activeId, messages]);
   // Folders: the list slides in from the side of the folder chosen, the underline follows.
   const folderTabs = useTabIndicator(filter);
-  const folderMove = useRef({ filter, dir: '' });
-  if (folderMove.current.filter !== filter)
-    folderMove.current = {
-      filter,
-      dir: folders.indexOf(filter) > folders.indexOf(folderMove.current.filter) ? 'next' : 'prev',
-    };
-  const swipe = useRef<{ x: number; y: number } | null>(null);
   const info = usePresence(infoOpen, 260);
   const search = usePresence(searchOpen, 160);
   // Keep the last reply, edit and error on screen while their bars fold away.
@@ -1409,76 +1365,6 @@ export default function App() {
     }
     if (id === activeRef.current) setError('Сообщение не найдено в истории.');
   }
-  async function downloadFile(file: Attachment) {
-    if (demo) {
-      const mediaUrl = getDemoFileUrl(file.id);
-      if (mediaUrl) {
-        const link = document.createElement('a');
-        link.href = mediaUrl;
-        link.download = file.name;
-        link.click();
-        return;
-      }
-      const blob = new Blob(
-        [`Демонстрационный файл: ${file.name}\nВ реальном чате здесь будет ваш файл.`],
-        { type: 'text/plain' },
-      );
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.name;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } else {
-      try {
-        const response = await fetch(`${API_BASE}/files/${file.id}`, { credentials: 'include' });
-        if (!response.ok) throw Error('Не удалось скачать файл.');
-        const blob = await response.blob();
-        if (isNative) {
-          const [{ Filesystem, Directory }, { Share }] = await Promise.all([
-            import('@capacitor/filesystem'),
-            import('@capacitor/share'),
-          ]);
-          const data = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result).split(',')[1]);
-            reader.onerror = () => reject(Error('Не удалось прочитать файл.'));
-            reader.readAsDataURL(blob);
-          });
-          const safeName = file.name.replace(/[^\p{L}\p{N}._ -]/gu, '_');
-          const { uri } = await Filesystem.writeFile({
-            path: `attachments/${crypto.randomUUID()}-${safeName}`,
-            data,
-            directory: Directory.Cache,
-            recursive: true,
-          });
-          await Share.share({ title: file.name, url: uri });
-        } else {
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = file.name;
-          link.click();
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
-        }
-      } catch (error) {
-        report(error);
-      }
-    }
-  }
-  const filtered = chats
-    .filter(
-      (c) =>
-        (filter === 'Архив' ? c.archived : !c.archived) &&
-        (filter === 'Все' ||
-          filter === 'Архив' ||
-          (filter === 'Личные' && c.kind === 'direct') ||
-          (filter === 'Группы' && c.kind === 'group') ||
-          (filter === 'Непрочитанные' && c.unread > 0)) &&
-        c.title.toLowerCase().includes(listQuery.toLowerCase()),
-    )
-    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
-  const archivedCount = chats.filter((chat) => chat.archived).length;
   const unread = chats
     .filter((chat) => !chat.muted && !chat.archived)
     .reduce((n, c) => n + c.unread, 0);
@@ -1488,7 +1374,7 @@ export default function App() {
     edit: startEdit,
     copy: copyMessage,
     react,
-    download: downloadFile,
+    download: (file) => void downloadAttachment(file, demo).catch(report),
     menu: positionMessageMenu,
     remove: (message) => {
       setDeleteIds([message.id]);
@@ -1585,21 +1471,6 @@ export default function App() {
     const people = await api<Person[]>(`/chats/${id}/members`);
     if (activeRef.current === id) setMembers(people);
   }
-  const preview = (c: Chat) => {
-    const file = c.last_message?.file;
-    return (
-      c.last_message?.body ||
-      (file?.mime?.startsWith('audio/')
-        ? 'Голосовое сообщение'
-        : file && isVideoNote(file)
-          ? 'Кружок'
-          : file?.mime?.startsWith('video/')
-            ? 'Видео'
-            : file?.mime?.startsWith('image/')
-              ? 'Фотография'
-              : file?.name || (c.last_message?.file_id ? 'Файл' : 'Нет сообщений'))
-    );
-  };
   const typingIn = (chat: Chat) => typingText(typing[chat.id], chat.kind === 'group');
   const subtitle = (chat: Chat) => {
     if (chat.kind === 'saved') return 'Заметки и файлы';
@@ -1693,115 +1564,21 @@ export default function App() {
             }}
           />
         ) : (
-          <div
-            className="chat-list"
-            ref={chatList}
-            key={filter}
-            data-dir={folderMove.current.dir}
-            // Phones: a horizontal swipe moves to the next or previous folder.
-            onTouchStart={(event) => {
-              const touch = event.touches[0];
-              swipe.current =
-                event.touches.length === 1 ? { x: touch.clientX, y: touch.clientY } : null;
-            }}
-            onTouchEnd={(event) => {
-              const start = swipe.current;
-              swipe.current = null;
-              if (!start || filter === 'Архив') return;
-              const touch = event.changedTouches[0];
-              const dx = touch.clientX - start.x;
-              if (Math.abs(dx) < 70 || Math.abs(dx) < 2 * Math.abs(touch.clientY - start.y)) return;
-              const next = folders.indexOf(filter) + (dx < 0 ? 1 : -1);
-              if (next >= 0 && next < 4) setFilter(folders[next]);
-            }}
-          >
-            {(archivedCount > 0 || filter === 'Архив') && (
-              <button
-                className={filter === 'Архив' ? 'archive-link selected' : 'archive-link'}
-                aria-pressed={filter === 'Архив'}
-                onClick={() => setFilter(filter === 'Архив' ? 'Все' : 'Архив')}
-              >
-                {filter === 'Архив' ? <ArrowLeft size={18} /> : <Archive size={18} />}
-                <span>{filter === 'Архив' ? 'Все чаты' : 'Архив'}</span>
-                {filter !== 'Архив' && <small>{archivedCount}</small>}
-              </button>
+          <ChatList
+            chats={chats}
+            filter={filter}
+            onFilter={setFilter}
+            selectedId={section === 'chats' ? activeId : null}
+            meId={me.id}
+            drafts={drafts}
+            attachmentNames={Object.fromEntries(
+              Object.entries(attachments).map(([id, draft]) => [id, draft.file.name]),
             )}
-            {filtered.map((c) => (
-              <button
-                key={c.id}
-                data-chat-id={c.id}
-                className={`chat-item ${activeId === c.id && section === 'chats' ? 'selected' : ''}`}
-                onClick={() => select(c.id)}
-              >
-                <Avatar chat={c} person={c.peer} />
-                <span className="chat-item-content">
-                  <span className="chat-item-title">
-                    <strong>{c.title}</strong>
-                    <span className="chat-flags">
-                      {c.muted && <BellOff size={13} aria-label="Без уведомлений" />}
-                    </span>
-                    <time>{c.last_message ? listTime(c.last_message.created_at) : ''}</time>
-                  </span>
-                  <span className="chat-item-preview">
-                    <span>
-                      {typingIn(c) ? (
-                        <span className="chat-typing">{typingIn(c)}</span>
-                      ) : drafts[c.id] || attachments[c.id] ? (
-                        <>
-                          <span className="chat-draft">Черновик:</span>{' '}
-                          {drafts[c.id] || fileLabel(attachments[c.id].file.name)}
-                        </>
-                      ) : (
-                        <>
-                          {c.last_message?.sender_id === me.id && (
-                            <span className="chat-you">Вы: </span>
-                          )}
-                          {preview(c)}
-                        </>
-                      )}
-                    </span>
-                    {c.unread > 0 ? (
-                      <b key={c.unread} className={`unread ${c.muted ? 'muted-unread' : ''}`}>
-                        {c.unread > 99 ? '99+' : c.unread}
-                      </b>
-                    ) : (
-                      c.pinned && <Pin size={13} className="pin-mark" aria-label="Закреплён" />
-                    )}
-                  </span>
-                </span>
-              </button>
-            ))}
-            {!initialized.current &&
-              !chats.length &&
-              Array.from({ length: 7 }, (_, index) => (
-                <div className="chat-skeleton" key={index} aria-hidden="true">
-                  <span />
-                  <span>
-                    <i style={{ width: `${46 + ((index * 17) % 30)}%` }} />
-                    <i style={{ width: `${64 + ((index * 23) % 28)}%` }} />
-                  </span>
-                </div>
-              ))}
-            {/* Until the first list arrives there is nothing to call empty. */}
-            {!filtered.length && initialized.current && (
-              <div className="list-empty">
-                <p>
-                  {listQuery
-                    ? 'Ничего не найдено'
-                    : filter === 'Архив'
-                      ? 'Архив пуст'
-                      : filter === 'Непрочитанные'
-                        ? 'Всё прочитано'
-                        : 'Чатов пока нет'}
-                </p>
-                {!listQuery && filter === 'Все' && (
-                  <button className="secondary" onClick={() => setModal('new')}>
-                    Новый чат
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+            typingIn={typingIn}
+            loaded={initialized.current}
+            onSelect={select}
+            onNew={() => setModal('new')}
+          />
         )}
       </aside>
       <nav className="app-nav" aria-label="Разделы">
@@ -2494,106 +2271,25 @@ export default function App() {
                 </div>
               </section>
               {info.mounted && (
-                <aside
-                  className={`chat-info ${info.closing ? 'closing' : ''}`}
-                  aria-label="О чате"
-                  inert={info.closing}
-                >
-                  <div className="info-head">
-                    <strong>О чате</strong>
-                    <IconButton label="Закрыть информацию" onClick={() => setInfoOpen(false)}>
-                      <X size={20} />
-                    </IconButton>
-                  </div>
-                  <ProfileHero
-                    key={active.id}
-                    chat={active}
-                    person={active.peer}
-                    title={active.title}
-                    subtitle={subtitle(active)}
-                  />
-                  <div className="hero-tiles">
-                    <button
-                      disabled={preferenceBusy}
-                      onClick={() => void setChatPreference(active, { muted: !active.muted })}
-                    >
-                      {active.muted ? <Bell size={20} /> : <BellOff size={20} />}
-                      {active.muted ? 'Звук' : 'Без звука'}
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (window.innerWidth <= 1180) setInfoOpen(false);
-                        setSearchOpen(true);
-                      }}
-                    >
-                      <Search size={20} />
-                      Поиск
-                    </button>
-                    {active.kind === 'group' && active.owner_id === me.id && (
-                      <>
-                        <button onClick={invite}>
-                          <QrCode size={20} />
-                          Пригласить
-                        </button>
-                        <button onClick={() => setModal('group')}>
-                          <Users size={20} />
-                          Управление
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  {active.kind !== 'saved' && (
-                    <div className="info-section">
-                      <h4>
-                        Участники <span>{members.length}</span>
-                      </h4>
-                      {members.map((p) => (
-                        <button
-                          type="button"
-                          className="member-row"
-                          key={p.id}
-                          onClick={() => setPerson(p)}
-                        >
-                          <Avatar person={p} size="small" />
-                          <span className="member-name">
-                            <strong>
-                              {p.name}
-                              {p.id === me.id && <small> · вы</small>}
-                            </strong>
-                            <small className={p.seen === 'online' ? 'is-online' : ''}>
-                              {p.id === me.id ? 'в сети' : seenText(p.seen) || `@${p.username}`}
-                            </small>
-                          </span>
-                          {p.id === active.owner_id && active.kind === 'group' && (
-                            <span className="owner-label">владелец</span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <div className="info-section">
-                    <div className="settings-row">
-                      <div>
-                        <h3>Неля</h3>
-                        <p>
-                          Бот для компании: «@неля монетка», «@неля выбери чай | кофе», «@неля
-                          идея».
-                          {active.owner_id !== me.id && ' Включает владелец чата.'}
-                        </p>
-                      </div>
-                      <button
-                        className={`switch ${active.nelya ? 'on' : ''}`}
-                        role="switch"
-                        aria-checked={active.nelya}
-                        aria-label="Неля в этом чате"
-                        disabled={working || active.owner_id !== me.id}
-                        onClick={() => toggleNelya(active)}
-                      >
-                        <span />
-                      </button>
-                    </div>
-                  </div>
-                </aside>
+                <ChatInfo
+                  chat={active}
+                  meId={me.id}
+                  members={members}
+                  subtitle={subtitle(active)}
+                  closing={info.closing}
+                  muteBusy={preferenceBusy}
+                  nelyaBusy={working}
+                  onClose={() => setInfoOpen(false)}
+                  onMute={() => void setChatPreference(active, { muted: !active.muted })}
+                  onSearch={() => {
+                    if (window.innerWidth <= 1180) setInfoOpen(false);
+                    setSearchOpen(true);
+                  }}
+                  onInvite={invite}
+                  onManage={() => setModal('group')}
+                  onPerson={setPerson}
+                  onNelya={() => toggleNelya(active)}
+                />
               )}
             </div>
           </>
@@ -2774,78 +2470,19 @@ export default function App() {
         />
       )}
       {scanned && <ScannedText text={scanned} onClose={() => setScanned('')} />}
-      {modal === 'delete' && (
-        <Modal
+      {modal === 'delete' && activeId && (
+        <DeleteMessages
+          chatId={activeId}
+          ids={deleteIds}
           error={error}
-          title={
-            deleteIds.length > 1
-              ? `Удалить ${deleteIds.length} ${plural(deleteIds.length, 'сообщение', 'сообщения', 'сообщений')}?`
-              : 'Удалить сообщение?'
-          }
+          report={report}
           onClose={() => setModal(null)}
-        >
-          <p className="muted">
-            {deleteIds.length > 1 ? 'Сообщения удалятся' : 'Сообщение удалится'} у всех участников.
-          </p>
-          <div className="modal-actions">
-            <CloseButton>Отмена</CloseButton>
-            <button
-              className="danger"
-              disabled={working}
-              onClick={async () => {
-                setWorking(true);
-                const removed: string[] = [];
-                try {
-                  for (const id of deleteIds) {
-                    await api(`/chats/${activeId}/messages/${id}`, 'DELETE');
-                    removed.push(id);
-                  }
-                  setModal(null);
-                  setSelection(null);
-                  // Fold the rows away before they leave the list.
-                  const rows = removed
-                    .map((id) =>
-                      scroller.current
-                        ?.querySelector(`[data-message-id="${id}"]`)
-                        ?.closest<HTMLElement>('.message-group-item'),
-                    )
-                    .filter((row): row is HTMLElement => Boolean(row));
-                  if (rows.length && motionAllowed()) {
-                    const folds = rows.map((row) => {
-                      row.style.overflow = 'hidden';
-                      return row
-                        .animate(
-                          [
-                            { height: `${row.offsetHeight}px`, opacity: 1 },
-                            { height: '0px', opacity: 0, transform: 'scale(0.96)' },
-                          ],
-                          {
-                            duration: 220,
-                            easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
-                            fill: 'forwards',
-                          },
-                        )
-                        .finished.catch(() => undefined);
-                    });
-                    // Background tabs pause animations; never let that hold the deletion.
-                    await Promise.race([
-                      Promise.all(folds),
-                      new Promise((done) => setTimeout(done, 300)),
-                    ]);
-                  }
-                } catch (e) {
-                  report(e);
-                } finally {
-                  setMessages((prev) => prev.filter((m) => !removed.includes(m.id)));
-                  if (removed.length) await refreshChats().catch(report);
-                  setWorking(false);
-                }
-              }}
-            >
-              Удалить
-            </button>
-          </div>
-        </Modal>
+          onDeleted={(removed) => {
+            setSelection(null);
+            setMessages((previous) => previous.filter((m) => !removed.includes(m.id)));
+            refreshChats().catch(report);
+          }}
+        />
       )}
     </div>
   );
