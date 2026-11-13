@@ -26,3 +26,4 @@ compose.casaos.yml
 
 .deploy/
 .pgtest/
+backups/

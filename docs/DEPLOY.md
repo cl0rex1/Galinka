@@ -129,20 +129,25 @@ docker compose up -d --force-recreate app
 
 ## 5. Резервное копирование
 
-Нужны **база и файлы**. Имена томов по умолчанию `galinka_postgres` и `galinka_uploads`.
+Сервис `backup` в `compose.yml` раз в сутки (и сразу при запуске) делает копию **базы и файлов** в `./backups/<дата>/`: `galinka.dump` (`pg_dump -Fc`) и `uploads.tar.gz`. Приложение останавливать не нужно: дамп снимается первым, поэтому все файлы, на которые он ссылается, уже лежат в томе.
 
-Для согласованной копии остановите только приложение, оставив БД работающей; создайте дамп и архив файлов, затем запустите приложение. Храните копии вне сервера в защищённом месте. Пример из каталога проекта:
+Каждая копия проверяется восстановлением: дамп загружается во временную базу `galinka_restore_check`, считаются сообщения, база удаляется, архив файлов читается целиком. Копия появляется в `backups/` только после успешной проверки. Хранится `BACKUP_KEEP_DAYS` дней (по умолчанию 14). Каталог задаётся `BACKUP_DIR`.
 
 ```sh
-mkdir -p backups
-chmod 700 backups
-docker compose stop app
-docker compose exec -T db pg_dump -U galinka -d galinka -Fc > backups/galinka.dump
-docker run --rm -v galinka_uploads:/data:ro -v "$PWD/backups:/backup" alpine:3.22 tar czf /backup/uploads.tar.gz -C /data .
-docker compose start app
+docker compose up -d backup
+docker compose logs backup        # «backup … ok: N messages, размер» или «backup FAILED»
 ```
 
-Эти фиксированные имена файлов перезаписывают предыдущую копию: добавляйте дату перед повторным запуском. Отдельно сохраните `.env` в защищённом хранилище. Проверьте восстановление на отдельном тестовом экземпляре, до того как полагаться на резервные копии.
+Если приложение запущено из карточки CasaOS, добавьте сервис `backup` и в её `docker-compose.yml`. Храните копии ещё и вне сервера, отдельно сохраните `.env`.
+
+Восстановление на чистый экземпляр (тома `galinka_postgres` и `galinka_uploads` пустые):
+
+```sh
+docker compose up -d db
+docker compose exec -T db pg_restore -U galinka -d galinka --no-owner --clean --if-exists < backups/ДАТА/galinka.dump
+docker run --rm -v galinka_uploads:/data -v "$PWD/backups/ДАТА:/backup:ro" alpine:3.22 tar xzf /backup/uploads.tar.gz -C /data
+docker compose up -d
+```
 
 ## 6. Обновления и обслуживание
 

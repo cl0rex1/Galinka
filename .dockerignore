@@ -25,3 +25,4 @@ firebase-service-account*.json
 compose.casaos.yml
 
 .deploy/
+backups
