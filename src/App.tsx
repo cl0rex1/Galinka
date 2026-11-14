@@ -24,6 +24,9 @@ import {
   SquarePen,
   Forward,
   Trash2,
+  CalendarClock,
+  Timer,
+  Undo2,
 } from 'lucide-react';
 import { useConversationGestures } from './gestures';
 import { Avatar, seenText } from './Avatar';
@@ -41,6 +44,14 @@ import { NewChat } from './NewChat';
 import { ChatList, folders } from './ChatList';
 import { ChatInfo } from './ChatInfo';
 import { DeleteMessages } from './DeleteMessages';
+import {
+  AutoDeleteModal,
+  EditHistoryModal,
+  MessageDetailsModal,
+  PollCreatorModal,
+  ScheduledListModal,
+  ScheduleMessageModal,
+} from './MessageExtrasModal';
 import { downloadAttachment } from './download';
 import { ForwardDialog } from './ForwardDialog';
 import { typingText, useTyping, useTypingSender } from './typing';
@@ -64,7 +75,18 @@ type InstallEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: string }>;
 };
-type ModalKind = 'new' | 'install' | 'profile' | 'invite' | 'delete' | 'group' | null;
+type ModalKind =
+  | 'new'
+  | 'install'
+  | 'profile'
+  | 'invite'
+  | 'delete'
+  | 'group'
+  | 'schedule'
+  | 'scheduled-list'
+  | 'poll'
+  | 'auto-delete'
+  | null;
 const skeletonBubbles: [boolean, string][] = [
   [false, '52%'],
   [false, '34%'],
@@ -115,7 +137,14 @@ export default function App() {
     [loginRequest, setLoginRequest] = useState(''),
     [scanning, setScanning] = useState(false),
     [scanned, setScanned] = useState(''),
-    [working, setWorking] = useState(false);
+    [working, setWorking] = useState(false),
+    [undoDelete, setUndoDelete] = useState<{
+      chatId: string;
+      ids: string[];
+      scope: 'me' | 'all';
+    } | null>(null),
+    [detailsMessage, setDetailsMessage] = useState<Message | null>(null),
+    [editsMessage, setEditsMessage] = useState<Message | null>(null);
   const [typing, setTyping] = useTyping();
   const sendTyping = useTypingSender(Boolean(me) && !demo);
   const initialized = useRef(false);
@@ -384,8 +413,15 @@ export default function App() {
     refreshChats,
     loadMessages: conversation.loadMessages,
     markRead: conversation.markRead,
+    onDraft: composer.applyRemoteDraft,
     report,
   });
+
+  useEffect(() => {
+    if (!undoDelete) return;
+    const timer = setTimeout(() => setUndoDelete(null), 5500);
+    return () => clearTimeout(timer);
+  }, [undoDelete]);
 
   useEffect(() => {
     const dismiss = (event: PointerEvent) => {
@@ -693,6 +729,42 @@ export default function App() {
     }
   }
 
+  async function votePoll(message: Message, optionIndices: number[]) {
+    if (!message.poll) return;
+    try {
+      await api(`/chats/${message.chat_id}/polls/${message.poll.id}/vote`, 'POST', {
+        optionIndices,
+      });
+      await conversation.loadMessages(message.chat_id);
+    } catch (e) {
+      report(e);
+    }
+  }
+
+  async function closePoll(message: Message) {
+    if (!message.poll) return;
+    try {
+      await api(`/chats/${message.chat_id}/polls/${message.poll.id}/close`, 'POST');
+      await conversation.loadMessages(message.chat_id);
+    } catch (e) {
+      report(e);
+    }
+  }
+
+  async function restoreDeleted() {
+    if (!undoDelete) return;
+    const snapshot = undoDelete;
+    setUndoDelete(null);
+    try {
+      for (const id of snapshot.ids) {
+        await api(`/chats/${snapshot.chatId}/messages/${id}/restore`, 'POST');
+      }
+      await Promise.all([conversation.loadMessages(snapshot.chatId), refreshChats()]);
+    } catch (e) {
+      report(e);
+    }
+  }
+
   async function toggleNelya(chat: Chat) {
     setWorking(true);
     try {
@@ -772,6 +844,16 @@ export default function App() {
     discard: (message) =>
       conversation.setMessages((previous) => previous.filter((item) => item.id !== message.id)),
     jump: (id) => void conversation.showMessage(id),
+    edits: (message) => {
+      closeMenus();
+      setEditsMessage(message);
+    },
+    details: (message) => {
+      closeMenus();
+      setDetailsMessage(message);
+    },
+    votePoll: (message, optionIndices) => void votePoll(message, optionIndices),
+    closePoll: (message) => void closePoll(message),
   };
 
   // Keep the timeline independent from composer keystrokes while callbacks see current state.
@@ -792,6 +874,10 @@ export default function App() {
       pin: (message) => latestMessageActions.current.pin(message),
       forward: (message) => latestMessageActions.current.forward(message),
       select: (message) => latestMessageActions.current.select(message),
+      edits: (message) => latestMessageActions.current.edits(message),
+      details: (message) => latestMessageActions.current.details(message),
+      votePoll: (message, optionIndices) => latestMessageActions.current.votePoll(message, optionIndices),
+      closePoll: (message) => latestMessageActions.current.closePoll(message),
     }),
     [],
   );
@@ -1004,22 +1090,16 @@ export default function App() {
                   >
                     <Forward size={20} />
                   </IconButton>
-                  {selectedMessages.every(
-                    (message) =>
-                      message.sender_id === me.id ||
-                      (active.kind === 'group' && active.owner_id === me.id),
-                  ) && (
-                    <IconButton
-                      label="Удалить выбранные"
-                      className="danger-icon"
-                      onClick={() => {
-                        setDeleteIds(selectedMessages.map((message) => message.id));
-                        setModal('delete');
-                      }}
-                    >
-                      <Trash2 size={20} />
-                    </IconButton>
-                  )}
+                  <IconButton
+                    label="Удалить выбранные"
+                    className="danger-icon"
+                    onClick={() => {
+                      setDeleteIds(selectedMessages.map((message) => message.id));
+                      setModal('delete');
+                    }}
+                  >
+                    <Trash2 size={20} />
+                  </IconButton>
                 </div>
               </header>
             )}
@@ -1100,6 +1180,28 @@ export default function App() {
                       {active.archived ? <ArchiveRestore size={17} /> : <Archive size={17} />}
                       {active.archived ? 'Вернуть из архива' : 'В архив'}
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeMenus();
+                        setModal('scheduled-list');
+                      }}
+                    >
+                      <CalendarClock size={17} />
+                      {active.kind === 'saved' ? 'Напоминания' : 'Отложенные сообщения'}
+                    </button>
+                    {(active.kind !== 'group' || active.owner_id === me.id) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          closeMenus();
+                          setModal('auto-delete');
+                        }}
+                      >
+                        <Timer size={17} />
+                        Автоудаление
+                      </button>
+                    )}
                     {active.kind === 'group' && (
                       <button
                         type="button"
@@ -1280,6 +1382,9 @@ export default function App() {
                   onJumpToLatest={conversation.jumpToLatest}
                   onTyping={(action) => sendTyping(active.id, action)}
                   onError={setError}
+                  onOpenPoll={() => setModal('poll')}
+                  onOpenSchedule={() => setModal('schedule')}
+                  onOpenScheduledList={() => setModal('scheduled-list')}
                   composer={composer}
                 />
               </section>
@@ -1484,17 +1589,103 @@ export default function App() {
         <DeleteMessages
           chatId={activeId}
           ids={deleteIds}
+          canDeleteForAll={deleteIds.every((id) => {
+            const msg = conversation.messages.find((item) => item.id === id);
+            return (
+              Boolean(msg) &&
+              (msg!.sender_id === me.id ||
+                (active?.kind === 'group' && active?.owner_id === me.id))
+            );
+          })}
           error={error}
           report={report}
           onClose={() => setModal(null)}
-          onDeleted={(removed) => {
+          onDeleted={(removed, scope) => {
             setSelection(null);
             conversation.setMessages((previous) =>
               previous.filter((m) => !removed.includes(m.id)),
             );
+            setUndoDelete({ chatId: activeId, ids: removed, scope });
             refreshChats().catch(report);
           }}
         />
+      )}
+      {modal === 'schedule' && active && (
+        <ScheduleMessageModal
+          chat={active}
+          initialBody={composer.draft}
+          onClose={() => setModal(null)}
+          onSchedule={(whenIso, body) => composer.scheduleMessage(whenIso, body)}
+        />
+      )}
+      {modal === 'scheduled-list' && active && (
+        <ScheduledListModal
+          chat={active}
+          onClose={() => setModal(null)}
+          onChanged={() => {
+            void composer.refreshScheduledCount(active.id);
+            void conversation.loadMessages(active.id);
+            void refreshChats();
+          }}
+          report={report}
+        />
+      )}
+      {modal === 'poll' && activeId && (
+        <PollCreatorModal
+          chatId={activeId}
+          onClose={() => setModal(null)}
+          onCreated={async () => {
+            await Promise.all([conversation.loadMessages(activeId), refreshChats()]);
+          }}
+          report={report}
+        />
+      )}
+      {modal === 'auto-delete' && active && (
+        <AutoDeleteModal
+          chat={active}
+          onClose={() => setModal(null)}
+          onSelect={async (seconds) => {
+            await api(`/chats/${active.id}`, 'PATCH', { autoDeleteSeconds: seconds });
+            await refreshChats();
+          }}
+        />
+      )}
+      {detailsMessage && (
+        <MessageDetailsModal
+          message={detailsMessage}
+          onClose={() => setDetailsMessage(null)}
+          report={report}
+        />
+      )}
+      {editsMessage && (
+        <EditHistoryModal
+          message={editsMessage}
+          onClose={() => setEditsMessage(null)}
+          report={report}
+        />
+      )}
+      {undoDelete && (
+        <div className="undo-toast" role="status" aria-live="polite">
+          <span>
+            {undoDelete.ids.length > 1
+              ? `Удалено ${undoDelete.ids.length} ${plural(undoDelete.ids.length, 'сообщение', 'сообщения', 'сообщений')}`
+              : undoDelete.scope === 'all'
+                ? 'Сообщение удалено у всех'
+                : 'Сообщение удалено у вас'}
+          </span>
+          <button type="button" className="undo-toast-btn" onClick={() => void restoreDeleted()}>
+            <Undo2 size={15} />
+            Отменить
+          </button>
+          <button
+            type="button"
+            className="undo-toast-close"
+            aria-label="Закрыть"
+            onClick={() => setUndoDelete(null)}
+          >
+            <X size={15} />
+          </button>
+        </div>
       )}
     </div>
   );

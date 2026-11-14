@@ -28,10 +28,11 @@ async function fold(ids: string[]) {
   await Promise.race([Promise.all(folds), new Promise((done) => setTimeout(done, 300))]);
 }
 
-/** Confirms and deletes one or several messages for everyone in the chat. */
+/** Confirms and deletes one or several messages for me or for everyone in the chat. */
 export function DeleteMessages({
   chatId,
   ids,
+  canDeleteForAll = true,
   error,
   onClose,
   onDeleted,
@@ -39,20 +40,21 @@ export function DeleteMessages({
 }: {
   chatId: string;
   ids: string[];
+  canDeleteForAll?: boolean;
   error: string;
   onClose: () => void;
   /** Called with the ids actually deleted, also when a later one failed. */
-  onDeleted: (removed: string[]) => void;
+  onDeleted: (removed: string[], scope: 'me' | 'all') => void;
   report: (error: unknown) => void;
 }) {
   const [working, setWorking] = useState(false);
   const several = ids.length > 1;
-  async function remove() {
+  async function remove(scope: 'me' | 'all') {
     setWorking(true);
     const removed: string[] = [];
     try {
       for (const id of ids) {
-        await api(`/chats/${chatId}/messages/${id}`, 'DELETE');
+        await api(`/chats/${chatId}/messages/${id}?scope=${scope}&undo=1`, 'DELETE');
         removed.push(id);
       }
       onClose();
@@ -61,7 +63,7 @@ export function DeleteMessages({
       report(e);
     } finally {
       setWorking(false);
-      if (removed.length) onDeleted(removed);
+      if (removed.length) onDeleted(removed, scope);
     }
   }
   return (
@@ -75,13 +77,24 @@ export function DeleteMessages({
       onClose={onClose}
     >
       <p className="muted">
-        {several ? 'Сообщения удалятся' : 'Сообщение удалится'} у всех участников.
+        {canDeleteForAll
+          ? several
+            ? 'Можно удалить сообщения только у себя или у всех участников.'
+            : 'Можно удалить сообщение только у себя или у всех участников.'
+          : several
+            ? 'Сообщения удалятся только у вас.'
+            : 'Сообщение удалится только у вас.'}
       </p>
       <div className="modal-actions">
         <CloseButton>Отмена</CloseButton>
-        <button className="danger" disabled={working} onClick={() => void remove()}>
-          Удалить
+        <button className="secondary" disabled={working} onClick={() => void remove('me')}>
+          Удалить у себя
         </button>
+        {canDeleteForAll && (
+          <button className="danger" disabled={working} onClick={() => void remove('all')}>
+            Удалить
+          </button>
+        )}
       </div>
     </Modal>
   );

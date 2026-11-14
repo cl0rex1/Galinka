@@ -35,6 +35,7 @@ export type LiveContext = {
   refreshChats: () => Promise<Chat[]>;
   loadMessages: (id: string) => Promise<unknown>;
   markRead: (id: string, lastMessageId: string) => Promise<void>;
+  onDraft?: (chatId: string, draft: string) => void;
   report: (error: unknown) => void;
 };
 
@@ -43,7 +44,7 @@ export type LiveContext = {
  * and refetches only what an event cannot describe.
  */
 export function useLiveMessages(c: LiveContext) {
-  const { meId, refs, set, refreshChats, loadMessages, markRead, report } = c;
+  const { meId, refs, set, refreshChats, loadMessages, markRead, onDraft, report } = c;
   const activeRef = refs.active,
     sectionRef = refs.section,
     messagesRef = refs.messages,
@@ -128,6 +129,10 @@ export function useLiveMessages(c: LiveContext) {
       !('silent' in event && event.silent)
     )
       notifyIncoming(chatId, event.messageId);
+    if (event.type === 'draft') {
+      onDraft?.(event.chatId, event.draft);
+      return { list: false, conversation: false };
+    }
     if (event.type === 'typing') {
       // Senders repeat the event every few seconds while they type; a gap means they stopped.
       typingChanged(event.chatId, event.userId, {

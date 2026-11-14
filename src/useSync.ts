@@ -17,6 +17,7 @@ export type SyncEvent =
   | { type: 'read'; chatId: string; userId?: string; lastMessageId?: string }
   | { type: 'presence'; userId: string }
   | { type: 'typing'; chatId: string; userId: string; name: string; action: TypingAction }
+  | { type: 'draft'; chatId: string; draft: string }
   | { type: 'connected' }
   | {
       type: 'refresh';

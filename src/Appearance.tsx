@@ -363,8 +363,8 @@ export function ThemeImport({ theme, onClose }: { theme: CustomTheme; onClose: (
 }
 
 /** Reading comfort, kept on this device: message text size, bubble rounding, what Enter does. */
-type Look = { text: number; radius: number; enterSends: boolean };
-const lookDefaults: Look = { text: 15, radius: 18, enterSends: true };
+type Look = { text: number; radius: number; enterSends: boolean; autoTranslate: boolean };
+const lookDefaults: Look = { text: 15, radius: 18, enterSends: true, autoTranslate: false };
 export function lookPrefs(): Look {
   try {
     return { ...lookDefaults, ...JSON.parse(localStorage.getItem('galinka-look') || '{}') };
@@ -388,6 +388,7 @@ export function LookSettings() {
     applyLook(next);
     try {
       localStorage.setItem('galinka-look', JSON.stringify(next));
+      window.dispatchEvent(new Event('galinka-look-changed'));
     } catch {
       /* Private mode: lasts for this visit. */
     }
@@ -442,7 +443,22 @@ export function LookSettings() {
           <span />
         </button>
       </div>
-      {(look.text !== 15 || look.radius !== 18 || !look.enterSends) && (
+      <div className="settings-row">
+        <div>
+          <h3>Автоперевод сообщений</h3>
+          <p>Переводить входящие сообщения на другом языке автоматически.</p>
+        </div>
+        <button
+          className={`switch ${look.autoTranslate ? 'on' : ''}`}
+          role="switch"
+          aria-checked={look.autoTranslate}
+          aria-label="Автоперевод сообщений"
+          onClick={() => update({ autoTranslate: !look.autoTranslate })}
+        >
+          <span />
+        </button>
+      </div>
+      {(look.text !== 15 || look.radius !== 18 || !look.enterSends || look.autoTranslate) && (
         <button type="button" className="secondary" onClick={() => update(lookDefaults)}>
           Вернуть как было
         </button>

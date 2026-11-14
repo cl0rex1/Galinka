@@ -17,17 +17,27 @@ import {
   CircleCheck,
   Copy,
   Download,
+  ExternalLink,
+  Eye,
   Forward,
+  History,
+  Languages,
   MoreHorizontal,
   Pencil,
   Pin,
   PinOff,
+  Play,
+  Plus,
   Reply,
   RotateCw,
+  Timer,
   Trash2,
   X,
 } from 'lucide-react';
+import { api, API_BASE } from './api';
+import { lookPrefs } from './Appearance';
 import { Avatar } from './Avatar';
+import { EmojiPicker } from './EmojiPicker';
 import { fileLabel, MediaAttachment } from './MediaAttachment';
 import { MessageText, plainText } from './MessageText';
 import { closeMenu, openMenu as showMenu } from './ui';
@@ -72,12 +82,16 @@ export type MessageActions = {
   forward: (message: Message) => void;
   /** Start selecting with this message, or toggle it while selecting. */
   select: (message: Message) => void;
+  edits: (message: Message) => void;
+  details: (message: Message) => void;
+  votePoll: (message: Message, optionIndices: number[]) => void;
+  closePoll: (message: Message) => void;
 };
 type RowProps = {
   message: Message;
   own: boolean;
-  /** Own message, or any message for the group owner. */
-  canDelete: boolean;
+  /** True if the user may delete this message for everyone (or moderate in group). */
+  canDeleteForAll: boolean;
   /** null when this user may not pin in this chat. */
   pinned: boolean | null;
   /** In selection mode taps toggle the message instead of opening anything. */
@@ -109,7 +123,7 @@ const holdable = (target: EventTarget | null) => {
 const MessageRow = memo(function MessageRow({
   message: m,
   own,
-  canDelete,
+  canDeleteForAll,
   pinned,
   selecting,
   selected,
@@ -128,6 +142,59 @@ const MessageRow = memo(function MessageRow({
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const held = useRef(false);
   const bot = !m.sender_id;
+  const [moreReactions, setMoreReactions] = useState(false);
+  const [embedOpen, setEmbedOpen] = useState(false);
+  const [translation, setTranslation] = useState<{
+    text: string;
+    open: boolean;
+    busy?: boolean;
+  } | null>(null);
+  const [autoTranslate, setAutoTranslate] = useState(() => lookPrefs().autoTranslate);
+  useEffect(() => {
+    const sync = () => setAutoTranslate(lookPrefs().autoTranslate);
+    window.addEventListener('galinka-look-changed', sync);
+    return () => window.removeEventListener('galinka-look-changed', sync);
+  }, []);
+  useEffect(() => {
+    if (
+      !autoTranslate ||
+      own ||
+      m.pending ||
+      m.poll ||
+      !m.body ||
+      m.body.startsWith('[') ||
+      !/[A-Za-z]{3,}/.test(m.body)
+    )
+      return;
+    let live = true;
+    api<{ translated: string }>('/translate', 'POST', { text: m.body, targetLang: 'ru' })
+      .then((res) => {
+        if (live && res.translated && res.translated !== m.body) {
+          setTranslation({ text: res.translated, open: true });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [autoTranslate, own, m.id, m.body, m.pending, m.poll]);
+  async function toggleTranslation() {
+    if (translation) {
+      setTranslation((prev) => (prev ? { ...prev, open: !prev.open } : null));
+      return;
+    }
+    const targetLang = /[а-яё]/i.test(m.body) ? 'en' : 'ru';
+    setTranslation({ text: '', open: true, busy: true });
+    try {
+      const res = await api<{ translated: string }>('/translate', 'POST', {
+        text: m.body,
+        targetLang,
+      });
+      setTranslation({ text: res.translated, open: true, busy: false });
+    } catch {
+      setTranslation(null);
+    }
+  }
   // Reactions seen on the previous render: new ones rise in, changed counts roll.
   const seen = useRef<Map<string, number> | null>(null);
   const previous = seen.current;
@@ -140,6 +207,7 @@ const MessageRow = memo(function MessageRow({
   }
   useEffect(() => cancelPress, []);
   function openMenu(point?: { x: number; y: number }) {
+    setMoreReactions(false);
     document.querySelectorAll('details.message-menu[open]').forEach((element) => {
       if (element !== menu.current) closeMenu(element);
     });
@@ -280,14 +348,159 @@ const MessageRow = memo(function MessageRow({
             {m.file && (
               <MediaAttachment file={m.file} onDownload={() => actions.download(m.file!)} />
             )}
-            {m.body && (
+            {m.body && !m.poll && (
               <MessageText text={m.body} highlight={highlight} onMention={actions.mention} />
             )}
+            {m.link_preview && (
+              <div className="link-preview-wrap">
+                {embedOpen && m.link_preview.embed_url ? (
+                  <div className={`link-preview-embed ${m.link_preview.provider || 'web'}`}>
+                    <iframe
+                      src={m.link_preview.embed_url}
+                      title={m.link_preview.title}
+                      sandbox="allow-scripts allow-same-origin allow-presentation"
+                      allow="encrypted-media; picture-in-picture"
+                      allowFullScreen
+                      loading="lazy"
+                    />
+                  </div>
+                ) : (
+                  <a
+                    className="link-preview-card"
+                    href={m.link_preview.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {m.link_preview.image && (
+                      <img
+                        className="link-preview-img"
+                        src={
+                          m.link_preview.image.startsWith('data:')
+                            ? m.link_preview.image
+                            : `${API_BASE}/link-preview/image?url=${encodeURIComponent(m.link_preview.image)}`
+                        }
+                        alt=""
+                        loading="lazy"
+                      />
+                    )}
+                    <div className="link-preview-meta">
+                      <span className="link-preview-site">
+                        {m.link_preview.site}
+                        <ExternalLink size={12} />
+                      </span>
+                      <strong>{m.link_preview.title}</strong>
+                      {m.link_preview.description && <p>{m.link_preview.description}</p>}
+                    </div>
+                  </a>
+                )}
+                {m.link_preview.embed_url && (
+                  <button
+                    type="button"
+                    className="embed-toggle-btn"
+                    onClick={() => setEmbedOpen((open) => !open)}
+                  >
+                    {embedOpen ? (
+                      <>
+                        <X size={13} />
+                        Скрыть плеер
+                      </>
+                    ) : (
+                      <>
+                        <Play size={13} />
+                        {m.link_preview.provider === 'spotify' ? 'Слушать в чате' : 'Смотреть в чате'}
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            )}
+            {m.poll && (
+              <div className="poll-card" role="group" aria-label={`Опрос: ${m.poll.question}`}>
+                <div className="poll-question">{m.poll.question}</div>
+                <div className="poll-meta">
+                  {m.poll.anonymous ? 'Анонимный опрос' : 'Опрос'}
+                  {m.poll.multiple ? ' · несколько ответов' : ''}
+                  {m.poll.closed ? ' · завершён' : ''}
+                </div>
+                <div className="poll-options">
+                  {m.poll.options.map((opt) => {
+                    const pct =
+                      m.poll!.total_votes > 0
+                        ? Math.round((opt.votes / m.poll!.total_votes) * 100)
+                        : 0;
+                    return (
+                      <button
+                        key={opt.index}
+                        type="button"
+                        disabled={m.poll!.closed || m.pending}
+                        className={`poll-option ${opt.voted ? 'voted' : ''}`}
+                        onClick={() => {
+                          const currentlyVoted = m.poll!.options
+                            .filter((o) => o.voted)
+                            .map((o) => o.index);
+                          const next = m.poll!.multiple
+                            ? opt.voted
+                              ? currentlyVoted.filter((i) => i !== opt.index)
+                              : [...currentlyVoted, opt.index]
+                            : opt.voted
+                              ? []
+                              : [opt.index];
+                          actions.votePoll(m, next);
+                        }}
+                      >
+                        <span className="poll-option-bar" style={{ width: `${pct}%` }} />
+                        <span className="poll-option-row">
+                          <span className="poll-option-text">
+                            {opt.voted && <Check size={14} />}
+                            {opt.text}
+                          </span>
+                          <span className="poll-option-pct">
+                            {m.poll!.total_votes > 0 ? `${pct}% (${opt.votes})` : ''}
+                          </span>
+                        </span>
+                        {!m.poll!.anonymous && opt.voters && opt.voters.length > 0 && (
+                          <span className="poll-option-voters">
+                            {opt.voters.slice(0, 4).map((v) => v.name).join(', ')}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="poll-footer">
+                  <span>Голосов: {m.poll.total_votes}</span>
+                  {!m.poll.closed && canDeleteForAll && (
+                    <button
+                      type="button"
+                      className="poll-close-btn"
+                      onClick={() => actions.closePoll(m)}
+                    >
+                      Завершить опрос
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            {translation?.open && (
+              <div className="message-translation">
+                <span>{translation.busy ? 'Перевод…' : translation.text}</span>
+              </div>
+            )}
             <span className="message-time">
-              {m.edited_at && (
-                <span className="message-edited" title={`Изменено ${time(m.edited_at)}`}>
-                  изменено
+              {m.expires_at && (
+                <span className="message-expires" title="Сообщение с таймером автоудаления">
+                  <Timer size={12} />
                 </span>
+              )}
+              {m.edited_at && (
+                <button
+                  type="button"
+                  className="message-edited"
+                  title={`Изменено ${time(m.edited_at)}`}
+                  onClick={() => actions.edits(m)}
+                >
+                  изменено
+                </button>
               )}
               <time dateTime={m.created_at}>{time(m.created_at)}</time>
               {own &&
@@ -364,8 +577,8 @@ const MessageRow = memo(function MessageRow({
             </summary>
             <div className="message-menu-content">
               <span>Реакция</span>
-              <div>
-                {['❤', '👍', '😂', '🔥'].map((emoji) => (
+              <div className="reaction-bar">
+                {['❤', '👍', '😂', '🔥', '🥳', '😭'].map((emoji) => (
                   <button
                     key={emoji}
                     aria-label={`Реакция ${emoji}`}
@@ -378,7 +591,26 @@ const MessageRow = memo(function MessageRow({
                     {emoji}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="reaction-more-btn"
+                  aria-label="Ещё реакции"
+                  onClick={() => setMoreReactions((v) => !v)}
+                >
+                  <Plus size={15} />
+                </button>
               </div>
+              {moreReactions && (
+                <EmojiPicker
+                  open
+                  mode="reaction"
+                  onSelectEmoji={(emoji) => {
+                    actions.react(m, emoji);
+                    setMoreReactions(false);
+                    if (menu.current) closeMenu(menu.current);
+                  }}
+                />
+              )}
               <button
                 className="message-action"
                 disabled={sending}
@@ -403,6 +635,42 @@ const MessageRow = memo(function MessageRow({
                   {copied ? 'Скопировано' : 'Копировать'}
                 </button>
               )}
+              {m.body && !m.poll && (
+                <button
+                  className="message-action"
+                  onClick={() => {
+                    void toggleTranslation();
+                    if (menu.current) closeMenu(menu.current);
+                  }}
+                >
+                  <Languages size={16} />
+                  {translation?.open ? 'Скрыть перевод' : 'Перевести'}
+                </button>
+              )}
+              {(kind === 'group' || (m.read_by || 0) > 0 || m.reactions.length > 0) && (
+                <button
+                  className="message-action"
+                  onClick={() => {
+                    actions.details(m);
+                    if (menu.current) closeMenu(menu.current);
+                  }}
+                >
+                  <Eye size={16} />
+                  Кто прочитал
+                </button>
+              )}
+              {m.edited_at && (
+                <button
+                  className="message-action"
+                  onClick={() => {
+                    actions.edits(m);
+                    if (menu.current) closeMenu(menu.current);
+                  }}
+                >
+                  <History size={16} />
+                  История правок
+                </button>
+              )}
               {m.file && (
                 <button
                   className="message-action"
@@ -415,7 +683,7 @@ const MessageRow = memo(function MessageRow({
                   Скачать
                 </button>
               )}
-              {own && (
+              {own && !m.poll && (
                 <button
                   className="message-action"
                   disabled={sending || savingEdit}
@@ -429,12 +697,10 @@ const MessageRow = memo(function MessageRow({
                 <CircleCheck size={16} />
                 Выбрать
               </button>
-              {canDelete && (
-                <button className="delete-action" onClick={() => actions.remove(m)}>
-                  <Trash2 size={15} />
-                  Удалить
-                </button>
-              )}
+              <button className="delete-action" onClick={() => actions.remove(m)}>
+                <Trash2 size={15} />
+                Удалить
+              </button>
             </div>
           </details>
         )}
@@ -724,7 +990,7 @@ export const MessageList = memo(function MessageList({
                   message={message}
                   itemKey={key}
                   own={message.sender_id === meId}
-                  canDelete={message.sender_id === meId || Boolean(moderator)}
+                  canDeleteForAll={message.sender_id === meId || Boolean(moderator)}
                   pinned={canPin ? message.id === pinnedId : null}
                   selecting={Boolean(selection)}
                   selected={Boolean(selection?.has(message.id))}

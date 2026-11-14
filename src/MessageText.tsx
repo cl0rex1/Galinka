@@ -1,4 +1,5 @@
 import { Fragment, memo, useState, type ReactNode } from 'react';
+import { GifArtwork, StickerArtwork } from './EmojiPicker';
 
 /** Wrap every case-insensitive occurrence of `query` in <mark>, for search results. */
 export function marked(text: string, query?: string): ReactNode {
@@ -21,6 +22,11 @@ export function marked(text: string, query?: string): ReactNode {
  */
 export const plainText = (text: string) =>
   text
+    .replace(/\[sticker:[^:\]]+:([^\]]+)\]/g, 'Стикер: $1')
+    .replace(/\[sticker:[^\]]+\]/g, 'Стикер')
+    .replace(/\[gif:[^|\]]+\|[^|\]]+\|([^\]]+)\]/g, 'GIF: $1')
+    .replace(/\[gif:[^:\]]+:([^\]]+)\]/g, 'GIF: $1')
+    .replace(/\[gif:[^\]]+\]/g, 'GIF')
     .replace(/\|\|(.+?)\|\|/gs, '•••')
     .replace(/\*\*|__|~~|```|`/g, '')
     .replace(/^> /gm, '');
@@ -180,6 +186,38 @@ export const MessageText = memo(function MessageText({
   highlight?: string;
   onMention?: (username: string) => void;
 }) {
+  const trimmed = text.trim();
+  const stickerMatch = /^\[sticker:([^:\]]+)(?::([^\]]+))?\]$/.exec(trimmed);
+  if (stickerMatch) {
+    return (
+      <figure className="message-sticker">
+        <StickerArtwork id={stickerMatch[1]} label={stickerMatch[2]} size={136} />
+        {stickerMatch[2] && <figcaption className="sticker-label">{stickerMatch[2]}</figcaption>}
+      </figure>
+    );
+  }
+  const gifUrlMatch = /^\[gif:([^|:\]]+)\|([^|\]]+)\|([^\]]*)\]$/.exec(trimmed);
+  if (gifUrlMatch) {
+    let decodedUrl: string | undefined;
+    try {
+      decodedUrl = decodeURIComponent(gifUrlMatch[2]);
+    } catch {
+      decodedUrl = undefined;
+    }
+    return (
+      <figure className="message-gif">
+        <GifArtwork id={gifUrlMatch[1]} title={gifUrlMatch[3] || 'GIF'} previewUrl={decodedUrl} />
+      </figure>
+    );
+  }
+  const gifMatch = /^\[gif:([^:\]]+)(?::([^\]]+))?\]$/.exec(trimmed);
+  if (gifMatch) {
+    return (
+      <figure className="message-gif">
+        <GifArtwork id={gifMatch[1]} title={gifMatch[2]} />
+      </figure>
+    );
+  }
   const leaf: Leaf = (part, key) => linkify(part, key, highlight, onMention);
   const parts = blocks(text);
   // Plain text stays one inline paragraph, so the time can sit at the end of its last line.

@@ -128,6 +128,169 @@ test.describe('in the demo', () => {
       'план жирный курсив нет код •••',
     );
   });
+
+  test('delete for me vs delete for all with undo toast restore', async ({ page }) => {
+    const field = page.getByRole('textbox', { name: 'Сообщение', exact: true });
+    await field.fill('Временное своё');
+    await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+    await expect(row(page, 'Временное своё')).toBeVisible();
+
+    await menu(page, 'Я за!', 'Удалить');
+    const otherDialog = page.getByRole('dialog', { name: 'Удалить сообщение?' });
+    await expect(otherDialog.getByRole('button', { name: 'Удалить у себя', exact: true })).toBeVisible();
+    await otherDialog.getByRole('button', { name: 'Удалить у себя', exact: true }).click();
+    await expect(row(page, 'Я за!')).toHaveCount(0);
+    await expect(page.locator('.undo-toast')).toBeVisible();
+    await page.locator('.undo-toast').getByRole('button', { name: 'Отменить' }).click();
+    await expect(row(page, 'Я за!')).toBeVisible();
+
+    await menu(page, 'Временное своё', 'Удалить');
+    const ownDialog = page.getByRole('dialog', { name: 'Удалить сообщение?' });
+    await expect(ownDialog.getByRole('button', { name: 'Удалить', exact: true })).toBeVisible();
+    await ownDialog.getByRole('button', { name: 'Удалить', exact: true }).click();
+    await expect(row(page, 'Временное своё')).toHaveCount(0);
+    await page.locator('.undo-toast').getByRole('button', { name: 'Отменить' }).click();
+    await expect(row(page, 'Временное своё')).toBeVisible();
+  });
+
+  test('TikTok prompt offers "Не скачивать" and "Скачать" converting link to video', async ({
+    page,
+  }) => {
+    const field = page.getByRole('textbox', { name: 'Сообщение', exact: true });
+    await field.fill('https://www.tiktok.com/@galinka/video/7111111111111111111');
+    const prompt = page.getByRole('region', { name: 'Ссылка на TikTok' });
+    await expect(prompt).toBeVisible();
+    await expect(prompt.getByRole('button', { name: 'Не скачивать', exact: true })).toBeVisible();
+    await expect(prompt.getByRole('button', { name: 'Скачать', exact: true })).toBeVisible();
+
+    await prompt.getByRole('button', { name: 'Не скачивать', exact: true }).click();
+    await expect(prompt).toHaveCount(0);
+    await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+    await expect(row(page, '7111111111111111111')).toBeVisible();
+    await expect(row(page, '7111111111111111111').locator('video')).toHaveCount(0);
+
+    await field.fill('https://www.tiktok.com/@galinka/video/7222222222222222222');
+    await expect(prompt).toBeVisible();
+    await prompt.getByRole('button', { name: 'Скачать', exact: true }).click();
+    await expect(page.locator('.message-row video').first()).toBeVisible();
+  });
+
+  test('polls can be created and voted on', async ({ page }) => {
+    await page.locator('summary[aria-label="Прикрепить файл"]').click();
+    await page.getByRole('button', { name: 'Опрос', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Создать опрос' });
+    await dialog.getByPlaceholder('О чём спросим?').fill('Любимое время года?');
+    await dialog.getByPlaceholder('Вариант 1').fill('Весна');
+    await dialog.getByPlaceholder('Вариант 2').fill('Осень');
+    await dialog.getByRole('button', { name: 'Создать опрос', exact: true }).click();
+
+    const poll = page.locator('.poll-card', { hasText: 'Любимое время года?' });
+    await expect(poll).toBeVisible();
+    await poll.getByRole('button', { name: /Весна/ }).click();
+    await expect(poll.locator('.poll-option.voted')).toContainText('Весна');
+    await expect(poll).toContainText('Голосов: 1');
+  });
+
+  test('edit history, details modal, translation and link preview work together', async ({
+    page,
+  }) => {
+    const field = page.getByRole('textbox', { name: 'Сообщение', exact: true });
+    await field.fill('hello world');
+    await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+    await expect(row(page, 'hello world')).toBeVisible();
+
+    await menu(page, 'hello world', 'Редактировать');
+    await field.fill('how are you?');
+    await field.press('Enter');
+    const editedRow = row(page, 'how are you?');
+    await expect(editedRow.locator('button.message-edited')).toBeVisible();
+
+    await editedRow.locator('button.message-edited').click();
+    const historyDialog = page.getByRole('dialog', { name: 'История изменений' });
+    await expect(historyDialog).toContainText('hello world');
+    await historyDialog.getByRole('button', { name: 'Закрыть' }).click();
+    await expect(historyDialog).toHaveCount(0);
+
+    await menu(page, 'how are you?', 'Перевести');
+    await expect(editedRow.locator('.message-translation')).toContainText('Как дела?');
+
+    await editedRow.locator('.message-text').click({ button: 'right' });
+    await page.getByRole('button', { name: 'Реакция 👍' }).click();
+    await menu(page, 'how are you?', 'Кто прочитал');
+    const detailsDialog = page.getByRole('dialog', { name: 'Реакции и прочтения' });
+    await expect(detailsDialog).toContainText('👍');
+    await detailsDialog.getByRole('button', { name: 'Закрыть' }).click();
+    await expect(detailsDialog).toHaveCount(0);
+
+    await field.fill('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    await expect(page.locator('.composer-link-preview')).toContainText('YouTube');
+    await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+    const previewWrap = page.locator('.link-preview-wrap').last();
+    await expect(previewWrap.locator('.link-preview-card')).toContainText('YouTube');
+    await previewWrap.getByRole('button', { name: 'Смотреть в чате' }).click();
+    await expect(previewWrap.locator('.link-preview-embed iframe')).toBeVisible();
+    await previewWrap.getByRole('button', { name: 'Скрыть плеер' }).click();
+    await expect(previewWrap.locator('.link-preview-embed iframe')).toHaveCount(0);
+
+    await field.fill('Без превью https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC');
+    await expect(page.locator('.composer-link-preview')).toContainText('Spotify');
+    await page.getByRole('button', { name: 'Убрать предпросмотр' }).click();
+    await expect(page.locator('.composer-link-preview')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+    await expect(row(page, 'Без превью').locator('.link-preview-card')).toHaveCount(0);
+  });
+
+  test('emoji picker supports search, recents, stickers and GIFs', async ({ page }) => {
+    await page.evaluate(() => localStorage.removeItem('galinka-recent-emojis'));
+    await page.getByRole('button', { name: 'Добавить эмодзи', exact: true }).click();
+    await page.getByPlaceholder('Поиск эмодзи…').fill('ракета');
+    await page.locator('.emoji-grid button', { hasText: '🚀' }).click();
+    await expect(page.getByRole('textbox', { name: 'Сообщение', exact: true })).toHaveValue('🚀');
+
+    await page.getByRole('button', { name: 'Добавить эмодзи', exact: true }).click();
+    await page.getByPlaceholder('Поиск эмодзи…').fill('');
+    await expect(page.locator('.emoji-section-label', { hasText: 'Недавние' })).toBeVisible();
+
+    await page.getByRole('tab', { name: 'Стикеры' }).click();
+    await page.locator('.sticker-pick', { hasText: 'Привет!' }).click();
+    await expect(page.locator('.message-sticker')).toContainText('Привет!');
+
+    await page.getByRole('button', { name: 'Добавить эмодзи', exact: true }).click();
+    await page.getByRole('tab', { name: 'GIF' }).click();
+    await page.getByPlaceholder('Поиск GIF…').fill('космос');
+    await page.locator('.gif-pick', { hasText: 'В космос' }).click();
+    await expect(page.locator('.message-gif')).toContainText('В космос');
+  });
+
+  test('scheduled messages and auto-delete timer work in the UI', async ({ page }) => {
+    const field = page.getByRole('textbox', { name: 'Сообщение', exact: true });
+    await field.fill('Отложенный привет');
+    await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click({
+      button: 'right',
+    });
+    await page.getByRole('menuitem', { name: 'Отправить позже' }).click();
+    const schedDialog = page.getByRole('dialog', { name: 'Отложенная отправка' });
+    await schedDialog.getByRole('button', { name: 'Через 15 мин' }).click();
+    await schedDialog.getByRole('button', { name: 'Запланировать' }).click();
+
+    await page.getByRole('button', { name: 'Отложенные сообщения', exact: true }).click();
+    const listDialog = page.getByRole('dialog', { name: 'Отложенные сообщения' });
+    await expect(listDialog).toContainText('Отложенный привет');
+    await listDialog.getByTitle('Отправить сейчас').click();
+    await listDialog.getByRole('button', { name: 'Закрыть' }).click();
+    await expect(row(page, 'Отложенный привет')).toBeVisible();
+
+    await page.locator('.chat-item', { hasText: 'Аня' }).first().click();
+    await page.locator('summary[aria-label="Действия с чатом"]').click();
+    await page.getByRole('button', { name: 'Автоудаление', exact: true }).click();
+    await page
+      .getByRole('dialog', { name: 'Автоудаление сообщений' })
+      .getByRole('button', { name: /5 минут/ })
+      .click();
+    await field.fill('Исчезающее сообщение');
+    await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+    await expect(row(page, 'Исчезающее сообщение').locator('.message-expires')).toBeVisible();
+  });
 });
 
 test('typing and recording show in the chat header and the chat list', async ({ page }) => {

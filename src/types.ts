@@ -21,6 +21,51 @@ export type Announcement = {
 };
 export type Page<T> = { items: T[]; total: number; page: number };
 export type Attachment = { id: string; name: string; size: number; mime?: string };
+export type LinkPreview = {
+  url: string;
+  site: string;
+  title: string;
+  description?: string;
+  image?: string;
+  provider?: 'youtube' | 'spotify' | 'tiktok' | 'web';
+  embed_url?: string;
+};
+export type PollOption = {
+  index: number;
+  text: string;
+  votes: number;
+  voted: boolean;
+  voters?: { id: string; name: string; avatar?: string | null; color: number }[];
+};
+export type Poll = {
+  id: string;
+  question: string;
+  multiple: boolean;
+  anonymous: boolean;
+  closed: boolean;
+  total_votes: number;
+  options: PollOption[];
+};
+export type MessageEdit = {
+  id: string;
+  previous_body: string;
+  edited_at: string;
+};
+export type MessageDetails = {
+  readers: (Person & { read_at: string })[];
+  reactions: { emoji: string; users: Person[] }[];
+};
+export type ScheduledMessage = {
+  id: string;
+  chat_id: string;
+  body: string;
+  file_id?: string | null;
+  file_name?: string | null;
+  silent: boolean;
+  is_reminder: boolean;
+  scheduled_for: string;
+  created_at: string;
+};
 export type Message = {
   id: string;
   chat_id: string;
@@ -29,6 +74,9 @@ export type Message = {
   body: string;
   created_at: string;
   edited_at?: string | null;
+  expires_at?: string | null;
+  link_preview?: LinkPreview | null;
+  poll?: Poll | null;
   reply?: {
     id: string;
     body: string;
@@ -57,6 +105,9 @@ export type Chat = {
   pinned?: boolean;
   muted?: boolean;
   archived?: boolean;
+  auto_delete_seconds?: number | null;
+  draft?: string;
+  draft_updated_at?: string | null;
   member_count: number;
   peer: Person | null;
   unread: number;

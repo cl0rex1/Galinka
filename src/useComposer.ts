@@ -12,8 +12,28 @@ import {
 import { api, ApiError, upload } from './api';
 import { compressImage } from './image';
 import type { Transfer } from './AttachmentPreview';
-import type { Attachment, Chat, Message, Person } from './types';
+import type { Attachment, Chat, LinkPreview, Message, Person, ScheduledMessage } from './types';
 import type { TypingAction } from './useSync';
+
+function extractComposerUrl(text: string): string | null {
+  const m = text.replace(/\[(?:sticker|gif):[^\]]+\]/g, ' ').match(/https?:\/\/[^\s<>"'`]+/i);
+  if (!m) return null;
+  try {
+    const u = new URL(m[0].replace(/[.,!?;:)'"]+$/, ''));
+    return ['http:', 'https:'].includes(u.protocol) ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function isTikTokLink(rawUrl: string): boolean {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase();
+    return host === 'tiktok.com' || host.endsWith('.tiktok.com');
+  } catch {
+    return false;
+  }
+}
 
 type ComposerOptions = {
   me: Person | null;
@@ -69,10 +89,16 @@ export function useComposer({
     [mentionCursor, setMentionCursor] = useState<number | null>(null),
     [mentionIndex, setMentionIndex] = useState(0),
     [emojiOpen, setEmojiOpen] = useState(false),
-    [sendOptions, setSendOptions] = useState(false);
+    [sendOptions, setSendOptions] = useState(false),
+    [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null),
+    [dismissedPreviewUrl, setDismissedPreviewUrl] = useState<string | null>(null),
+    [dismissedTikTok, setDismissedTikTok] = useState<Record<string, boolean>>({}),
+    [downloadingTikTok, setDownloadingTikTok] = useState(false),
+    [scheduledCount, setScheduledCount] = useState(0);
 
   const draftSnapshot = useRef<{ id: string; drafts: Record<string, string> } | null>(null);
   if (me) draftSnapshot.current = { id: me.id, drafts };
+  const lastSyncedDrafts = useRef<Record<string, string>>({});
 
   const textarea = useRef<HTMLTextAreaElement>(null),
     fileInput = useRef<HTMLInputElement>(null),
@@ -182,6 +208,7 @@ export function useComposer({
 
   function resetComposer() {
     nonces.current = {};
+    lastSyncedDrafts.current = {};
     setAttachments({});
     setTransfers({});
     setDrafts({});
@@ -189,7 +216,77 @@ export function useComposer({
     setEditing(null);
     setEmojiOpen(false);
     setSendOptions(false);
+    setLinkPreview(null);
+    setDismissedPreviewUrl(null);
   }
+
+  const refreshScheduledCount = useCallback(async (chatId = activeRef.current) => {
+    if (!chatId || !me) {
+      setScheduledCount(0);
+      return;
+    }
+    try {
+      const items = await api<ScheduledMessage[]>(`/chats/${chatId}/scheduled`);
+      if (activeRef.current === chatId) setScheduledCount(items.length);
+    } catch {
+      /* Scheduled count badge is non-critical. */
+    }
+  }, [me?.id]);
+
+  useEffect(() => {
+    void refreshScheduledCount(activeId);
+    if (activeId && active?.draft !== undefined) {
+      lastSyncedDrafts.current[activeId] = active.draft;
+      setDrafts((prev) =>
+        !prev[activeId] && active.draft ? { ...prev, [activeId]: active.draft! } : prev,
+      );
+    }
+  }, [activeId, active?.draft, refreshScheduledCount]);
+
+  useEffect(() => {
+    if (!me || !activeId) return;
+    if ((lastSyncedDrafts.current[activeId] ?? '') === draft) return;
+    const targetChat = activeId;
+    const value = draft;
+    const timer = setTimeout(() => {
+      lastSyncedDrafts.current[targetChat] = value;
+      void api(`/chats/${targetChat}/draft`, 'PUT', { draft: value }).catch(() => {});
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [draft, activeId, me?.id]);
+
+  const detectedUrl = !edit && !attachment ? extractComposerUrl(draft) : null;
+  const tiktokUrl =
+    detectedUrl && isTikTokLink(detectedUrl) && !dismissedTikTok[detectedUrl]
+      ? detectedUrl
+      : null;
+
+  useEffect(() => {
+    if (!detectedUrl || tiktokUrl || dismissedPreviewUrl === detectedUrl) {
+      setLinkPreview(null);
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      api<{ preview: LinkPreview | null }>(`/link-preview?url=${encodeURIComponent(detectedUrl)}`)
+        .then((res) => {
+          if (live) setLinkPreview(res.preview);
+        })
+        .catch(() => {
+          if (live) setLinkPreview(null);
+        });
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [detectedUrl, tiktokUrl, dismissedPreviewUrl]);
+
+  const applyRemoteDraft = useCallback((chatId: string, remoteDraft: string) => {
+    if (lastSyncedDrafts.current[chatId] === remoteDraft) return;
+    lastSyncedDrafts.current[chatId] = remoteDraft;
+    setDrafts((prev) => ({ ...prev, [chatId]: remoteDraft }));
+  }, []);
 
   function changeDraft(value: string) {
     if (edit) {
@@ -343,8 +440,13 @@ export function useComposer({
         local,
       ]);
     }
+    const skipPreview = Boolean(detectedUrl && dismissedPreviewUrl === detectedUrl);
     if (!nonce) {
+      lastSyncedDrafts.current[id] = '';
+      void api(`/chats/${id}/draft`, 'PUT', { draft: '' }).catch(() => {});
       setDrafts((previous) => ({ ...previous, [id]: '' }));
+      setDismissedPreviewUrl(null);
+      setLinkPreview(null);
       setReplies((previous) => {
         const next = { ...previous };
         delete next[id];
@@ -357,6 +459,7 @@ export function useComposer({
         nonce: messageNonce,
         replyTo: replyTo?.id,
         silent: silent || undefined,
+        skipPreview: skipPreview || undefined,
       });
     const queued = (textQueue.current[id] ?? Promise.resolve()).then(post);
     textQueue.current[id] = queued.catch(() => {});
@@ -416,6 +519,7 @@ export function useComposer({
             : prev,
         );
       }
+      const skipPreview = Boolean(detectedUrl && dismissedPreviewUrl === detectedUrl);
       setTransfers((previous) => ({ ...previous, [id]: { phase: 'sending', progress: 100 } }));
       await api(`/chats/${id}/messages`, 'POST', {
         body: text,
@@ -424,14 +528,19 @@ export function useComposer({
         demoFile: demo ? file : undefined,
         replyTo: replyDraft?.id,
         silent: silent || undefined,
+        skipPreview: skipPreview || undefined,
       });
       delivered = true;
+      setDismissedPreviewUrl(null);
+      setLinkPreview(null);
       setTransfers((previous) => {
         const next = { ...previous };
         delete next[id];
         return next;
       });
       setDrafts((prev) => (prev[id] === originalDraft ? { ...prev, [id]: '' } : prev));
+      lastSyncedDrafts.current[id] = '';
+      void api(`/chats/${id}/draft`, 'PUT', { draft: '' }).catch(() => {});
       setReplies((previous) => {
         if (previous[id]?.id !== replyDraft?.id) return previous;
         const next = { ...previous };
@@ -477,6 +586,70 @@ export function useComposer({
     sendText(message.chat_id, message.body, original, message.nonce, message.silent);
   }
 
+  function dismissTikTok() {
+    if (tiktokUrl) setDismissedTikTok((prev) => ({ ...prev, [tiktokUrl]: true }));
+  }
+
+  async function downloadTikTok() {
+    if (!activeId || !tiktokUrl || downloadingTikTok) return;
+    const id = activeId,
+      targetUrl = tiktokUrl,
+      replyDraft = replies[id],
+      caption = draft.replace(targetUrl, '').trim() || undefined;
+    setDownloadingTikTok(true);
+    onError('');
+    try {
+      await api(`/chats/${id}/tiktok`, 'POST', {
+        url: targetUrl,
+        caption,
+        replyTo: replyDraft?.id,
+      });
+      lastSyncedDrafts.current[id] = '';
+      void api(`/chats/${id}/draft`, 'PUT', { draft: '' }).catch(() => {});
+      setDrafts((prev) => ({ ...prev, [id]: '' }));
+      setReplies((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      stickOnSend(id);
+      await Promise.all([loadMessages(id), refreshChats()]);
+    } catch (err) {
+      report(err);
+    } finally {
+      setDownloadingTikTok(false);
+    }
+  }
+
+  async function scheduleMessage(scheduledFor: string, bodyText: string, silent = false) {
+    if (!activeId) return;
+    const id = activeId;
+    await api(`/chats/${id}/scheduled`, 'POST', {
+      body: bodyText,
+      replyTo: replies[id]?.id,
+      silent: silent || undefined,
+      isReminder: active?.kind === 'saved',
+      scheduledFor,
+    });
+    if (bodyText === draft.trim()) {
+      lastSyncedDrafts.current[id] = '';
+      void api(`/chats/${id}/draft`, 'PUT', { draft: '' }).catch(() => {});
+      setDrafts((prev) => ({ ...prev, [id]: '' }));
+    }
+    setReplies((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    await refreshScheduledCount(id);
+  }
+
+  function sendSpecial(bodyText: string) {
+    if (!activeId) return;
+    sendText(activeId, bodyText, replies[activeId]);
+    setEmojiOpen(false);
+  }
+
   return {
     drafts,
     draft,
@@ -502,6 +675,17 @@ export function useComposer({
     setEmojiOpen,
     sendOptions,
     setSendOptions,
+    linkPreview,
+    dismissPreview: () => detectedUrl && setDismissedPreviewUrl(detectedUrl),
+    tiktokUrl,
+    dismissTikTok,
+    downloadTikTok,
+    downloadingTikTok,
+    scheduledCount,
+    refreshScheduledCount,
+    scheduleMessage,
+    sendSpecial,
+    applyRemoteDraft,
     textarea,
     fileInput,
     editRequest,
@@ -510,7 +694,7 @@ export function useComposer({
     attachmentNames: Object.fromEntries(
       Object.entries(attachments).map(([id, item]) => [id, item.file.name]),
     ),
-    layoutKey: `${reply?.id ?? ''}:${edit?.message.id ?? ''}:${attachment ? '1' : '0'}`,
+    layoutKey: `${reply?.id ?? ''}:${edit?.message.id ?? ''}:${attachment ? '1' : '0'}:${linkPreview ? '1' : '0'}:${tiktokUrl ? '1' : '0'}`,
     loadDraftsFor,
     clearDraftsFor,
     resetComposer,

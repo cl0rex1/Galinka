@@ -5,12 +5,23 @@ import multer from 'multer';
 import { Pool, Client, type PoolClient } from 'pg';
 import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, mkdir, unlink, open } from 'node:fs/promises';
+import { readFile, mkdir, unlink, open, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z, ZodError } from 'zod';
 import { digest, hashPassword, verifyPassword, readCookie } from './security.js';
 import { migrate } from './migrate.js';
 import { nelyaReply } from './nelya.js';
+import {
+  PreviewError,
+  assertSafePublicUrl,
+  downloadTikTokVideo,
+  extractFirstUrl,
+  fetchLinkPreview,
+  fetchPreviewImage,
+  searchGifs,
+  translateText,
+  type LinkPreviewData,
+} from './previews.js';
 import {
   AudioError,
   normalizeUploadedAudio,
@@ -97,6 +108,12 @@ app.use(
         'font-src': ["'self'"],
         'img-src': ["'self'", 'blob:', 'data:', ...apiOrigins],
         'media-src': ["'self'", 'blob:', ...apiOrigins],
+        'frame-src': [
+          "'self'",
+          'https://www.youtube.com',
+          'https://www.youtube-nocookie.com',
+          'https://open.spotify.com',
+        ],
         'connect-src': ["'self'", ...apiOrigins],
         'object-src': ["'none'"],
         'upgrade-insecure-requests': production && origin.startsWith('https:') ? [] : null,
@@ -263,12 +280,14 @@ async function notify(
     senderId: string;
     silent?: boolean;
   },
+  forUserId?: string,
 ) {
   await db.query("SELECT pg_notify('galinka', $1)", [
     JSON.stringify({
       chatId,
       deletedId,
       removedUserId,
+      forUserId,
       ...(changedMessage ? changedMessage : {}),
     }),
   ]);
@@ -802,20 +821,20 @@ app.get('/api/messages/:id/notification', auth, async (req, res) => {
 });
 app.get('/api/chats', auth, async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,c.avatar,m.read_at,m.pinned,m.muted,m.archived,
+    `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,c.avatar,c.auto_delete_seconds,m.read_at,m.pinned,m.muted,m.archived,m.draft,m.draft_updated_at,
  CASE WHEN c.kind='direct' THEN peer.name ELSE c.title END AS title,
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
  CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color,'avatar',peer.avatar,'last_seen_at',peer.last_seen_at,'show_last_seen',peer.show_last_seen) END AS peer,
  CASE WHEN last.created_at IS NULL THEN NULL ELSE json_build_object('body',last.body,'created_at',last.created_at,'sender_id',last.sender_id,'file_id',last.file_id,'file',last.file) END AS last_message,
- (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread,
+ (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=messages.id AND hm.user_id=$1) AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread,
  (SELECT json_build_object('id',pm.id,'body',pm.body,'file_name',pf.name) FROM messages pm LEFT JOIN files pf ON pf.id=pm.file_id
-   WHERE pm.id=c.pinned_message_id) AS pinned_message
+   WHERE pm.id=c.pinned_message_id AND pm.deleted_at IS NULL AND (pm.expires_at IS NULL OR pm.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=pm.id AND hm.user_id=$1)) AS pinned_message
  FROM chats c JOIN members m ON m.chat_id=c.id
  LEFT JOIN LATERAL (SELECT u.id,u.name,u.username,u.color,u.avatar,u.last_seen_at,u.show_last_seen FROM members mm JOIN users u ON u.id=mm.user_id
    WHERE c.kind='direct' AND mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) peer ON true
  LEFT JOIN LATERAL (SELECT lm.body,lm.created_at,lm.sender_id,lm.file_id,
    CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file
-   FROM messages lm LEFT JOIN files f ON f.id=lm.file_id WHERE lm.chat_id=c.id
+   FROM messages lm LEFT JOIN files f ON f.id=lm.file_id WHERE lm.chat_id=c.id AND lm.deleted_at IS NULL AND (lm.expires_at IS NULL OR lm.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=lm.id AND hm.user_id=$1)
    ORDER BY lm.created_at DESC,lm.id DESC LIMIT 1) last ON true
  WHERE m.user_id=$1 ORDER BY m.pinned DESC,COALESCE(last.created_at,c.created_at) DESC,c.id`,
     [user(req).id],
@@ -877,13 +896,23 @@ app.patch('/api/chats/:id', auth, async (req, res) => {
       nelya: z.boolean().optional(),
       title: z.string().trim().min(1).max(70).optional(),
       ownerId: uuid.optional(),
+      autoDeleteSeconds: z.number().int().min(0).max(365 * 86400).nullable().optional(),
     })
     .strict()
     .refine((value) => Object.keys(value).length > 0)
     .parse(req.body);
   await transaction(async (db) => {
     const chat = await lockedMember(String(req.params.id), user(req).id, db);
-    requireValue(chat.owner_id === user(req).id, 403, 'Настройки меняет создатель чата.');
+    const ownerOnlyChanged =
+      data.nelya !== undefined || data.title !== undefined || data.ownerId !== undefined;
+    if (ownerOnlyChanged)
+      requireValue(chat.owner_id === user(req).id, 403, 'Настройки меняет создатель чата.');
+    if (data.autoDeleteSeconds !== undefined)
+      requireValue(
+        chat.kind !== 'group' || chat.owner_id === user(req).id,
+        403,
+        'Таймер автоудаления в группе меняет владелец.',
+      );
     requireValue(
       data.title === undefined || chat.kind === 'group',
       400,
@@ -897,9 +926,12 @@ app.patch('/api/chats/:id', auth, async (req, res) => {
       );
       requireValue(target.rowCount, 400, 'Новый владелец должен быть участником группы.');
     }
+    const setTimer = data.autoDeleteSeconds !== undefined;
+    const timerValue =
+      data.autoDeleteSeconds && data.autoDeleteSeconds > 0 ? data.autoDeleteSeconds : null;
     await db.query(
-      'UPDATE chats SET nelya=COALESCE($1,nelya),title=COALESCE($2,title),owner_id=COALESCE($3,owner_id) WHERE id=$4',
-      [data.nelya, data.title, data.ownerId, chat.id],
+      'UPDATE chats SET nelya=COALESCE($1,nelya),title=COALESCE($2,title),owner_id=COALESCE($3,owner_id),auto_delete_seconds=CASE WHEN $5::boolean THEN $4::integer ELSE auto_delete_seconds END WHERE id=$6',
+      [data.nelya, data.title, data.ownerId, timerValue, setTimer, chat.id],
     );
     await notify(db, chat.id);
   });
@@ -924,6 +956,18 @@ app.patch('/api/chats/:id/preferences', auth, async (req, res) => {
     await notify(db, chat.id);
   });
   res.json({ ok: true });
+});
+app.put('/api/chats/:id/draft', auth, async (req, res) => {
+  const { draft } = z.object({ draft: z.string().max(8000) }).strict().parse(req.body);
+  const chat = await member(String(req.params.id), user(req).id);
+  await pool.query(
+    'UPDATE members SET draft=$1,draft_updated_at=clock_timestamp() WHERE chat_id=$2 AND user_id=$3',
+    [draft, chat.id, user(req).id],
+  );
+  await pool.query("SELECT pg_notify('galinka', $1)", [
+    JSON.stringify({ type: 'draft', chatId: chat.id, forUserId: user(req).id, draft }),
+  ]);
+  res.json({ ok: true, draft });
 });
 app.post('/api/chats/:id/members', auth, async (req, res) => {
   const { userIds } = z
@@ -1066,21 +1110,76 @@ app.post('/api/join', auth, async (req, res) => {
   });
   res.json({ id });
 });
-const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.nonce,m.forwarded_from,
+const emojiSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(16)
+  .refine((v) => !/[A-Za-z0-9\s<>]/.test(v) && /\p{Emoji}/u.test(v), 'Выберите корректный эмодзи.');
+
+async function resolveLinkPreview(text: string): Promise<LinkPreviewData | null> {
+  const url = extractFirstUrl(text);
+  if (!url) return null;
+  const cached = await pool.query<{ preview: LinkPreviewData }>(
+    "SELECT preview FROM link_previews WHERE url=$1 AND fetched_at>now()-interval '7 days'",
+    [url],
+  );
+  if (cached.rows[0]) return cached.rows[0].preview;
+  try {
+    const preview = await Promise.race([
+      fetchLinkPreview(url),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500)),
+    ]);
+    if (preview) {
+      await pool.query(
+        `INSERT INTO link_previews(url,preview,fetched_at) VALUES($1,$2,clock_timestamp())
+         ON CONFLICT(url) DO UPDATE SET preview=$2,fetched_at=clock_timestamp()`,
+        [url, JSON.stringify(preview)],
+      );
+    }
+    return preview;
+  } catch {
+    return null;
+  }
+}
+
+const pollSelectSQL = `CASE WHEN p.id IS NULL THEN NULL ELSE json_build_object(
+  'id',p.id,'question',p.question,'multiple',p.multiple,'anonymous',p.anonymous,'closed',p.closed,
+  'total_votes',COALESCE((SELECT count(DISTINCT pv.user_id)::int FROM poll_votes pv WHERE pv.poll_id=p.id),0),
+  'options',COALESCE((
+    SELECT json_agg(json_build_object(
+      'index',o.idx-1,
+      'text',o.val,
+      'votes',COALESCE((SELECT count(*)::int FROM poll_votes pv WHERE pv.poll_id=p.id AND pv.option_index=(o.idx-1)),0),
+      'voted',EXISTS(SELECT 1 FROM poll_votes pv WHERE pv.poll_id=p.id AND pv.option_index=(o.idx-1) AND pv.user_id=$2),
+      'voters',CASE WHEN p.anonymous THEN NULL ELSE COALESCE((
+        SELECT json_agg(json_build_object('id',vu.id,'name',vu.name,'avatar',vu.avatar,'color',vu.color) ORDER BY vu.name)
+        FROM poll_votes pv JOIN users vu ON vu.id=pv.user_id WHERE pv.poll_id=p.id AND pv.option_index=(o.idx-1)
+      ),'[]'::json) END
+    ) ORDER BY o.idx)
+    FROM jsonb_array_elements_text(p.options) WITH ORDINALITY AS o(val,idx)
+  ),'[]'::json)
+) END AS poll`;
+
+const visibleMessageWhere = `m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$2)`;
+
+const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.expires_at,m.link_preview,m.nonce,m.forwarded_from,
  CASE WHEN u.id IS NULL THEN json_build_object('id','nelya','name','Неля','username','nelya','color',5) ELSE json_build_object('id',u.id,'name',u.name,'username',u.username,'color',u.color) END AS sender,
  CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file,
  CASE WHEN replied.id IS NULL THEN NULL ELSE json_build_object('id',replied.id,'body',replied.body,'sender',json_build_object('id',COALESCE(reply_user.id::text,'nelya'),'name',COALESCE(reply_user.name,'Неля')),'file_name',reply_file.name) END AS reply,
+ ${pollSelectSQL},
  (SELECT count(*)::int FROM members reader WHERE reader.chat_id=m.chat_id AND reader.user_id IS DISTINCT FROM m.sender_id AND reader.receipt_at>=m.created_at) AS read_by,
  COALESCE((SELECT json_agg(r) FROM (SELECT emoji,count(*)::int AS count,bool_or(user_id=$2) AS mine FROM reactions WHERE message_id=m.id GROUP BY emoji ORDER BY emoji) r),'[]') AS reactions
  FROM messages m LEFT JOIN users u ON u.id=m.sender_id LEFT JOIN files f ON f.id=m.file_id
- LEFT JOIN messages replied ON replied.id=m.reply_to_id AND replied.chat_id=m.chat_id
+ LEFT JOIN polls p ON p.id=m.poll_id
+ LEFT JOIN messages replied ON replied.id=m.reply_to_id AND replied.chat_id=m.chat_id AND replied.deleted_at IS NULL AND (replied.expires_at IS NULL OR replied.expires_at>now())
  LEFT JOIN users reply_user ON reply_user.id=replied.sender_id LEFT JOIN files reply_file ON reply_file.id=replied.file_id`;
 app.get('/api/chats/:id/messages', auth, async (req, res) => {
   await member(String(req.params.id), user(req).id);
   const q = z.string().trim().max(100).optional().parse(req.query.q);
   const before = uuid.optional().parse(req.query.before);
   const { rows } = await pool.query(
-    `${messageSQL} WHERE m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) AND ($3::text IS NULL OR m.body ILIKE $3) AND ($4::uuid IS NULL OR (m.created_at,m.id)<(SELECT created_at,id FROM messages WHERE id=$4 AND chat_id=$1)) ORDER BY m.created_at DESC,m.id DESC LIMIT 60`,
+    `${messageSQL} WHERE m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) AND ${visibleMessageWhere} AND ($3::text IS NULL OR m.body ILIKE $3) AND ($4::uuid IS NULL OR (m.created_at,m.id)<(SELECT created_at,id FROM messages WHERE id=$4 AND chat_id=$1)) ORDER BY m.created_at DESC,m.id DESC LIMIT 60`,
     [req.params.id, user(req).id, q ? contains(q) : null, before || null],
   );
   res.json(rows.reverse());
@@ -1094,7 +1193,9 @@ app.get('/api/search', auth, async (req, res) => {
     `SELECT m.id,m.chat_id,m.body,m.created_at,m.sender_id,COALESCE(u.name,'Неля') AS sender_name
      FROM messages m JOIN members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=$1
      LEFT JOIN users u ON u.id=m.sender_id
-     WHERE m.body ILIKE $2 ORDER BY m.created_at DESC,m.id DESC LIMIT 50`,
+     WHERE m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now())
+     AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$1)
+     AND m.body ILIKE $2 ORDER BY m.created_at DESC,m.id DESC LIMIT 50`,
     [user(req).id, contains(q)],
   );
   res.json(rows);
@@ -1108,9 +1209,11 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       replyTo: uuid.optional(),
       /** Delivered without a notification. */
       silent: z.boolean().optional(),
+      skipPreview: z.boolean().optional(),
     })
     .parse(req.body);
   requireValue(data.body || data.fileId, 400, 'Напишите сообщение или выберите файл.');
+  const linkPreview = data.skipPreview ? null : await resolveLinkPreview(data.body);
   const id = await transaction(async (db) => {
     const chat = await lockedMember(String(req.params.id), user(req).id, db);
     // Resolve retries before checking references: the replied-to message might have
@@ -1128,10 +1231,10 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       return existing.rows[0].id;
     }
     if (data.replyTo) {
-      const target = await db.query('SELECT id FROM messages WHERE id=$1 AND chat_id=$2', [
-        data.replyTo,
-        chat.id,
-      ]);
+      const target = await db.query(
+        'SELECT id FROM messages WHERE id=$1 AND chat_id=$2 AND deleted_at IS NULL',
+        [data.replyTo, chat.id],
+      );
       requireValue(target.rowCount, 400, 'Сообщение для ответа не найдено в этом чате.');
     }
     if (data.fileId) {
@@ -1141,20 +1244,34 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       );
       requireValue(rows[0], 400, 'Файл недоступен.');
     }
+    const expiresAt = chat.auto_delete_seconds
+      ? new Date(Date.now() + Number(chat.auto_delete_seconds) * 1000)
+      : null;
     const { rows } = await db.query(
-      'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(sender_id,nonce) DO NOTHING RETURNING id',
-      [randomUUID(), chat.id, user(req).id, data.body, data.fileId, data.nonce, data.replyTo],
+      'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id,link_preview,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(sender_id,nonce) DO NOTHING RETURNING id',
+      [
+        randomUUID(),
+        chat.id,
+        user(req).id,
+        data.body,
+        data.fileId,
+        data.nonce,
+        data.replyTo,
+        linkPreview ? JSON.stringify(linkPreview) : null,
+        expiresAt,
+      ],
     );
     if (rows[0]) {
       if (anyPushEnabled && !data.silent)
         await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [rows[0].id]);
       const reply = chat.nelya ? nelyaReply(data.body) : null;
       if (reply)
-        await db.query('INSERT INTO messages(id,chat_id,body,nonce) VALUES($1,$2,$3,$4)', [
+        await db.query('INSERT INTO messages(id,chat_id,body,nonce,expires_at) VALUES($1,$2,$3,$4,$5)', [
           randomUUID(),
           chat.id,
           reply,
           randomUUID(),
+          expiresAt,
         ]);
       await notify(db, chat.id, undefined, undefined, {
         event: 'message.created',
@@ -1178,19 +1295,25 @@ app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
     .object({ body: z.string().trim().max(8000) })
     .strict()
     .parse(req.body);
+  const linkPreview = await resolveLinkPreview(body);
   await transaction(async (db) => {
     const chat = await lockedMember(String(req.params.id), user(req).id, db);
     const target = await db.query(
-      'SELECT body,file_id FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 FOR UPDATE',
+      'SELECT body,file_id,poll_id FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 AND deleted_at IS NULL FOR UPDATE',
       [uuid.parse(req.params.messageId), chat.id, user(req).id],
     );
     requireValue(target.rows[0], 404, 'Можно изменить только своё сообщение.');
+    requireValue(!target.rows[0].poll_id, 400, 'Нельзя изменить текст опроса.');
     requireValue(body || target.rows[0].file_id, 400, 'Сообщение не может быть пустым.');
     if (target.rows[0].body !== body) {
-      await db.query('UPDATE messages SET body=$1,edited_at=clock_timestamp() WHERE id=$2', [
-        body,
-        req.params.messageId,
-      ]);
+      await db.query(
+        'INSERT INTO message_edits(id,message_id,previous_body,edited_at) VALUES($1,$2,$3,clock_timestamp())',
+        [randomUUID(), req.params.messageId, target.rows[0].body],
+      );
+      await db.query(
+        'UPDATE messages SET body=$1,edited_at=clock_timestamp(),link_preview=$2 WHERE id=$3',
+        [body, linkPreview ? JSON.stringify(linkPreview) : null, req.params.messageId],
+      );
       await notify(db, chat.id, undefined, undefined, {
         event: 'message.updated',
         messageId: String(req.params.messageId),
@@ -1200,35 +1323,115 @@ app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
   });
   res.json({ ok: true });
 });
+app.get('/api/chats/:id/messages/:messageId/edits', auth, async (req, res) => {
+  const chat = await member(String(req.params.id), user(req).id);
+  const messageId = uuid.parse(req.params.messageId);
+  const msg = await pool.query(
+    `SELECT m.id,m.body,m.edited_at FROM messages m WHERE m.id=$1 AND m.chat_id=$2 AND m.deleted_at IS NULL
+     AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$3)`,
+    [messageId, chat.id, user(req).id],
+  );
+  requireValue(msg.rows[0], 404, 'Сообщение не найдено.');
+  const { rows } = await pool.query(
+    'SELECT id,previous_body,edited_at FROM message_edits WHERE message_id=$1 ORDER BY edited_at DESC',
+    [messageId],
+  );
+  res.json({ current: msg.rows[0].body, edits: rows });
+});
 app.delete('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
+  const scope = req.query.scope === 'me' ? 'me' : 'all';
+  const allowUndo = req.query.undo === '1';
   const removed = await transaction(async (db) => {
     await lockedMember(String(req.params.id), user(req).id, db);
+    const messageId = uuid.parse(req.params.messageId);
+    if (scope === 'me') {
+      const target = await db.query(
+        'SELECT id FROM messages WHERE id=$1 AND chat_id=$2 AND deleted_at IS NULL',
+        [messageId, req.params.id],
+      );
+      requireValue(target.rowCount, 404, 'Сообщение не найдено.');
+      await db.query(
+        'INSERT INTO hidden_messages(message_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING',
+        [messageId, user(req).id],
+      );
+      await notify(db, String(req.params.id), messageId, undefined, undefined, user(req).id);
+      return [] as string[];
+    }
+    if (allowUndo) {
+      const result = await db.query(
+        `UPDATE messages m SET deleted_at=clock_timestamp(),deleted_by=$3 FROM chats c
+         WHERE m.id=$1 AND m.chat_id=$2 AND c.id=m.chat_id AND m.deleted_at IS NULL
+         AND (m.sender_id=$3 OR (c.kind='group' AND c.owner_id=$3)) RETURNING m.id`,
+        [messageId, req.params.id, user(req).id],
+      );
+      requireValue(result.rowCount, 404, 'Можно удалить только своё сообщение.');
+      await db.query(
+        'UPDATE chats SET pinned_message_id=NULL WHERE id=$1 AND pinned_message_id=$2',
+        [req.params.id, messageId],
+      );
+      await notify(db, String(req.params.id), messageId);
+      return [] as string[];
+    }
     // Authors delete their own messages; a group owner moderates any message in the group.
     const result = await db.query(
       `DELETE FROM messages m USING chats c WHERE m.id=$1 AND m.chat_id=$2 AND c.id=m.chat_id
        AND (m.sender_id=$3 OR (c.kind='group' AND c.owner_id=$3)) RETURNING m.file_id`,
-      [uuid.parse(req.params.messageId), req.params.id, user(req).id],
+      [messageId, req.params.id, user(req).id],
     );
     requireValue(result.rowCount, 404, 'Можно удалить только своё сообщение.');
-    await notify(db, String(req.params.id), String(req.params.messageId));
+    await notify(db, String(req.params.id), messageId);
     // A deleted attachment must stop being downloadable and stop counting toward the quota.
     const files = await db.query(
-      'DELETE FROM files f WHERE f.id=$1 AND NOT EXISTS(SELECT 1 FROM messages WHERE file_id=f.id) RETURNING id',
+      'DELETE FROM files f WHERE f.id=$1 AND NOT EXISTS(SELECT 1 FROM messages WHERE file_id=f.id) AND NOT EXISTS(SELECT 1 FROM scheduled_messages WHERE file_id=f.id) RETURNING id',
       [result.rows[0].file_id],
     );
     return files.rows.map((file) => file.id as string);
   });
   await removeStoredFiles(removed);
+  res.json({ ok: true, scope, canUndo: scope === 'me' || allowUndo });
+});
+app.post('/api/chats/:id/messages/:messageId/restore', auth, async (req, res) => {
+  await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    const messageId = uuid.parse(req.params.messageId);
+    const unhid = await db.query(
+      'DELETE FROM hidden_messages WHERE message_id=$1 AND user_id=$2 RETURNING message_id',
+      [messageId, user(req).id],
+    );
+    if (unhid.rowCount) {
+      await notify(
+        db,
+        chat.id,
+        undefined,
+        undefined,
+        { event: 'message.created', messageId, senderId: user(req).id },
+        user(req).id,
+      );
+      return;
+    }
+    const restored = await db.query(
+      `UPDATE messages SET deleted_at=NULL,deleted_by=NULL
+       WHERE id=$1 AND chat_id=$2 AND deleted_at IS NOT NULL AND deleted_at>now()-interval '60 seconds'
+       AND (deleted_by=$3 OR sender_id=$3) RETURNING id,sender_id`,
+      [messageId, chat.id, user(req).id],
+    );
+    requireValue(restored.rowCount, 404, 'Время для отмены удаления истекло.');
+    await notify(db, chat.id, undefined, undefined, {
+      event: 'message.created',
+      messageId,
+      senderId: restored.rows[0].sender_id || user(req).id,
+    });
+  });
   res.json({ ok: true });
 });
 app.post('/api/chats/:id/messages/:messageId/reactions', auth, async (req, res) => {
-  const { emoji } = z.object({ emoji: z.enum(['❤', '👍', '😂', '🔥']) }).parse(req.body);
+  const { emoji } = z.object({ emoji: emojiSchema }).parse(req.body);
   await transaction(async (db) => {
     await lockedMember(String(req.params.id), user(req).id, db);
-    const target = await db.query('SELECT id FROM messages WHERE id=$1 AND chat_id=$2 FOR UPDATE', [
-      uuid.parse(req.params.messageId),
-      req.params.id,
-    ]);
+    const target = await db.query(
+      'SELECT id FROM messages WHERE id=$1 AND chat_id=$2 AND deleted_at IS NULL FOR UPDATE',
+      [uuid.parse(req.params.messageId), req.params.id],
+    );
     requireValue(target.rows[0], 404, 'Сообщение не найдено.');
     const result = await db.query(
       'DELETE FROM reactions WHERE message_id=$1 AND user_id=$2 AND emoji=$3',
@@ -1248,6 +1451,30 @@ app.post('/api/chats/:id/messages/:messageId/reactions', auth, async (req, res) 
   });
   res.json({ ok: true });
 });
+app.get('/api/chats/:id/messages/:messageId/details', auth, async (req, res) => {
+  const chat = await member(String(req.params.id), user(req).id);
+  const messageId = uuid.parse(req.params.messageId);
+  const { rows: msgRows } = await pool.query(
+    `SELECT created_at,sender_id FROM messages m WHERE m.id=$1 AND m.chat_id=$2 AND m.deleted_at IS NULL
+     AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$3)`,
+    [messageId, chat.id, user(req).id],
+  );
+  requireValue(msgRows[0], 404, 'Сообщение не найдено.');
+  const readers = await pool.query(
+    `SELECT u.id,u.username,u.name,u.color,u.role,u.avatar,mem.receipt_at AS read_at
+     FROM members mem JOIN users u ON u.id=mem.user_id
+     WHERE mem.chat_id=$1 AND mem.user_id IS DISTINCT FROM $2 AND mem.receipt_at>=$3
+     ORDER BY mem.receipt_at DESC,u.name`,
+    [chat.id, msgRows[0].sender_id, msgRows[0].created_at],
+  );
+  const reactions = await pool.query(
+    `SELECT r.emoji,json_agg(json_build_object('id',u.id,'name',u.name,'username',u.username,'color',u.color,'avatar',u.avatar) ORDER BY u.name) AS users
+     FROM reactions r JOIN users u ON u.id=r.user_id WHERE r.message_id=$1
+     GROUP BY r.emoji ORDER BY r.emoji`,
+    [messageId],
+  );
+  res.json({ readers: readers.rows, reactions: reactions.rows });
+});
 // One pinned message per chat. In a group the owner pins; in a personal chat either side.
 app.put('/api/chats/:id/pin', auth, async (req, res) => {
   const { messageId } = z.object({ messageId: uuid.nullable() }).strict().parse(req.body);
@@ -1259,10 +1486,10 @@ app.put('/api/chats/:id/pin', auth, async (req, res) => {
       'Закрепляет владелец группы.',
     );
     if (messageId) {
-      const target = await db.query('SELECT 1 FROM messages WHERE id=$1 AND chat_id=$2', [
-        messageId,
-        chat.id,
-      ]);
+      const target = await db.query(
+        'SELECT 1 FROM messages WHERE id=$1 AND chat_id=$2 AND deleted_at IS NULL',
+        [messageId, chat.id],
+      );
       requireValue(target.rowCount, 404, 'Сообщение не найдено.');
     }
     await db.query('UPDATE chats SET pinned_message_id=$1 WHERE id=$2', [messageId, chat.id]);
@@ -1280,18 +1507,34 @@ app.post('/api/chats/:id/forward', auth, async (req, res) => {
   const ids = await transaction(async (db) => {
     const chat = await lockedMember(String(req.params.id), user(req).id, db);
     const { rows } = await db.query(
-      `SELECT m.body,m.file_id,COALESCE(m.forwarded_from,u.name,'Неля') AS origin FROM messages m
+      `SELECT m.body,m.file_id,m.link_preview,COALESCE(m.forwarded_from,u.name,'Неля') AS origin FROM messages m
        JOIN members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=$2
-       LEFT JOIN users u ON u.id=m.sender_id WHERE m.id=ANY($1::uuid[]) ORDER BY m.created_at,m.id`,
+       LEFT JOIN users u ON u.id=m.sender_id
+       WHERE m.id=ANY($1::uuid[]) AND m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now())
+       AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$2)
+       ORDER BY m.created_at,m.id`,
       [[...new Set(messageIds)], user(req).id],
     );
     requireValue(rows.length === new Set(messageIds).size, 404, 'Сообщение не найдено.');
+    const expiresAt = chat.auto_delete_seconds
+      ? new Date(Date.now() + Number(chat.auto_delete_seconds) * 1000)
+      : null;
     const ids: string[] = [];
     for (const row of rows) {
       const id = randomUUID();
       await db.query(
-        'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,forwarded_from) VALUES($1,$2,$3,$4,$5,$6,$7)',
-        [id, chat.id, user(req).id, row.body, row.file_id, randomUUID(), row.origin],
+        'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,forwarded_from,link_preview,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+        [
+          id,
+          chat.id,
+          user(req).id,
+          row.body,
+          row.file_id,
+          randomUUID(),
+          row.origin,
+          row.link_preview ? JSON.stringify(row.link_preview) : null,
+          expiresAt,
+        ],
       );
       ids.push(id);
     }
@@ -1311,6 +1554,377 @@ app.post('/api/chats/:id/forward', auth, async (req, res) => {
     return ids;
   });
   res.status(201).json({ ids });
+});
+app.get('/api/link-preview', auth, async (req, res) => {
+  const url = z.string().trim().min(1).max(2048).parse(req.query.url);
+  await assertSafePublicUrl(url);
+  const preview = await resolveLinkPreview(url);
+  res.json({ preview });
+});
+app.get('/api/link-preview/image', auth, async (req, res) => {
+  const url = z.string().trim().min(1).max(2048).parse(req.query.url);
+  await assertSafePublicUrl(url);
+  const result = await fetchPreviewImage(url);
+  requireValue(result, 404, 'Изображение недоступно.');
+  res.setHeader('Content-Type', result!.mime);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.send(result!.buffer);
+});
+app.post('/api/chats/:id/tiktok', auth, async (req, res) => {
+  const data = z
+    .object({
+      url: z.string().trim().min(1).max(2048),
+      caption: z.string().trim().max(2000).optional(),
+      replyTo: uuid.optional(),
+      silent: z.boolean().optional(),
+    })
+    .strict()
+    .parse(req.body);
+  const downloaded = await downloadTikTokVideo(data.url);
+  const fileId = randomUUID();
+  const filepath = path.join(directory, fileId);
+  await writeFile(filepath, downloaded.buffer);
+  try {
+    const result = await transaction(async (db) => {
+      const chat = await lockedMember(String(req.params.id), user(req).id, db);
+      const usage = await db.query(
+        'SELECT COALESCE(sum(size),0)::bigint AS total FROM files WHERE user_id=$1',
+        [user(req).id],
+      );
+      requireValue(
+        Number(usage.rows[0].total) + downloaded.buffer.length <= 500 * 1024 * 1024,
+        413,
+        'Лимит файлов аккаунта — 500 МБ. Свяжитесь с владельцем сервера.',
+      );
+      if (data.replyTo) {
+        const target = await db.query(
+          'SELECT id FROM messages WHERE id=$1 AND chat_id=$2 AND deleted_at IS NULL',
+          [data.replyTo, chat.id],
+        );
+        requireValue(target.rowCount, 400, 'Сообщение для ответа не найдено в этом чате.');
+      }
+      const { rows: fileRows } = await db.query(
+        'INSERT INTO files(id,chat_id,user_id,name,size,mime,audio_ready) VALUES($1,$2,$3,$4,$5,$6,false) RETURNING id,name,size,mime',
+        [fileId, chat.id, user(req).id, downloaded.filename, downloaded.buffer.length, downloaded.mime],
+      );
+      const messageId = randomUUID();
+      const expiresAt = chat.auto_delete_seconds
+        ? new Date(Date.now() + Number(chat.auto_delete_seconds) * 1000)
+        : null;
+      await db.query(
+        'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+        [
+          messageId,
+          chat.id,
+          user(req).id,
+          data.caption ?? downloaded.title,
+          fileId,
+          randomUUID(),
+          data.replyTo ?? null,
+          expiresAt,
+        ],
+      );
+      if (anyPushEnabled && !data.silent)
+        await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [messageId]);
+      await notify(db, chat.id, undefined, undefined, {
+        event: 'message.created',
+        messageId,
+        senderId: user(req).id,
+        silent: data.silent || undefined,
+      });
+      return { id: messageId, file: fileRows[0] };
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    await unlink(filepath).catch(() => {});
+    throw err;
+  }
+});
+app.get('/api/gifs', auth, async (req, res) => {
+  const q = z.string().trim().max(100).optional().parse(req.query.q) ?? '';
+  const limitRaw = Number(req.query.limit ?? 18);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(30, Math.floor(limitRaw))) : 18;
+  const items = await searchGifs(q, limit);
+  res.json({ items });
+});
+app.post('/api/translate', auth, async (req, res) => {
+  const data = z
+    .object({
+      text: z.string().trim().min(1).max(4000),
+      targetLang: z
+        .enum(['ru', 'en', 'de', 'fr', 'es', 'it', 'pt', 'zh', 'ja', 'ko', 'uk', 'kk', 'tr'])
+        .default('ru'),
+    })
+    .strict()
+    .parse(req.body);
+  const translated = await translateText(data.text, data.targetLang);
+  res.json(translated);
+});
+async function deliverScheduledRow(
+  db: PoolClient,
+  row: {
+    id: string;
+    chat_id: string;
+    sender_id: string;
+    body: string;
+    file_id: string | null;
+    reply_to_id: string | null;
+    silent: boolean;
+  },
+) {
+  await db.query('DELETE FROM scheduled_messages WHERE id=$1', [row.id]);
+  const { rows: chats } = await db.query(
+    'SELECT c.* FROM chats c JOIN members m ON m.chat_id=c.id WHERE c.id=$1 AND m.user_id=$2 FOR UPDATE',
+    [row.chat_id, row.sender_id],
+  );
+  if (!chats[0]) return null;
+  const chat = chats[0];
+  let replyTo = row.reply_to_id;
+  if (replyTo) {
+    const r = await db.query(
+      'SELECT 1 FROM messages WHERE id=$1 AND chat_id=$2 AND deleted_at IS NULL',
+      [replyTo, row.chat_id],
+    );
+    if (!r.rowCount) replyTo = null;
+  }
+  const expiresAt = chat.auto_delete_seconds
+    ? new Date(Date.now() + Number(chat.auto_delete_seconds) * 1000)
+    : null;
+  const preview = await resolveLinkPreview(row.body);
+  const messageId = randomUUID();
+  await db.query(
+    'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id,link_preview,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [
+      messageId,
+      row.chat_id,
+      row.sender_id,
+      row.body,
+      row.file_id,
+      randomUUID(),
+      replyTo,
+      preview ? JSON.stringify(preview) : null,
+      expiresAt,
+    ],
+  );
+  if (anyPushEnabled && !row.silent)
+    await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [messageId]);
+  const reply = chat.nelya ? nelyaReply(row.body) : null;
+  if (reply)
+    await db.query('INSERT INTO messages(id,chat_id,body,nonce,expires_at) VALUES($1,$2,$3,$4,$5)', [
+      randomUUID(),
+      chat.id,
+      reply,
+      randomUUID(),
+      expiresAt,
+    ]);
+  await notify(db, row.chat_id, undefined, undefined, {
+    event: 'message.created',
+    messageId,
+    senderId: row.sender_id,
+    silent: row.silent || undefined,
+  });
+  return messageId;
+}
+app.get('/api/chats/:id/scheduled', auth, async (req, res) => {
+  const chat = await member(String(req.params.id), user(req).id);
+  const { rows } = await pool.query(
+    `SELECT sm.id,sm.chat_id,sm.body,sm.file_id,f.name AS file_name,sm.silent,sm.is_reminder,sm.scheduled_for,sm.created_at
+     FROM scheduled_messages sm LEFT JOIN files f ON f.id=sm.file_id
+     WHERE sm.chat_id=$1 AND sm.sender_id=$2 ORDER BY sm.scheduled_for ASC`,
+    [chat.id, user(req).id],
+  );
+  res.json(rows);
+});
+app.post('/api/chats/:id/scheduled', auth, async (req, res) => {
+  const data = z
+    .object({
+      body: z.string().trim().max(8000).default(''),
+      fileId: uuid.optional(),
+      replyTo: uuid.optional(),
+      silent: z.boolean().optional(),
+      isReminder: z.boolean().optional(),
+      scheduledFor: z.string().trim().min(1),
+    })
+    .strict()
+    .parse(req.body);
+  requireValue(data.body || data.fileId, 400, 'Напишите сообщение или выберите файл.');
+  const ts = Date.parse(data.scheduledFor);
+  requireValue(
+    Number.isFinite(ts) && ts > Date.now() - 5000 && ts <= Date.now() + 365 * 86400_000,
+    400,
+    'Укажите корректную дату и время отправки.',
+  );
+  const item = await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    if (data.replyTo) {
+      const target = await db.query(
+        'SELECT 1 FROM messages WHERE id=$1 AND chat_id=$2 AND deleted_at IS NULL',
+        [data.replyTo, chat.id],
+      );
+      requireValue(target.rowCount, 400, 'Сообщение для ответа не найдено в этом чате.');
+    }
+    if (data.fileId) {
+      const { rows } = await db.query(
+        'SELECT id FROM files WHERE id=$1 AND chat_id=$2 AND user_id=$3',
+        [data.fileId, chat.id, user(req).id],
+      );
+      requireValue(rows[0], 400, 'Файл недоступен.');
+    }
+    const { rows } = await db.query(
+      `INSERT INTO scheduled_messages(id,chat_id,sender_id,body,file_id,reply_to_id,silent,is_reminder,scheduled_for)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id,chat_id,body,file_id,silent,is_reminder,scheduled_for,created_at`,
+      [
+        randomUUID(),
+        chat.id,
+        user(req).id,
+        data.body,
+        data.fileId ?? null,
+        data.replyTo ?? null,
+        Boolean(data.silent),
+        Boolean(data.isReminder || chat.kind === 'saved'),
+        new Date(ts),
+      ],
+    );
+    await notify(db, chat.id, undefined, undefined, undefined, user(req).id);
+    return rows[0];
+  });
+  res.status(201).json(item);
+});
+app.delete('/api/chats/:id/scheduled/:scheduleId', auth, async (req, res) => {
+  const removedFiles = await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    const { rows } = await db.query(
+      'DELETE FROM scheduled_messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 RETURNING file_id',
+      [uuid.parse(req.params.scheduleId), chat.id, user(req).id],
+    );
+    requireValue(rows[0], 404, 'Отложенное сообщение не найдено.');
+    await notify(db, chat.id, undefined, undefined, undefined, user(req).id);
+    if (!rows[0].file_id) return [] as string[];
+    const orphaned = await db.query(
+      'DELETE FROM files f WHERE f.id=$1 AND NOT EXISTS(SELECT 1 FROM messages WHERE file_id=f.id) AND NOT EXISTS(SELECT 1 FROM scheduled_messages WHERE file_id=f.id) RETURNING id',
+      [rows[0].file_id],
+    );
+    return orphaned.rows.map((r) => r.id as string);
+  });
+  await removeStoredFiles(removedFiles);
+  res.json({ ok: true });
+});
+app.post('/api/chats/:id/scheduled/:scheduleId/send', auth, async (req, res) => {
+  const messageId = await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    const { rows } = await db.query(
+      'SELECT * FROM scheduled_messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 FOR UPDATE',
+      [uuid.parse(req.params.scheduleId), chat.id, user(req).id],
+    );
+    requireValue(rows[0], 404, 'Отложенное сообщение не найдено.');
+    return deliverScheduledRow(db, rows[0]);
+  });
+  res.status(201).json({ id: messageId });
+});
+app.post('/api/chats/:id/polls', auth, async (req, res) => {
+  const data = z
+    .object({
+      question: z.string().trim().min(1).max(300),
+      options: z.array(z.string().trim().min(1).max(120)).min(2).max(10),
+      multiple: z.boolean().default(false),
+      anonymous: z.boolean().default(false),
+      nonce: uuid,
+    })
+    .strict()
+    .parse(req.body);
+  const result = await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    const existing = await db.query(
+      'SELECT id,chat_id,poll_id FROM messages WHERE sender_id=$1 AND nonce=$2',
+      [user(req).id, data.nonce],
+    );
+    if (existing.rows[0]) {
+      requireValue(existing.rows[0].chat_id === chat.id, 409, 'Идентификатор сообщения уже использован.');
+      return { id: existing.rows[0].id as string, pollId: existing.rows[0].poll_id as string };
+    }
+    const pollId = randomUUID();
+    await db.query(
+      'INSERT INTO polls(id,chat_id,creator_id,question,options,multiple,anonymous) VALUES($1,$2,$3,$4,$5,$6,$7)',
+      [pollId, chat.id, user(req).id, data.question, JSON.stringify(data.options), data.multiple, data.anonymous],
+    );
+    const expiresAt = chat.auto_delete_seconds
+      ? new Date(Date.now() + Number(chat.auto_delete_seconds) * 1000)
+      : null;
+    const messageId = randomUUID();
+    await db.query(
+      'INSERT INTO messages(id,chat_id,sender_id,body,nonce,poll_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
+      [messageId, chat.id, user(req).id, data.question, data.nonce, pollId, expiresAt],
+    );
+    if (anyPushEnabled)
+      await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [messageId]);
+    await notify(db, chat.id, undefined, undefined, {
+      event: 'message.created',
+      messageId,
+      senderId: user(req).id,
+    });
+    return { id: messageId, pollId };
+  });
+  res.status(201).json(result);
+});
+app.post('/api/chats/:id/polls/:pollId/vote', auth, async (req, res) => {
+  const { optionIndices } = z
+    .object({ optionIndices: z.array(z.number().int().min(0).max(9)).max(10) })
+    .strict()
+    .parse(req.body);
+  const selected = [...new Set(optionIndices)];
+  await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    const { rows } = await db.query(
+      'SELECT p.id,p.options,p.multiple,p.closed,m.id AS message_id FROM polls p JOIN messages m ON m.poll_id=p.id WHERE p.id=$1 AND p.chat_id=$2 AND m.deleted_at IS NULL FOR UPDATE OF p',
+      [uuid.parse(req.params.pollId), chat.id],
+    );
+    requireValue(rows[0], 404, 'Опрос не найден.');
+    requireValue(!rows[0].closed, 400, 'Голосование завершено.');
+    const count = Array.isArray(rows[0].options) ? rows[0].options.length : 0;
+    requireValue(
+      selected.every((i) => i < count) && (rows[0].multiple || selected.length <= 1),
+      400,
+      'Некорректный выбор ответа.',
+    );
+    await db.query('DELETE FROM poll_votes WHERE poll_id=$1 AND user_id=$2', [rows[0].id, user(req).id]);
+    for (const idx of selected) {
+      await db.query('INSERT INTO poll_votes(poll_id,option_index,user_id) VALUES($1,$2,$3)', [
+        rows[0].id,
+        idx,
+        user(req).id,
+      ]);
+    }
+    await notify(db, chat.id, undefined, undefined, {
+      event: 'message.updated',
+      messageId: rows[0].message_id,
+      senderId: user(req).id,
+    });
+  });
+  res.json({ ok: true });
+});
+app.post('/api/chats/:id/polls/:pollId/close', auth, async (req, res) => {
+  await transaction(async (db) => {
+    const chat = await lockedMember(String(req.params.id), user(req).id, db);
+    const { rows } = await db.query(
+      'SELECT p.id,p.creator_id,m.id AS message_id FROM polls p JOIN messages m ON m.poll_id=p.id WHERE p.id=$1 AND p.chat_id=$2 AND m.deleted_at IS NULL FOR UPDATE OF p',
+      [uuid.parse(req.params.pollId), chat.id],
+    );
+    requireValue(rows[0], 404, 'Опрос не найден.');
+    requireValue(
+      rows[0].creator_id === user(req).id || (chat.kind === 'group' && chat.owner_id === user(req).id),
+      403,
+      'Завершить опрос может автор или владелец группы.',
+    );
+    await db.query('UPDATE polls SET closed=true WHERE id=$1', [rows[0].id]);
+    await notify(db, chat.id, undefined, undefined, {
+      event: 'message.updated',
+      messageId: rows[0].message_id,
+      senderId: user(req).id,
+    });
+  });
+  res.json({ ok: true });
 });
 // "Typing…", "recording a voice message…": relayed to the chat, never stored.
 app.post('/api/chats/:id/typing', auth, async (req, res) => {
@@ -1693,11 +2307,13 @@ async function listen() {
     try {
       if (!event.payload) return;
       const change = JSON.parse(event.payload) as {
-        type?: 'read' | 'refresh' | 'typing';
+        type?: 'read' | 'refresh' | 'typing' | 'draft';
         chatId: string;
         deletedId?: string;
         revokedUserId?: string;
         removedUserId?: string;
+        forUserId?: string;
+        draft?: string;
         event?: 'message.created' | 'message.updated';
         messageId?: string;
         senderId?: string;
@@ -1718,10 +2334,13 @@ async function listen() {
       // event/messageId/senderId stay at the top level for clients older than 0.13.
       const messageCache = new Map<string, unknown>();
       const payloadFor = async (viewerId: string) => {
+        if (change.type === 'draft') {
+          return { type: 'draft', chatId: change.chatId, draft: change.draft ?? '' };
+        }
         if (change.event && change.messageId) {
           if (!messageCache.has(viewerId)) {
             const { rows: found } = await pool.query(
-              `${messageSQL} WHERE m.id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2)`,
+              `${messageSQL} WHERE m.id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) AND ${visibleMessageWhere}`,
               [change.messageId, viewerId],
             );
             messageCache.set(viewerId, found[0] ?? null);
@@ -1733,6 +2352,7 @@ async function listen() {
       };
       for (const [res, info] of streams)
         if (ids.has(info.userId)) {
+          if (change.forUserId && info.userId !== change.forUserId) continue;
           if (change.type === 'typing' && info.userId === change.userId) continue;
           if (res.writableLength > 1024 * 1024) {
             res.end();
@@ -1938,7 +2558,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     res.status(400).json({ error: fieldErrors[field] || 'Проверьте введённые данные.' });
     return;
   }
-  if (error instanceof HttpError || error instanceof AudioError) {
+  if (error instanceof HttpError || error instanceof AudioError || error instanceof PreviewError) {
     res.status(error.status).json({ error: error.message });
     return;
   }
@@ -1967,8 +2587,51 @@ const server = app.listen(Number(process.env.PORT) || 3001, '0.0.0.0', () =>
 );
 const stopPush = startPushWorker(pool);
 server.requestTimeout = 120_000;
+async function deliverDueScheduledMessages() {
+  if (stopping) return;
+  await transaction(async (db) => {
+    const { rows } = await db.query(
+      'SELECT * FROM scheduled_messages WHERE scheduled_for<=clock_timestamp() ORDER BY scheduled_for ASC LIMIT 20 FOR UPDATE SKIP LOCKED',
+    );
+    for (const row of rows) await deliverScheduledRow(db, row);
+  });
+}
+async function purgeExpiredMessages() {
+  if (stopping) return;
+  const removedFiles = await transaction(async (db) => {
+    const { rows } = await db.query(
+      `DELETE FROM messages WHERE (expires_at IS NOT NULL AND expires_at<=clock_timestamp())
+       OR (deleted_at IS NOT NULL AND deleted_at<now()-interval '2 minutes')
+       RETURNING id,chat_id,file_id,deleted_at`,
+    );
+    if (!rows.length) return [] as string[];
+    for (const row of rows) {
+      if (!row.deleted_at) await notify(db, row.chat_id, row.id);
+    }
+    const fileIds = [...new Set(rows.map((r) => r.file_id).filter(Boolean) as string[])];
+    if (!fileIds.length) return [] as string[];
+    const orphaned = await db.query(
+      `DELETE FROM files f WHERE f.id=ANY($1::uuid[])
+       AND NOT EXISTS(SELECT 1 FROM messages WHERE file_id=f.id)
+       AND NOT EXISTS(SELECT 1 FROM scheduled_messages WHERE file_id=f.id) RETURNING id`,
+      [fileIds],
+    );
+    return orphaned.rows.map((r) => r.id as string);
+  });
+  if (removedFiles.length) await removeStoredFiles(removedFiles);
+}
+const scheduleTimer = setInterval(() => {
+  void deliverDueScheduledMessages().catch(console.error);
+}, 2500);
+scheduleTimer.unref();
+const expireTimer = setInterval(() => {
+  void purgeExpiredMessages().catch(console.error);
+}, 10_000);
+expireTimer.unref();
 async function stop() {
   stopPush();
+  clearInterval(scheduleTimer);
+  clearInterval(expireTimer);
   stopping = true;
   for (const res of streams.keys()) res.end();
   server.close();
@@ -1986,8 +2649,12 @@ async function housekeeping() {
     "DELETE FROM signup_invites WHERE used_at IS NULL AND expires_at<now()-interval '30 days'",
   );
   await pool.query("DELETE FROM client_errors WHERE created_at<now()-interval '30 days'");
+  await pool.query("DELETE FROM link_previews WHERE fetched_at<now()-interval '30 days'");
+  await purgeExpiredMessages();
   const { rows } = await pool.query(
-    "DELETE FROM files f WHERE created_at<now()-interval '1 day' AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.file_id=f.id) RETURNING id",
+    `DELETE FROM files f WHERE created_at<now()-interval '1 day'
+     AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.file_id=f.id)
+     AND NOT EXISTS(SELECT 1 FROM scheduled_messages sm WHERE sm.file_id=f.id) RETURNING id`,
   );
   await removeStoredFiles(rows.map((row) => row.id as string));
 }

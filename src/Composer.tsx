@@ -2,8 +2,11 @@ import { useEffect, useRef } from 'react';
 import {
   ArrowDown,
   ArrowUp,
+  BarChart2,
   BellOff,
+  CalendarClock,
   Check,
+  Clock3,
   FileText,
   Images,
   LoaderCircle,
@@ -16,6 +19,7 @@ import {
 import { lookPrefs } from './Appearance';
 import { AttachmentPreview } from './AttachmentPreview';
 import { Avatar } from './Avatar';
+import { EmojiPicker } from './EmojiPicker';
 import { fileLabel } from './MediaAttachment';
 import { plainText } from './MessageText';
 import { VideoNoteRecorder } from './VideoNoteRecorder';
@@ -32,6 +36,9 @@ export function Composer({
   onJumpToLatest,
   onTyping,
   onError,
+  onOpenPoll,
+  onOpenSchedule,
+  onOpenScheduledList,
   composer,
 }: {
   active: Chat;
@@ -41,6 +48,9 @@ export function Composer({
   onJumpToLatest: () => void;
   onTyping: (action: 'voice' | 'video') => void;
   onError: (message: string) => void;
+  onOpenPoll: () => void;
+  onOpenSchedule: () => void;
+  onOpenScheduledList: () => void;
   composer: ComposerState;
 }) {
   const {
@@ -135,6 +145,40 @@ export function Composer({
           </IconButton>
         </div>
       )}
+      {composer.tiktokUrl && (
+        <div className="tiktok-prompt" role="region" aria-label="Ссылка на TikTok">
+          <span>Скачать видео из TikTok как видеофайл?</span>
+          <div className="tiktok-prompt-actions">
+            <button
+              type="button"
+              className="secondary"
+              disabled={composer.downloadingTikTok}
+              onClick={composer.dismissTikTok}
+            >
+              Не скачивать
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={composer.downloadingTikTok}
+              onClick={() => void composer.downloadTikTok()}
+            >
+              {composer.downloadingTikTok ? 'Скачивание…' : 'Скачать'}
+            </button>
+          </div>
+        </div>
+      )}
+      {composer.linkPreview && !composer.tiktokUrl && (
+        <div className="composer-link-preview">
+          <div className="composer-link-preview-text">
+            <strong>{composer.linkPreview.site}</strong>
+            <span>{composer.linkPreview.title}</span>
+          </div>
+          <IconButton label="Убрать предпросмотр" onClick={composer.dismissPreview}>
+            <X size={16} />
+          </IconButton>
+        </div>
+      )}
       {attachment && !edit && (
         <AttachmentPreview
           file={attachment}
@@ -219,6 +263,16 @@ export function Composer({
                     {label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    closeMenu(event.currentTarget.closest('details')!);
+                    onOpenPoll();
+                  }}
+                >
+                  <BarChart2 size={18} />
+                  Опрос
+                </button>
               </div>
             </details>
           )}
@@ -327,22 +381,27 @@ export function Composer({
               }
             }}
           />
+          {composer.scheduledCount > 0 && !edit && (
+            <IconButton
+              label={active.kind === 'saved' ? 'Напоминания' : 'Отложенные сообщения'}
+              className="scheduled-badge-btn"
+              onClick={onOpenScheduledList}
+            >
+              <CalendarClock size={20} />
+            </IconButton>
+          )}
           <div className="emoji-wrap">
-            <div className={`emoji-picker ${emojiOpen ? 'open' : ''}`} inert={!emojiOpen}>
-              {['😊', '😂', '❤', '👍', '🙏', '🎉', '🔥', '😢'].map((emoji) => (
-                <button
-                  type="button"
-                  key={emoji}
-                  onClick={() => {
-                    composer.changeDraft(composerValue + emoji);
-                    setEmojiOpen(false);
-                    textarea.current?.focus();
-                  }}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
+            <EmojiPicker
+              open={emojiOpen}
+              mode="composer"
+              onSelectEmoji={(emoji) => {
+                composer.changeDraft(composerValue + emoji);
+                setEmojiOpen(false);
+                textarea.current?.focus();
+              }}
+              onSelectSticker={(token) => composer.sendSpecial(token)}
+              onSelectGif={(token) => composer.sendSpecial(token)}
+            />
             <IconButton
               label="Добавить эмодзи"
               disabled={sending || savingCurrentEdit}
@@ -384,6 +443,18 @@ export function Composer({
                 >
                   <BellOff size={17} />
                   Отправить без звука
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setSendOptions(false);
+                    onOpenSchedule();
+                  }}
+                >
+                  <Clock3 size={17} />
+                  {active.kind === 'saved' ? 'Напомнить позже' : 'Отправить позже'}
                 </button>
               </div>
             )}

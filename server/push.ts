@@ -117,6 +117,10 @@ const attachmentWord = (info: MessageInfo) =>
 /** Message text without formatting marks; spoilers stay hidden. Keep in sync with src/MessageText. */
 export const plainText = (text: string) =>
   text
+    .replace(/\[sticker:[^:\]]+:([^\]]+)\]/g, 'Стикер: $1')
+    .replace(/\[sticker:[^\]]+\]/g, 'Стикер')
+    .replace(/\[gif:[^:\]]+:([^\]]+)\]/g, 'GIF: $1')
+    .replace(/\[gif:[^\]]+\]/g, 'GIF')
     .replace(/\|\|(.+?)\|\|/gs, '•••')
     .replace(/\*\*|__|~~|```|`/g, '')
     .replace(/^> /gm, '');
