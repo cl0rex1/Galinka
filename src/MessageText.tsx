@@ -1,5 +1,6 @@
 import { Fragment, memo, useState, type ReactNode } from 'react';
 import { GifArtwork, StickerArtwork } from './EmojiPicker';
+import { animatedCode, codeEmoji, isStickerCode, Sticker } from './Sticker';
 
 /** Wrap every case-insensitive occurrence of `query` in <mark>, for search results. */
 export function marked(text: string, query?: string): ReactNode {
@@ -22,6 +23,10 @@ export function marked(text: string, query?: string): ReactNode {
  */
 export const plainText = (text: string) =>
   text
+    .replace(
+      /\[sticker:([0-9a-f]{2,6}(?:_[0-9a-f]{2,6})*)\]/g,
+      (_, code: string) => `${codeEmoji(code)} Стикер`,
+    )
     .replace(/\[sticker:[^:\]]+:([^\]]+)\]/g, 'Стикер: $1')
     .replace(/\[sticker:[^\]]+\]/g, 'Стикер')
     .replace(/\[gif:[^|\]]+\|[^|\]]+\|([^\]]+)\]/g, 'GIF: $1')
@@ -177,6 +182,29 @@ function blocks(text: string): Block[] {
   return result;
 }
 
+const segmenter = new Intl.Segmenter('ru', { granularity: 'grapheme' });
+const graphemes = (text: string) => [...segmenter.segment(text)].length;
+const onlyEmoji =
+  /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|[\u200d\ufe0f\u20e3\s])+$/u;
+
+/**
+ * Messages drawn without a bubble, as in Telegram: a sticker, a GIF, or one to three emoji
+ * shown large.
+ */
+export function bareKind(text: string): 'sticker' | 'gif' | 'emoji' | null {
+  const trimmed = text.trim();
+  if (/^\[sticker:[^\]]+\]$/.test(trimmed)) return 'sticker';
+  if (/^\[gif:[^\]]+\]$/.test(trimmed)) return 'gif';
+  if (
+    trimmed &&
+    onlyEmoji.test(trimmed) &&
+    /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(trimmed) &&
+    graphemes(trimmed.replace(/\s/g, '')) <= 3
+  )
+    return 'emoji';
+  return null;
+}
+
 export const MessageText = memo(function MessageText({
   text,
   highlight,
@@ -187,6 +215,14 @@ export const MessageText = memo(function MessageText({
   onMention?: (username: string) => void;
 }) {
   const trimmed = text.trim();
+  const kind = bareKind(text);
+  if (kind === 'emoji') {
+    const code = animatedCode(trimmed);
+    if (code) return <Sticker code={code} size={112} />;
+    return <p className={`jumbo-emoji n${graphemes(trimmed)}`}>{trimmed}</p>;
+  }
+  const animated = /^\[sticker:([0-9a-f_]+)\]$/.exec(trimmed);
+  if (animated && isStickerCode(animated[1])) return <Sticker code={animated[1]} size={168} />;
   const stickerMatch = /^\[sticker:([^:\]]+)(?::([^\]]+))?\]$/.exec(trimmed);
   if (stickerMatch) {
     return (

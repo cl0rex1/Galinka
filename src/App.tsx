@@ -47,7 +47,6 @@ import { DeleteMessages } from './DeleteMessages';
 import {
   AutoDeleteModal,
   EditHistoryModal,
-  MessageDetailsModal,
   PollCreatorModal,
   ScheduledListModal,
   ScheduleMessageModal,
@@ -67,7 +66,15 @@ import { ThemeImport } from './Appearance';
 import { LoginApprove } from './QrLogin';
 import { QrScanner, ScannedText } from './QrScanner';
 import { decodeTheme, type CustomTheme } from './theme';
-import { closeMenu, IconButton, Modal, plural, toggleMenu, usePresence, useTabIndicator } from './ui';
+import {
+  closeMenu,
+  IconButton,
+  Modal,
+  plural,
+  toggleMenu,
+  usePresence,
+  useTabIndicator,
+} from './ui';
 import { App as NativeApp } from '@capacitor/app';
 import type { Person, Chat, Message, SearchHit } from './types';
 
@@ -143,7 +150,6 @@ export default function App() {
       ids: string[];
       scope: 'me' | 'all';
     } | null>(null),
-    [detailsMessage, setDetailsMessage] = useState<Message | null>(null),
     [editsMessage, setEditsMessage] = useState<Message | null>(null);
   const [typing, setTyping] = useTyping();
   const sendTyping = useTypingSender(Boolean(me) && !demo);
@@ -256,16 +262,13 @@ export default function App() {
     if (Math.abs(el.scrollTop - bottom) >= 1) el.scrollTop = bottom;
   }, [composer.layoutKey, conversation.awayFromBottom, conversation.scroller]);
 
-  const handleLogin = useCallback(
-    (account: Person) => {
-      conversation.syncCacheOwner(account.id);
-      composer.loadDraftsFor(account.id);
-      setError('');
-      setConnected(navigator.onLine);
-      setMe(account);
-    },
-    [],
-  );
+  const handleLogin = useCallback((account: Person) => {
+    conversation.syncCacheOwner(account.id);
+    composer.loadDraftsFor(account.id);
+    setError('');
+    setConnected(navigator.onLine);
+    setMe(account);
+  }, []);
 
   const notifications = useNotifications(me?.id, demo, (id) => {
     setActiveId(id);
@@ -730,14 +733,31 @@ export default function App() {
   }
 
   async function votePoll(message: Message, optionIndices: number[]) {
-    if (!message.poll) return;
+    const poll = message.poll;
+    if (!poll) return;
+    // Counts move at once; the live update then brings the authoritative row with voters.
+    const voted = poll.options.some((option) => option.voted),
+      votes = optionIndices.length > 0;
+    const optimistic = {
+      ...poll,
+      total_votes: poll.total_votes + Number(votes) - Number(voted),
+      options: poll.options.map((option) => {
+        const picked = optionIndices.includes(option.index);
+        return {
+          ...option,
+          voted: picked,
+          votes: option.votes + Number(picked) - Number(option.voted),
+        };
+      }),
+    };
+    conversation.setMessages((previous) =>
+      previous.map((item) => (item.id === message.id ? { ...item, poll: optimistic } : item)),
+    );
     try {
-      await api(`/chats/${message.chat_id}/polls/${message.poll.id}/vote`, 'POST', {
-        optionIndices,
-      });
-      await conversation.loadMessages(message.chat_id);
+      await api(`/chats/${message.chat_id}/polls/${poll.id}/vote`, 'POST', { optionIndices });
     } catch (e) {
       report(e);
+      await conversation.loadMessages(message.chat_id).catch(() => {});
     }
   }
 
@@ -848,10 +868,6 @@ export default function App() {
       closeMenus();
       setEditsMessage(message);
     },
-    details: (message) => {
-      closeMenus();
-      setDetailsMessage(message);
-    },
     votePoll: (message, optionIndices) => void votePoll(message, optionIndices),
     closePoll: (message) => void closePoll(message),
   };
@@ -875,8 +891,8 @@ export default function App() {
       forward: (message) => latestMessageActions.current.forward(message),
       select: (message) => latestMessageActions.current.select(message),
       edits: (message) => latestMessageActions.current.edits(message),
-      details: (message) => latestMessageActions.current.details(message),
-      votePoll: (message, optionIndices) => latestMessageActions.current.votePoll(message, optionIndices),
+      votePoll: (message, optionIndices) =>
+        latestMessageActions.current.votePoll(message, optionIndices),
       closePoll: (message) => latestMessageActions.current.closePoll(message),
     }),
     [],
@@ -1303,7 +1319,11 @@ export default function App() {
                 aria-label="Переписка"
                 // Desktop: drop a file anywhere on the conversation to attach it.
                 onDragOver={(event) => {
-                  if (!event.dataTransfer.types.includes('Files') || composer.edit || composer.sending)
+                  if (
+                    !event.dataTransfer.types.includes('Files') ||
+                    composer.edit ||
+                    composer.sending
+                  )
                     return;
                   event.preventDefault();
                   setDropping(true);
@@ -1593,8 +1613,7 @@ export default function App() {
             const msg = conversation.messages.find((item) => item.id === id);
             return (
               Boolean(msg) &&
-              (msg!.sender_id === me.id ||
-                (active?.kind === 'group' && active?.owner_id === me.id))
+              (msg!.sender_id === me.id || (active?.kind === 'group' && active?.owner_id === me.id))
             );
           })}
           error={error}
@@ -1602,9 +1621,7 @@ export default function App() {
           onClose={() => setModal(null)}
           onDeleted={(removed, scope) => {
             setSelection(null);
-            conversation.setMessages((previous) =>
-              previous.filter((m) => !removed.includes(m.id)),
-            );
+            conversation.setMessages((previous) => previous.filter((m) => !removed.includes(m.id)));
             setUndoDelete({ chatId: activeId, ids: removed, scope });
             refreshChats().catch(report);
           }}
@@ -1623,7 +1640,6 @@ export default function App() {
           chat={active}
           onClose={() => setModal(null)}
           onChanged={() => {
-            void composer.refreshScheduledCount(active.id);
             void conversation.loadMessages(active.id);
             void refreshChats();
           }}
@@ -1648,13 +1664,6 @@ export default function App() {
             await api(`/chats/${active.id}`, 'PATCH', { autoDeleteSeconds: seconds });
             await refreshChats();
           }}
-        />
-      )}
-      {detailsMessage && (
-        <MessageDetailsModal
-          message={detailsMessage}
-          onClose={() => setDetailsMessage(null)}
-          report={report}
         />
       )}
       {editsMessage && (

@@ -112,6 +112,12 @@ test('notification text follows each recipient: author and text, author only, or
     body: 'Макс: новое сообщение',
   });
   assert.deepEqual(previewText(group, 'none'), { title: 'Galinka', body: 'Новое сообщение' });
+  // An animated sticker reads as its emoji; a due reminder in Saved Messages says what it is.
+  assert.equal(
+    previewText({ ...group, body: '[sticker:1f602]' }, 'full').body,
+    'Макс: 😂 Стикер',
+  );
+  assert.equal(previewText({ ...group, kind: 'saved' }, 'full').title, 'Напоминание');
   const photo = { ...group, kind: 'direct', body: '', file_name: 'a.jpg', mime: 'image/jpeg' };
   assert.deepEqual(previewText(photo, 'full'), { title: 'Макс', body: 'Фотография' });
   const long = previewText({ ...group, body: 'я'.repeat(400) }, 'full').body;

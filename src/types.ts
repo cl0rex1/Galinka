@@ -29,6 +29,8 @@ export type LinkPreview = {
   image?: string;
   provider?: 'youtube' | 'spotify' | 'tiktok' | 'web';
   embed_url?: string;
+  vertical?: boolean;
+  thumbnail?: boolean;
 };
 export type PollOption = {
   index: number;
@@ -106,6 +108,8 @@ export type Chat = {
   muted?: boolean;
   archived?: boolean;
   auto_delete_seconds?: number | null;
+  /** Own scheduled messages and reminders waiting in this chat. */
+  scheduled_count?: number;
   draft?: string;
   draft_updated_at?: string | null;
   member_count: number;

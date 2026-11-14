@@ -1,11 +1,13 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import dns from 'node:dns/promises';
+import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { Agent, fetch as undiciFetch } from 'undici';
 
 const execFileAsync = promisify(execFile);
 
@@ -17,6 +19,10 @@ export type LinkPreviewData = {
   image?: string;
   provider?: 'youtube' | 'spotify' | 'tiktok' | 'web';
   embed_url?: string;
+  /** Shorts and TikTok: a tall player. */
+  vertical?: boolean;
+  /** A small square picture, shown beside the text rather than under it. */
+  thumbnail?: boolean;
 };
 
 export type GifItem = {
@@ -37,23 +43,7 @@ export class PreviewError extends Error {
 
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-const MAX_TIKTOK_BYTES = 20 * 1024 * 1024;
-const SUPPORTED_TRANSLATE_LANGS = new Set([
-  'ru',
-  'en',
-  'de',
-  'fr',
-  'es',
-  'it',
-  'pt',
-  'zh',
-  'ja',
-  'ko',
-  'uk',
-  'kk',
-  'tr',
-]);
-
+const MAX_TIKTOK_BYTES = 50 * 1024 * 1024;
 function isPrivateIpv4(ip: string): boolean {
   const parts = ip.split('.').map(Number);
   if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
@@ -83,6 +73,24 @@ function isPrivateIp(address: string): boolean {
   if ((firstHex & 0xff00) === 0xff00) return true;
   return false;
 }
+
+/**
+ * Re-checks the address at connect time, so a host that resolved to a public IP during
+ * validation cannot rebind to an internal one for the actual request.
+ */
+const publicOnly = new Agent({
+  connect: {
+    lookup(hostname, options, callback) {
+      dnsLookup(hostname, { all: true, verbatim: true }, (error, addresses: LookupAddress[]) => {
+        if (error) return callback(error, '', 0);
+        if (!addresses.length || addresses.some((a) => isPrivateIp(a.address)))
+          return callback(new PreviewError('Адрес ведёт во внутреннюю сеть.'), '', 0);
+        if ((options as { all?: boolean }).all) return (callback as any)(null, addresses);
+        callback(null, addresses[0].address, addresses[0].family);
+      });
+    },
+  },
+});
 
 /** Ensures a user-supplied URL resolves only to public internet addresses (SSRF protection). */
 export async function assertSafePublicUrl(rawUrl: string): Promise<URL> {
@@ -209,16 +217,17 @@ async function safeFetch(
   let current = rawUrl;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     await assertSafePublicUrl(current);
-    const response = await fetch(current, {
-      ...init,
+    const response = (await undiciFetch(current, {
+      ...(init as object),
+      dispatcher: publicOnly,
       redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
       headers: {
         'User-Agent': 'GalinkaPreviewBot/1.0',
         Accept: 'text/html,application/json;q=0.9,*/*;q=0.8',
-        ...(init.headers || {}),
+        ...((init.headers as Record<string, string>) || {}),
       },
-    });
+    })) as unknown as Response;
     if (response.status >= 300 && response.status < 400) {
       const loc = response.headers.get('location');
       if (!loc) return { response, finalUrl: current };
@@ -274,7 +283,8 @@ export async function fetchLinkPreview(rawUrl: string): Promise<LinkPreviewData 
       description: 'Видео на YouTube',
       image: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
       provider: 'youtube',
-      embed_url: `https://www.youtube.com/embed/${ytId}`,
+      embed_url: `https://www.youtube-nocookie.com/embed/${ytId}`,
+      vertical: /\/shorts\//.test(url.pathname) || undefined,
     };
     try {
       const { response } = await safeFetch(
@@ -343,7 +353,11 @@ export async function fetchLinkPreview(rawUrl: string): Promise<LinkPreviewData 
       title: 'Видео из TikTok',
       description: url.hostname,
       provider: 'tiktok',
+      vertical: true,
     };
+    const player = (id?: string) =>
+      id && /^\d{6,25}$/.test(id) ? `https://www.tiktok.com/player/v1/${id}` : undefined;
+    fallback.embed_url = player(url.pathname.match(/\/video\/(\d+)/)?.[1]);
     try {
       const { response } = await safeFetch(
         `https://www.tiktok.com/oembed?url=${encodeURIComponent(url.href)}`,
@@ -355,12 +369,15 @@ export async function fetchLinkPreview(rawUrl: string): Promise<LinkPreviewData 
           title?: string;
           author_name?: string;
           thumbnail_url?: string;
+          embed_product_id?: string;
         };
         return {
           ...fallback,
           title: data.title?.slice(0, 200) || fallback.title,
           description: data.author_name ? `@${data.author_name}` : fallback.description,
           image: data.thumbnail_url,
+          // Short links (vt.tiktok.com) carry no id; oEmbed names the video.
+          embed_url: player(data.embed_product_id) ?? fallback.embed_url,
         };
       }
     } catch {
@@ -375,14 +392,20 @@ export async function fetchLinkPreview(rawUrl: string): Promise<LinkPreviewData 
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml'))
       return null;
-    const rawHtml = (await response.text()).slice(0, 262_144);
+    const htmlBytes = await readBoundedBuffer(response, 1024 * 1024, true);
+    if (!htmlBytes) return null;
+    const rawHtml = htmlBytes.toString('utf8');
     const titleTag = rawHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
     const title = metaContent(rawHtml, ['og:title', 'twitter:title']) || (titleTag ? decodeHtml(titleTag) : '');
     if (!title) return null;
     const description = metaContent(rawHtml, ['og:description', 'twitter:description', 'description']);
     const site =
       metaContent(rawHtml, ['og:site_name']) || new URL(finalUrl).hostname.replace(/^www\./, '');
-    const rawImage = metaContent(rawHtml, ['og:image', 'twitter:image']);
+    const rawImage = metaContent(rawHtml, ['og:image', 'og:image:url', 'twitter:image']);
+    const card = metaContent(rawHtml, ['twitter:card']);
+    const imageWidth = Number(metaContent(rawHtml, ['og:image:width']) || 0);
+    const thumbnail =
+      card === 'summary' || (imageWidth > 0 && imageWidth < 400) ? true : undefined;
     let image: string | undefined;
     if (rawImage) {
       try {
@@ -398,6 +421,7 @@ export async function fetchLinkPreview(rawUrl: string): Promise<LinkPreviewData 
       title: title.slice(0, 200),
       description: description?.slice(0, 320),
       image,
+      thumbnail: image ? thumbnail : undefined,
       provider: 'web',
     };
   } catch {
@@ -410,8 +434,8 @@ export async function fetchPreviewImage(rawUrl: string): Promise<{ buffer: Buffe
   try {
     const { response } = await safeFetch(rawUrl, { headers: { Accept: 'image/*' } }, 3500);
     if (!response.ok) return null;
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (!bytes.length || bytes.length > 5 * 1024 * 1024) return null;
+    const bytes = await readBoundedBuffer(response, 5 * 1024 * 1024);
+    if (!bytes?.length) return null;
     if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
       return { buffer: bytes, mime: 'image/png' };
     if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
@@ -435,9 +459,14 @@ function detectVideoFormat(buf: Buffer): { ext: string; mime: string } | null {
   return null;
 }
 
-async function readBoundedBuffer(response: Response, maxBytes: number): Promise<Buffer | null> {
+/** Reads at most maxBytes; past that returns null, or the first maxBytes when `truncate`. */
+async function readBoundedBuffer(
+  response: Response,
+  maxBytes: number,
+  truncate = false,
+): Promise<Buffer | null> {
   const lengthHeader = Number(response.headers.get('content-length') || '0');
-  if (lengthHeader > maxBytes) return null;
+  if (lengthHeader > maxBytes && !truncate) return null;
   if (!response.body) {
     const buf = Buffer.from(await response.arrayBuffer());
     return buf.length <= maxBytes ? buf : null;
@@ -452,7 +481,9 @@ async function readBoundedBuffer(response: Response, maxBytes: number): Promise<
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel().catch(() => {});
-        return null;
+        if (!truncate) return null;
+        chunks.push(Buffer.from(value).subarray(0, value.byteLength - (total - maxBytes)));
+        return Buffer.concat(chunks, maxBytes);
       }
       chunks.push(Buffer.from(value));
     }
@@ -470,9 +501,9 @@ async function downloadVideoStream(
   let response: Response;
   const parsed = new URL(mediaUrl);
   if (trustedUpstreamOrigin && parsed.origin === trustedUpstreamOrigin) {
-    response = await fetchUpstream(parsed.href, { headers: { Accept: 'video/mp4,*/*', ...headers } }, 12_000);
+    response = await fetchUpstream(parsed.href, { headers: { Accept: 'video/mp4,*/*', ...headers } }, 60_000);
   } else {
-    ({ response } = await safeFetch(parsed.href, { headers: { Accept: 'video/mp4,*/*', ...headers } }, 12_000));
+    ({ response } = await safeFetch(parsed.href, { headers: { Accept: 'video/mp4,*/*', ...headers } }, 60_000));
   }
   if (!response.ok) return null;
   const buf = await readBoundedBuffer(response, MAX_TIKTOK_BYTES);
@@ -530,44 +561,69 @@ export async function downloadTikTokVideo(
   const safeUrl = await assertSafePublicUrl(rawUrl);
   if (!isTikTokUrl(safeUrl.href)) throw new PreviewError('Нужна ссылка на TikTok.', 400);
 
+  // Why each way failed, for the server log: the user only sees one short message.
+  const failures: string[] = [];
+
   // Stage 1: Configured upstream extractor or TikWM API.
   const customApi = process.env.TIKTOK_API_URL?.trim();
   const apiEndpoint = customApi || 'https://www.tikwm.com/api/';
   const trustedOrigin = customApi ? new URL(customApi).origin : undefined;
-  try {
-    const body = new URLSearchParams({ url: safeUrl.href, hd: '1' }).toString();
+  type TikWm = {
+    code?: number;
+    msg?: string;
+    data?: {
+      hdplay?: string;
+      play?: string;
+      wmplay?: string;
+      hd_size?: number;
+      size?: number;
+      title?: string;
+      images?: string[];
+    };
+  };
+  const askApi = async (): Promise<TikWm> => {
     const requestInit: RequestInit = {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-      },
-      body,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: new URLSearchParams({ url: safeUrl.href, hd: '1' }).toString(),
     };
     const response = customApi
-      ? await fetchUpstream(apiEndpoint, requestInit, 8000)
-      : (await safeFetch(apiEndpoint, requestInit, 8000)).response;
-    if (response.ok) {
-      const payload = (await response.json()) as {
-        code?: number;
-        data?: { hdplay?: string; play?: string; wmplay?: string; title?: string };
-      };
-      const rawMediaUrl = payload.data?.hdplay || payload.data?.play || payload.data?.wmplay;
-      if (rawMediaUrl) {
-        const resolvedMediaUrl = new URL(rawMediaUrl, apiEndpoint).href;
-        const video = await downloadVideoStream(resolvedMediaUrl, trustedOrigin);
-        if (video) {
-          return {
-            buffer: video.buffer,
-            filename: `tiktok-video.${video.ext}`,
-            mime: video.mime,
-            title: payload.data?.title?.trim().slice(0, 120) || 'Видео из TikTok',
-          };
-        }
-      }
+      ? await fetchUpstream(apiEndpoint, requestInit, 10_000)
+      : (await safeFetch(apiEndpoint, requestInit, 10_000)).response;
+    if (!response.ok) throw new Error(`api HTTP ${response.status}`);
+    return (await response.json()) as TikWm;
+  };
+  try {
+    let payload = await askApi();
+    // The free API allows one request a second: a busy moment is worth one more try.
+    if (payload.code !== undefined && payload.code !== 0 && /limit|second/i.test(payload.msg ?? '')) {
+      await new Promise((done) => setTimeout(done, 1200));
+      payload = await askApi();
     }
-  } catch {
-    /* Fall through to direct extraction. */
+    const data = payload.data;
+    if (data?.images?.length && !data.play)
+      throw new PreviewError('Это пост с фотографиями, а не видео.', 422);
+    // HD only while it fits; then the regular file, then the watermarked one.
+    const candidates = [
+      data?.hdplay && (!data.hd_size || data.hd_size <= MAX_TIKTOK_BYTES) ? data.hdplay : null,
+      data?.play,
+      data?.wmplay,
+    ].filter((url, i, all): url is string => Boolean(url) && all.indexOf(url) === i);
+    if (!candidates.length) failures.push(`api: ${payload.msg || 'no video'}`);
+    for (const candidate of candidates) {
+      const video = await downloadVideoStream(new URL(candidate, apiEndpoint).href, trustedOrigin);
+      if (video)
+        return {
+          buffer: video.buffer,
+          filename: `tiktok-video.${video.ext}`,
+          mime: video.mime,
+          title: data?.title?.trim().slice(0, 120) || 'Видео из TikTok',
+        };
+      failures.push('api: video not downloadable or too large');
+    }
+  } catch (error) {
+    if (error instanceof PreviewError) throw error;
+    failures.push(`api: ${(error as Error).message}`);
   }
 
   // Stage 2: Direct TikTok HTML rehydration JSON extraction (skipped if test/host forces custom API only).
@@ -585,7 +641,8 @@ export async function downloadTikTokVideo(
         5,
       );
       if (response.ok) {
-        const html = (await response.text()).slice(0, 1_048_576);
+        const html = (await readBoundedBuffer(response, 2 * 1024 * 1024, true))?.toString('utf8');
+        if (!html) throw new PreviewError('Пустая страница.');
         const extracted = findTikTokRehydrationVideo(html);
         if (extracted?.playUrl) {
           const cookieHeader = response.headers.get('set-cookie');
@@ -604,8 +661,9 @@ export async function downloadTikTokVideo(
           }
         }
       }
-    } catch {
-      /* Fall through to yt-dlp fallback. */
+      failures.push(`page: HTTP ${response.status} or no video in it`);
+    } catch (error) {
+      failures.push(`page: ${(error as Error).message}`);
     }
   }
 
@@ -619,14 +677,14 @@ export async function downloadTikTokVideo(
         '--no-playlist',
         '--no-warnings',
         '--max-filesize',
-        '20M',
+        '50M',
         '-f',
         'mp4/best[ext=mp4]/best',
         '-o',
         outPath,
         safeUrl.href,
       ],
-      { timeout: 20_000, maxBuffer: 1024 * 1024 },
+      { timeout: 90_000, maxBuffer: 1024 * 1024 },
     );
     const buf = await readFile(outPath);
     const format = detectVideoFormat(buf);
@@ -638,99 +696,18 @@ export async function downloadTikTokVideo(
         title: 'Видео из TikTok',
       };
     }
-  } catch {
-    /* yt-dlp absent or download failed. */
+    failures.push('yt-dlp: not a video file');
+  } catch (error) {
+    failures.push(`yt-dlp: ${(error as Error).message.split('\n')[0]}`);
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
 
-  throw new PreviewError('Не удалось скачать видео из TikTok.', 502);
-}
-
-/** Translates message text via configured translation API, Google GTX, or MyMemory. */
-export async function translateText(
-  text: string,
-  targetLang = 'ru',
-): Promise<{ translated: string; sourceLang: string; targetLang: string }> {
-  const trimmed = text.trim().slice(0, 4000);
-  const target = SUPPORTED_TRANSLATE_LANGS.has(targetLang) ? targetLang : 'ru';
-  if (!trimmed) return { translated: '', sourceLang: target, targetLang: target };
-
-  // Provider 1: Configured self-hosted translation service (LibreTranslate or compatible).
-  const customApi = process.env.TRANSLATE_API_URL?.trim();
-  if (customApi) {
-    try {
-      const response = await fetchUpstream(
-        customApi,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ q: trimmed, source: 'auto', target, format: 'text' }),
-        },
-        6000,
-      );
-      if (response.ok) {
-        const data = (await response.json()) as {
-          translatedText?: string;
-          translated?: string;
-          detectedLanguage?: { language?: string } | string;
-          sourceLang?: string;
-        };
-        const translated = (data.translatedText || data.translated || '').trim();
-        const detected =
-          typeof data.detectedLanguage === 'string'
-            ? data.detectedLanguage
-            : data.detectedLanguage?.language || data.sourceLang || 'auto';
-        if (translated) {
-          return { translated, sourceLang: detected, targetLang: target };
-        }
-      }
-    } catch {
-      /* Try next real provider. */
-    }
-  }
-
-  // Provider 2: Google Translate GTX endpoint.
-  try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(target)}&dt=t&q=${encodeURIComponent(trimmed)}`;
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(5000),
-      headers: { 'User-Agent': BROWSER_USER_AGENT },
-    });
-    if (response.ok) {
-      const data = (await response.json()) as [Array<[string, string]>, unknown, string];
-      const translated = data[0]?.map((part) => part[0] ?? '').join('').trim();
-      if (translated) {
-        return { translated, sourceLang: data[2] || 'auto', targetLang: target };
-      }
-    }
-  } catch {
-    /* Try MyMemory API fallback. */
-  }
-
-  // Provider 3: MyMemory Translation API.
-  try {
-    const hasCyrillic = /[а-яё]/i.test(trimmed);
-    const sourceHint = hasCyrillic ? 'ru' : target === 'en' ? 'ru' : 'en';
-    if (sourceHint !== target && trimmed.length <= 500) {
-      const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(trimmed)}&langpair=${sourceHint}|${target}`;
-      const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
-      if (response.ok) {
-        const data = (await response.json()) as {
-          responseStatus?: number;
-          responseData?: { translatedText?: string };
-        };
-        const translated = data.responseData?.translatedText?.trim();
-        if (data.responseStatus === 200 && translated) {
-          return { translated, sourceLang: sourceHint, targetLang: target };
-        }
-      }
-    }
-  } catch {
-    /* Handled below by explicit error. */
-  }
-
-  throw new PreviewError('Сервис перевода временно недоступен.', 502);
+  console.warn('TikTok download failed', safeUrl.href, failures);
+  throw new PreviewError(
+    'Не удалось скачать видео из TikTok. Проверьте, что ссылка открывается и видео не удалено.',
+    502,
+  );
 }
 
 const BUILTIN_GIFS: GifItem[] = [
@@ -774,6 +751,37 @@ export async function searchGifs(query: string, limit = 18): Promise<GifItem[]> 
       }
     } catch {
       /* Fall back to Tenor or built-in animated GIFs. */
+    }
+  }
+
+  const giphyKey = process.env.GIPHY_API_KEY?.trim();
+  if (giphyKey) {
+    try {
+      const target = new URL(`https://api.giphy.com/v1/gifs/${q ? 'search' : 'trending'}`);
+      target.searchParams.set('api_key', giphyKey);
+      target.searchParams.set('limit', String(boundedLimit));
+      target.searchParams.set('rating', 'pg-13');
+      target.searchParams.set('lang', 'ru');
+      if (q) target.searchParams.set('q', q);
+      const response = await fetch(target.href, { signal: AbortSignal.timeout(5000) });
+      if (response.ok) {
+        const data = (await response.json()) as {
+          data?: Array<{
+            id: string;
+            title?: string;
+            images?: { fixed_width?: { url?: string }; downsized?: { url?: string } };
+          }>;
+        };
+        if (Array.isArray(data.data) && data.data.length > 0)
+          return data.data.map((g) => ({
+            id: g.id,
+            title: (g.title || 'GIF').slice(0, 80),
+            previewUrl: g.images?.fixed_width?.url || g.images?.downsized?.url,
+            keywords: [],
+          }));
+      }
+    } catch {
+      /* Fall back to Tenor or the built-in set. */
     }
   }
 

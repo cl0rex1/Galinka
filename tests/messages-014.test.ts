@@ -46,24 +46,6 @@ function startMockUpstream(): Promise<{ url: string; close: () => Promise<void> 
         res.end(VALID_MP4);
         return;
       }
-      if (req.method === 'POST' && reqUrl.pathname === '/translate-api') {
-        let body = '';
-        for await (const chunk of req) body += chunk;
-        const payload = JSON.parse(body || '{}') as { q?: string; target?: string };
-        res.setHeader('Content-Type', 'application/json');
-        res.end(
-          JSON.stringify({
-            translatedText:
-              payload.target === 'de'
-                ? 'Hallo Welt!'
-                : payload.q === 'how are you?'
-                  ? 'Как дела?'
-                  : 'Привет, мир!',
-            detectedLanguage: 'en',
-          }),
-        );
-        return;
-      }
       if (req.method === 'GET' && reqUrl.pathname === '/gif-api') {
         const q = reqUrl.searchParams.get('q') || '';
         res.setHeader('Content-Type', 'application/json');
@@ -96,7 +78,7 @@ function startMockUpstream(): Promise<{ url: string; close: () => Promise<void> 
 }
 
 test(
-  'real PostgreSQL (0.14.0): delete scope/undo, details, edit history, scheduled, polls, auto-delete, drafts, previews, tiktok, translate',
+  'real PostgreSQL (0.14.0): delete scope/undo, details, edit history, scheduled, polls, auto-delete, drafts, previews, tiktok',
   { skip: !database, timeout: 60000 },
   async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'galinka-014-test-'));
@@ -123,7 +105,6 @@ test(
           WEB_PUSH_PUBLIC_KEY: '',
           WEB_PUSH_PRIVATE_KEY: '',
           TIKTOK_API_URL: `${upstream.url}/tiktok-api`,
-          TRANSLATE_API_URL: `${upstream.url}/translate-api`,
           GIF_API_URL: `${upstream.url}/gif-api`,
         },
         stdio: 'pipe',
@@ -561,34 +542,48 @@ test(
         200,
       );
 
-      // 7. Cross-device synced drafts (REST + SSE event)
-      const controller = new AbortController();
-      const sseRes = await fetch(`${base}/api/events`, {
-        headers: { Cookie: alice.cookie },
-        signal: controller.signal,
+      // 7. Cross-device synced drafts (REST + SSE event). Alice's phone listens while her
+      // computer types; the computer gets no echo of its own draft.
+      const phone = await request('/auth/login', 'POST', {
+        username: `alice_${suffix}`,
+        password: 'test-password-strong',
       });
-      assert.equal(sseRes.status, 200);
-      const reader = sseRes.body!.getReader();
-      await reader.read(); // connected event
+      assert.equal(phone.status, 200, JSON.stringify(phone.data));
+      const listen = async (cookie: string) => {
+        const controller = new AbortController();
+        const response = await fetch(`${base}/api/events`, {
+          headers: { Cookie: cookie },
+          signal: controller.signal,
+        });
+        assert.equal(response.status, 200);
+        const reader = response.body!.getReader();
+        await reader.read(); // connected event
+        return { reader, controller };
+      };
+      const phoneEvents = await listen(phone.cookie);
+      const computerEvents = await listen(alice.cookie);
+      // Longer than a pg_notify payload may carry (8000 bytes), so the text is not inlined.
+      const longDraft = `синхронный черновик ${'я'.repeat(7000)}`;
       assert.equal(
-        (
-          await request(
-            `/chats/${chatId}/draft`,
-            'PUT',
-            { draft: 'синхронный черновик' },
-            alice.cookie,
-          )
-        ).status,
+        (await request(`/chats/${chatId}/draft`, 'PUT', { draft: longDraft }, alice.cookie))
+          .status,
         200,
       );
-      const draftChunk = new TextDecoder().decode((await reader.read()).value);
-      assert.match(draftChunk, /синхронный черновик/);
-      controller.abort();
+      let draftChunk = '';
+      while (!draftChunk.includes('"type":"draft"'))
+        draftChunk += new TextDecoder().decode((await phoneEvents.reader.read()).value);
+      while (!draftChunk.endsWith('\n\n'))
+        draftChunk += new TextDecoder().decode((await phoneEvents.reader.read()).value);
+      assert.equal(JSON.parse(draftChunk.trim().split('\n').at(-1)!.slice(6)).draft, longDraft);
+      const echo = await Promise.race([
+        computerEvents.reader.read().then(({ value }) => new TextDecoder().decode(value)),
+        new Promise<string>((done) => setTimeout(() => done(''), 500)),
+      ]);
+      assert.doesNotMatch(echo, /"type":"draft"/);
+      phoneEvents.controller.abort();
+      computerEvents.controller.abort();
       const chatsAfterDraft = await request('/chats', 'GET', undefined, alice.cookie);
-      assert.equal(
-        chatsAfterDraft.data.find((c: any) => c.id === chatId)?.draft,
-        'синхронный черновик',
-      );
+      assert.equal(chatsAfterDraft.data.find((c: any) => c.id === chatId)?.draft, longDraft);
 
       // 8. Link previews (YouTube/Spotify) & SSRF rejection
       const ytPreview = await request(
@@ -676,25 +671,46 @@ test(
       const msgsAfterSkip = await request(`/chats/${chatId}/messages`, 'GET', undefined, alice.cookie);
       const skippedRow = msgsAfterSkip.data.find((m: any) => m.id === skippedMsg.data.id);
       assert.equal(skippedRow.link_preview, null);
-
-      // 10. Translation endpoint (multi-language + upstream API) & GIF search endpoint
-      const tr = await request(
-        '/translate',
+      // A link whose card is cached gets it with the message, without waiting on the site.
+      const linked = await request(
+        `/chats/${chatId}/messages`,
         'POST',
-        { text: 'hello world', targetLang: 'ru' },
+        { body: 'Ещё раз https://www.youtube.com/watch?v=dQw4w9WgXcQ', nonce: randomUUID() },
         alice.cookie,
       );
-      assert.equal(tr.status, 200);
-      assert.equal(tr.data.translated, 'Привет, мир!');
+      assert.equal(linked.status, 201);
+      const linkedRow = (
+        await request(`/chats/${chatId}/messages`, 'GET', undefined, bob.cookie)
+      ).data.find((m: any) => m.id === linked.data.id);
+      assert.equal(linkedRow.link_preview.provider, 'youtube');
 
-      const trDe = await request(
-        '/translate',
-        'POST',
-        { text: 'hello world', targetLang: 'de' },
-        alice.cookie,
+      // 10. GIF search endpoint and emoji-only reactions
+      // Reactions take emoji only.
+      const reactTarget = linked.data.id;
+      for (const emoji of ['ab', '12', '#', '<b>'])
+        assert.equal(
+          (
+            await request(
+              `/chats/${chatId}/messages/${reactTarget}/reactions`,
+              'POST',
+              { emoji },
+              bob.cookie,
+            )
+          ).status,
+          400,
+          emoji,
+        );
+      assert.equal(
+        (
+          await request(
+            `/chats/${chatId}/messages/${reactTarget}/reactions`,
+            'POST',
+            { emoji: '👍🏽' },
+            bob.cookie,
+          )
+        ).status,
+        200,
       );
-      assert.equal(trDe.status, 200);
-      assert.equal(trDe.data.translated, 'Hallo Welt!');
 
       const gifs = await request('/gifs?q=dance', 'GET', undefined, alice.cookie);
       assert.equal(gifs.status, 200);

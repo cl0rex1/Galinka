@@ -12,7 +12,7 @@ import {
 import { api, ApiError, upload } from './api';
 import { compressImage } from './image';
 import type { Transfer } from './AttachmentPreview';
-import type { Attachment, Chat, LinkPreview, Message, Person, ScheduledMessage } from './types';
+import type { Attachment, Chat, LinkPreview, Message, Person } from './types';
 import type { TypingAction } from './useSync';
 
 function extractComposerUrl(text: string): string | null {
@@ -93,12 +93,17 @@ export function useComposer({
     [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null),
     [dismissedPreviewUrl, setDismissedPreviewUrl] = useState<string | null>(null),
     [dismissedTikTok, setDismissedTikTok] = useState<Record<string, boolean>>({}),
-    [downloadingTikTok, setDownloadingTikTok] = useState(false),
-    [scheduledCount, setScheduledCount] = useState(0);
+    [downloadingTikTok, setDownloadingTikTok] = useState(false);
 
   const draftSnapshot = useRef<{ id: string; drafts: Record<string, string> } | null>(null);
   if (me) draftSnapshot.current = { id: me.id, drafts };
+  /** What the server holds for each chat, as far as this device knows. */
   const lastSyncedDrafts = useRef<Record<string, string>>({});
+  const pendingDraft = useRef<{
+    chatId: string;
+    value: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
 
   const textarea = useRef<HTMLTextAreaElement>(null),
     fileInput = useRef<HTMLInputElement>(null),
@@ -220,40 +225,49 @@ export function useComposer({
     setDismissedPreviewUrl(null);
   }
 
-  const refreshScheduledCount = useCallback(async (chatId = activeRef.current) => {
-    if (!chatId || !me) {
-      setScheduledCount(0);
-      return;
+  /** Saves a chat's draft on the server now, replacing a pending debounced save for it. */
+  const pushDraft = useCallback((chatId: string, value: string) => {
+    const pending = pendingDraft.current;
+    if (pending?.chatId === chatId) {
+      clearTimeout(pending.timer);
+      pendingDraft.current = null;
     }
-    try {
-      const items = await api<ScheduledMessage[]>(`/chats/${chatId}/scheduled`);
-      if (activeRef.current === chatId) setScheduledCount(items.length);
-    } catch {
-      /* Scheduled count badge is non-critical. */
-    }
-  }, [me?.id]);
+    if ((lastSyncedDrafts.current[chatId] ?? '') === value) return;
+    lastSyncedDrafts.current[chatId] = value;
+    void api(`/chats/${chatId}/draft`, 'PUT', { draft: value }).catch(() => {});
+  }, []);
 
   useEffect(() => {
-    void refreshScheduledCount(activeId);
-    if (activeId && active?.draft !== undefined) {
+    if (!activeId || active?.draft === undefined) return;
+    if (pendingDraft.current?.chatId !== activeId)
       lastSyncedDrafts.current[activeId] = active.draft;
-      setDrafts((prev) =>
-        !prev[activeId] && active.draft ? { ...prev, [activeId]: active.draft! } : prev,
-      );
-    }
-  }, [activeId, active?.draft, refreshScheduledCount]);
+    setDrafts((prev) =>
+      !prev[activeId] && active.draft ? { ...prev, [activeId]: active.draft! } : prev,
+    );
+  }, [activeId, active?.draft]);
 
   useEffect(() => {
-    if (!me || !activeId) return;
-    if ((lastSyncedDrafts.current[activeId] ?? '') === draft) return;
-    const targetChat = activeId;
-    const value = draft;
-    const timer = setTimeout(() => {
-      lastSyncedDrafts.current[targetChat] = value;
-      void api(`/chats/${targetChat}/draft`, 'PUT', { draft: value }).catch(() => {});
-    }, 600);
-    return () => clearTimeout(timer);
-  }, [draft, activeId, me?.id]);
+    const pending = pendingDraft.current;
+    // Leaving a chat saves its draft at once instead of dropping the debounced save.
+    if (pending && pending.chatId !== activeId) pushDraft(pending.chatId, pending.value);
+    else if (pending) {
+      clearTimeout(pending.timer);
+      pendingDraft.current = null;
+    }
+    if (!me || !activeId || (lastSyncedDrafts.current[activeId] ?? '') === draft) return;
+    const chatId = activeId,
+      value = draft;
+    pendingDraft.current = { chatId, value, timer: setTimeout(() => pushDraft(chatId, value), 600) };
+  }, [draft, activeId, me?.id, pushDraft]);
+
+  useEffect(() => {
+    const flush = () => {
+      const pending = pendingDraft.current;
+      if (pending) pushDraft(pending.chatId, pending.value);
+    };
+    window.addEventListener('pagehide', flush);
+    return () => window.removeEventListener('pagehide', flush);
+  }, [pushDraft]);
 
   const detectedUrl = !edit && !attachment ? extractComposerUrl(draft) : null;
   const tiktokUrl =
@@ -407,9 +421,17 @@ export function useComposer({
    * stays usable, and sends in one chat queue up so they arrive in order. The server's copy
    * replaces the bubble by its nonce; a failed one stays with a retry button.
    */
-  function sendText(id: string, text: string, replyTo?: Message, nonce?: string, silent = false) {
-    const messageNonce = nonce ?? nonces.current[id] ?? crypto.randomUUID();
-    delete nonces.current[id];
+  /** `special`: a sticker or GIF sent from the picker; the typed draft stays as it is. */
+  function sendText(
+    id: string,
+    text: string,
+    replyTo?: Message,
+    nonce?: string,
+    silent = false,
+    special = false,
+  ) {
+    const messageNonce = nonce ?? (special ? undefined : nonces.current[id]) ?? crypto.randomUUID();
+    if (!special) delete nonces.current[id];
     const local: Message = {
       id: `local-${messageNonce}`,
       chat_id: id,
@@ -440,13 +462,15 @@ export function useComposer({
         local,
       ]);
     }
-    const skipPreview = Boolean(detectedUrl && dismissedPreviewUrl === detectedUrl);
+    const skipPreview =
+      !special && Boolean(detectedUrl && dismissedPreviewUrl === detectedUrl);
     if (!nonce) {
-      lastSyncedDrafts.current[id] = '';
-      void api(`/chats/${id}/draft`, 'PUT', { draft: '' }).catch(() => {});
-      setDrafts((previous) => ({ ...previous, [id]: '' }));
-      setDismissedPreviewUrl(null);
-      setLinkPreview(null);
+      if (!special) {
+        pushDraft(id, '');
+        setDrafts((previous) => ({ ...previous, [id]: '' }));
+        setDismissedPreviewUrl(null);
+        setLinkPreview(null);
+      }
       setReplies((previous) => {
         const next = { ...previous };
         delete next[id];
@@ -539,8 +563,7 @@ export function useComposer({
         return next;
       });
       setDrafts((prev) => (prev[id] === originalDraft ? { ...prev, [id]: '' } : prev));
-      lastSyncedDrafts.current[id] = '';
-      void api(`/chats/${id}/draft`, 'PUT', { draft: '' }).catch(() => {});
+      pushDraft(id, '');
       setReplies((previous) => {
         if (previous[id]?.id !== replyDraft?.id) return previous;
         const next = { ...previous };
@@ -595,17 +618,19 @@ export function useComposer({
     const id = activeId,
       targetUrl = tiktokUrl,
       replyDraft = replies[id],
-      caption = draft.replace(targetUrl, '').trim() || undefined;
+      // The link as typed, which may differ from its normalized form.
+      caption = draft.replace(/https?:\/\/\S*tiktok\.com\S*/gi, '').trim() || undefined;
     setDownloadingTikTok(true);
     onError('');
     try {
-      await api(`/chats/${id}/tiktok`, 'POST', {
-        url: targetUrl,
-        caption,
-        replyTo: replyDraft?.id,
-      });
-      lastSyncedDrafts.current[id] = '';
-      void api(`/chats/${id}/draft`, 'PUT', { draft: '' }).catch(() => {});
+      // The server tries several sources and may fetch up to 50 MB.
+      await api(
+        `/chats/${id}/tiktok`,
+        'POST',
+        { url: targetUrl, caption, replyTo: replyDraft?.id },
+        { timeoutMs: 150_000 },
+      );
+      pushDraft(id, '');
       setDrafts((prev) => ({ ...prev, [id]: '' }));
       setReplies((prev) => {
         const next = { ...prev };
@@ -632,8 +657,7 @@ export function useComposer({
       scheduledFor,
     });
     if (bodyText === draft.trim()) {
-      lastSyncedDrafts.current[id] = '';
-      void api(`/chats/${id}/draft`, 'PUT', { draft: '' }).catch(() => {});
+      pushDraft(id, '');
       setDrafts((prev) => ({ ...prev, [id]: '' }));
     }
     setReplies((prev) => {
@@ -641,12 +665,12 @@ export function useComposer({
       delete next[id];
       return next;
     });
-    await refreshScheduledCount(id);
+    await refreshChats();
   }
 
   function sendSpecial(bodyText: string) {
     if (!activeId) return;
-    sendText(activeId, bodyText, replies[activeId]);
+    sendText(activeId, bodyText, replies[activeId], undefined, false, true);
     setEmojiOpen(false);
   }
 
@@ -681,8 +705,7 @@ export function useComposer({
     dismissTikTok,
     downloadTikTok,
     downloadingTikTok,
-    scheduledCount,
-    refreshScheduledCount,
+    scheduledCount: active?.scheduled_count ?? 0,
     scheduleMessage,
     sendSpecial,
     applyRemoteDraft,

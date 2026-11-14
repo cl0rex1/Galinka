@@ -117,6 +117,9 @@ const attachmentWord = (info: MessageInfo) =>
 /** Message text without formatting marks; spoilers stay hidden. Keep in sync with src/MessageText. */
 export const plainText = (text: string) =>
   text
+    .replace(/\[sticker:([0-9a-f]{2,6}(?:_[0-9a-f]{2,6})*)\]/g, (_, code: string) =>
+      `${String.fromCodePoint(...code.split('_').map((hex) => parseInt(hex, 16)))} Стикер`,
+    )
     .replace(/\[sticker:[^:\]]+:([^\]]+)\]/g, 'Стикер: $1')
     .replace(/\[sticker:[^\]]+\]/g, 'Стикер')
     .replace(/\[gif:[^:\]]+:([^\]]+)\]/g, 'GIF: $1')
@@ -127,7 +130,7 @@ export const plainText = (text: string) =>
 export function previewText(info: MessageInfo | undefined, mode: Preview): NotificationText {
   if (!info || mode === 'none') return generic;
   const group = info.kind === 'group';
-  const title = group ? info.title : info.sender;
+  const title = info.kind === 'saved' ? 'Напоминание' : group ? info.title : info.sender;
   if (mode === 'sender')
     return { title, body: group ? `${info.sender}: новое сообщение` : 'Новое сообщение' };
   const content = plainText(info.body).trim() || attachmentWord(info);
@@ -222,8 +225,10 @@ async function deliveryTransaction<T>(
   }
 }
 
+// Saved Messages get a job only for a due reminder, which goes to the author themself.
 const recipients = (table: 'push_devices' | 'web_push_subscriptions') => `FROM messages m
-  JOIN members member ON member.chat_id=m.chat_id AND member.user_id<>m.sender_id AND member.read_at<m.created_at AND NOT member.muted
+  JOIN chats chat ON chat.id=m.chat_id
+  JOIN members member ON member.chat_id=m.chat_id AND (member.user_id<>m.sender_id OR chat.kind='saved') AND member.read_at<m.created_at AND NOT member.muted
   JOIN ${table} d ON d.user_id=member.user_id
   JOIN users recipient ON recipient.id=d.user_id AND NOT recipient.blocked
   JOIN sessions s ON s.token=d.session_token AND s.user_id=d.user_id AND s.expires_at>now()

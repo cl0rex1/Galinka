@@ -147,7 +147,7 @@ test('photo viewer zooms and resets; dialogs survive a text selection dragged ou
   });
   await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
   await page.getByRole('button', { name: 'Открыть фото zoom.png', exact: true }).click();
-  const viewer = page.getByRole('dialog', { name: 'Просмотр фото zoom.png', exact: true });
+  const viewer = page.getByRole('dialog', { name: 'Просмотр фотографии', exact: true });
   await page.setViewportSize({ width: 320, height: 640 });
   for (const name of ['Уменьшить', 'Увеличить', 'Скачать фотографию', 'Закрыть фотографию']) {
     await expect(viewer.getByRole('button', { name, exact: true })).toBeInViewport({ ratio: 1 });

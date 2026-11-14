@@ -9,7 +9,8 @@ COPY . .
 RUN npm run build && npm prune --omit=dev
 
 FROM node:24-alpine
-RUN apk add --no-cache ffmpeg
+# yt-dlp: last fallback for TikTok downloads.
+RUN apk add --no-cache ffmpeg yt-dlp
 ARG BUILD_SHA=
 ENV NODE_ENV=production PORT=3001 BUILD_SHA=$BUILD_SHA
 WORKDIR /app

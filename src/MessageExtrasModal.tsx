@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Clock3, Plus, Send, Timer, Trash2, X } from 'lucide-react';
 import { api } from './api';
-import { Avatar } from './Avatar';
+
 import { CloseButton, Modal } from './ui';
-import type { Chat, Message, MessageDetails, MessageEdit, ScheduledMessage } from './types';
+import type { Chat, Message, MessageEdit, ScheduledMessage } from './types';
 
 const dateTimeFmt = new Intl.DateTimeFormat('ru', {
   day: 'numeric',
@@ -93,6 +93,7 @@ export function ScheduleMessageModal({
           <input
             type="datetime-local"
             value={when}
+            min={toLocalDateTimeInput(60_000)}
             onChange={(e) => setWhen(e.target.value)}
             required
           />
@@ -330,69 +331,6 @@ export function PollCreatorModal({
   );
 }
 
-export function MessageDetailsModal({
-  message,
-  onClose,
-  report,
-}: {
-  message: Message;
-  onClose: () => void;
-  report: (e: unknown) => void;
-}) {
-  const [details, setDetails] = useState<MessageDetails | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    setLoading(true);
-    api<MessageDetails>(`/chats/${message.chat_id}/messages/${message.id}/details`)
-      .then(setDetails)
-      .catch(report)
-      .finally(() => setLoading(false));
-  }, [message.chat_id, message.id]);
-
-  return (
-    <Modal error="" title="Реакции и прочтения" onClose={onClose}>
-      {loading ? (
-        <p className="muted">Загрузка…</p>
-      ) : (
-        <div className="details-modal-body">
-          <section>
-            <h3>Прочитали ({details?.readers?.length ?? 0})</h3>
-            {details?.readers?.length ? (
-              <ul className="details-person-list">
-                {details.readers.map((reader) => (
-                  <li key={reader.id}>
-                    <Avatar person={reader} size="small" />
-                    <div>
-                      <strong>{reader.name}</strong>
-                      <span>{dateTimeFmt.format(new Date(reader.read_at))}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="muted">Пока никто не прочитал.</p>
-            )}
-          </section>
-          {Boolean(details?.reactions?.length) && (
-            <section>
-              <h3>Реакции</h3>
-              <div className="details-reactions">
-                {details!.reactions.map((group) => (
-                  <div key={group.emoji} className="details-reaction-group">
-                    <span className="details-reaction-badge">{group.emoji}</span>
-                    <span>{group.users.map((u) => u.name).join(', ')}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
 export function EditHistoryModal({
   message,
   onClose,
@@ -451,6 +389,7 @@ export function AutoDeleteModal({
   onSelect: (seconds: number | null) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const options: { label: string; seconds: number | null }[] = [
     { label: 'Выключено', seconds: null },
     { label: '30 секунд', seconds: 30 },
@@ -461,8 +400,11 @@ export function AutoDeleteModal({
   ];
 
   return (
-    <Modal error="" title="Автоудаление сообщений" onClose={onClose}>
-      <p className="muted">Новые сообщения в этом чате будут автоматически удаляться по истечении выбранного срока.</p>
+    <Modal error={error} title="Автоудаление сообщений" onClose={onClose}>
+      <p className="muted">
+        Новые сообщения в этом чате удалятся у всех участников через выбранное время. Уже
+        отправленные останутся.
+      </p>
       <div className="auto-delete-options">
         {options.map((opt) => {
           const active = (chat.auto_delete_seconds ?? null) === opt.seconds;
@@ -474,9 +416,12 @@ export function AutoDeleteModal({
               className={`auto-delete-option ${active ? 'selected' : ''}`}
               onClick={async () => {
                 setBusy(true);
+                setError('');
                 try {
                   await onSelect(opt.seconds);
                   onClose();
+                } catch (e) {
+                  setError((e as Error).message || 'Не удалось изменить таймер.');
                 } finally {
                   setBusy(false);
                 }

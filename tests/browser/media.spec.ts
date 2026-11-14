@@ -59,7 +59,7 @@ test('photo attachment opens full-screen and keeps touch controls inside a narro
     .toBeGreaterThan(0);
   await page.getByRole('button', { name: 'Открыть фото photo.png', exact: true }).click();
   await expect(
-    page.getByRole('dialog', { name: 'Просмотр фото photo.png', exact: true }),
+    page.getByRole('dialog', { name: 'Просмотр фотографии', exact: true }),
   ).toBeVisible();
   const close = page.getByRole('button', { name: 'Закрыть фотографию', exact: true });
   const box = (await close.boundingBox())!;

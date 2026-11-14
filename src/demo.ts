@@ -89,22 +89,6 @@ function firstUrlIn(text: string): string | null {
   const m = text.replace(/\[(?:sticker|gif):[^\]]+\]/g, ' ').match(/https?:\/\/[^\s<>"'`]+/i);
   return m ? m[0].replace(/[.,!?;:)'"]+$/, '') : null;
 }
-function demoTranslate(text: string, targetLang: string) {
-  const dict: Record<string, string> = {
-    hello: 'Привет',
-    'hello world': 'Привет, мир',
-    'good morning': 'Доброе утро',
-    'how are you?': 'Как дела?',
-    привет: 'Hello',
-    спасибо: 'Thank you',
-  };
-  const lower = text.trim().toLowerCase();
-  const hasCyrillic = /[а-яё]/i.test(text);
-  const sourceLang = hasCyrillic ? 'ru' : 'en';
-  const translated =
-    dict[lower] || (sourceLang === targetLang ? text : `[${targetLang.toUpperCase()}] ${text}`);
-  return { translated, sourceLang, targetLang };
-}
 // Photos picked in the demo are kept as data URLs so they survive a reload.
 export const getDemoFileUrl = (id: string) => demoFiles.get(id) ?? state?.avatars?.[id];
 const asDataUrl = (file: Blob) =>
@@ -336,9 +320,7 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         : demoGifs,
     };
   }
-  if (pathname === '/translate' && method === 'POST') {
-    return demoTranslate(String(data.text || ''), String(data.targetLang || 'ru'));
-  }
+
   const updateSelf = (change: Partial<Person> & Record<string, unknown>) => {
     Object.assign(self, change);
     Object.assign(state.people.find((p) => p.id === self.id) ?? {}, change);
@@ -389,7 +371,12 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         sender_name: m.sender.name,
       }));
   } else if (pathname === '/chats' && method === 'GET')
-    result = [...state.chats].sort(
+    result = [...state.chats]
+      .map((chat) => ({
+        ...chat,
+        scheduled_count: state.scheduled.filter((item) => item.chat_id === chat.id).length,
+      }))
+      .sort(
       (a, b) =>
         Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) ||
         (b.last_message?.created_at || b.created_at).localeCompare(

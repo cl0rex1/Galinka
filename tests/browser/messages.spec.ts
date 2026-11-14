@@ -191,7 +191,7 @@ test.describe('in the demo', () => {
     await expect(poll).toContainText('Голосов: 1');
   });
 
-  test('edit history, details modal, translation and link preview work together', async ({
+  test('edit history, who reacted, and link previews with players work together', async ({
     page,
   }) => {
     const field = page.getByRole('textbox', { name: 'Сообщение', exact: true });
@@ -199,7 +199,7 @@ test.describe('in the demo', () => {
     await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
     await expect(row(page, 'hello world')).toBeVisible();
 
-    await menu(page, 'hello world', 'Редактировать');
+    await menu(page, 'hello world', 'Изменить');
     await field.fill('how are you?');
     await field.press('Enter');
     const editedRow = row(page, 'how are you?');
@@ -211,40 +211,38 @@ test.describe('in the demo', () => {
     await historyDialog.getByRole('button', { name: 'Закрыть' }).click();
     await expect(historyDialog).toHaveCount(0);
 
-    await menu(page, 'how are you?', 'Перевести');
-    await expect(editedRow.locator('.message-translation')).toContainText('Как дела?');
-
+    // Who read it is in the menu itself; more than three people fold into one row.
     await editedRow.locator('.message-text').click({ button: 'right' });
     await page.getByRole('button', { name: 'Реакция 👍' }).click();
-    await menu(page, 'how are you?', 'Кто прочитал');
-    const detailsDialog = page.getByRole('dialog', { name: 'Реакции и прочтения' });
-    await expect(detailsDialog).toContainText('👍');
-    await detailsDialog.getByRole('button', { name: 'Закрыть' }).click();
-    await expect(detailsDialog).toHaveCount(0);
+    await expect(editedRow.locator('.reactions')).toContainText('👍');
+    await editedRow.locator('.message-text').click({ button: 'right' });
+    const openMenu = page.locator('.message-menu[open] .message-menu-content');
+    await openMenu.getByRole('button', { name: '4 прочитали' }).click();
+    await expect(openMenu.locator('.menu-person')).toHaveCount(4);
+    await page.keyboard.press('Escape');
 
     await field.fill('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
     await expect(page.locator('.composer-link-preview')).toContainText('YouTube');
     await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
-    const previewWrap = page.locator('.link-preview-wrap').last();
-    await expect(previewWrap.locator('.link-preview-card')).toContainText('YouTube');
-    await previewWrap.getByRole('button', { name: 'Смотреть в чате' }).click();
-    await expect(previewWrap.locator('.link-preview-embed iframe')).toBeVisible();
-    await previewWrap.getByRole('button', { name: 'Скрыть плеер' }).click();
-    await expect(previewWrap.locator('.link-preview-embed iframe')).toHaveCount(0);
+    const preview = page.locator('.link-preview').last();
+    await expect(preview).toContainText('YouTube');
+    // The cover plays the video right in the chat.
+    await preview.getByRole('button', { name: /^Смотреть/ }).click();
+    await expect(preview.locator('iframe.link-preview-player')).toBeVisible();
 
     await field.fill('Без превью https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC');
     await expect(page.locator('.composer-link-preview')).toContainText('Spotify');
     await page.getByRole('button', { name: 'Убрать предпросмотр' }).click();
     await expect(page.locator('.composer-link-preview')).toHaveCount(0);
     await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
-    await expect(row(page, 'Без превью').locator('.link-preview-card')).toHaveCount(0);
+    await expect(row(page, 'Без превью').locator('.link-preview')).toHaveCount(0);
   });
 
   test('emoji picker supports search, recents, stickers and GIFs', async ({ page }) => {
     await page.evaluate(() => localStorage.removeItem('galinka-recent-emojis'));
     await page.getByRole('button', { name: 'Добавить эмодзи', exact: true }).click();
     await page.getByPlaceholder('Поиск эмодзи…').fill('ракета');
-    await page.locator('.emoji-grid button', { hasText: '🚀' }).click();
+    await page.getByRole('button', { name: 'ракета', exact: true }).click();
     await expect(page.getByRole('textbox', { name: 'Сообщение', exact: true })).toHaveValue('🚀');
 
     await page.getByRole('button', { name: 'Добавить эмодзи', exact: true }).click();
@@ -252,8 +250,9 @@ test.describe('in the demo', () => {
     await expect(page.locator('.emoji-section-label', { hasText: 'Недавние' })).toBeVisible();
 
     await page.getByRole('tab', { name: 'Стикеры' }).click();
-    await page.locator('.sticker-pick', { hasText: 'Привет!' }).click();
-    await expect(page.locator('.message-sticker')).toContainText('Привет!');
+    await page.getByRole('button', { name: 'Стикер 😀', exact: true }).first().click();
+    // A sticker has no bubble, and the typed text stays in the field.
+    await expect(page.locator('.bubble.bare-sticker .sticker-lottie').last()).toBeVisible();
 
     await page.getByRole('button', { name: 'Добавить эмодзи', exact: true }).click();
     await page.getByRole('tab', { name: 'GIF' }).click();

@@ -19,7 +19,6 @@ import {
   fetchLinkPreview,
   fetchPreviewImage,
   searchGifs,
-  translateText,
   type LinkPreviewData,
 } from './previews.js';
 import {
@@ -113,6 +112,7 @@ app.use(
           'https://www.youtube.com',
           'https://www.youtube-nocookie.com',
           'https://open.spotify.com',
+          'https://www.tiktok.com',
         ],
         'connect-src': ["'self'", ...apiOrigins],
         'object-src': ["'none'"],
@@ -158,6 +158,14 @@ app.use(
     message: { error: 'Слишком много запросов. Подождите минуту.' },
   }),
 );
+/** Endpoints that call third-party services on the user's behalf. */
+const externalLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 40,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { error: 'Слишком много запросов. Подождите минуту.' },
+});
 const authLimit = rateLimit({
   windowMs: 15 * 60_000,
   limit: 30,
@@ -268,6 +276,11 @@ async function transaction<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
   } finally {
     db.release();
   }
+}
+/** Saved Messages never notify the owner's other devices; a due reminder does (deliverScheduledRow). */
+async function queuePush(db: PoolClient, chatKind: string, messageId: string, silent?: boolean) {
+  if (anyPushEnabled && !silent && chatKind !== 'saved')
+    await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [messageId]);
 }
 async function notify(
   db: Pool | PoolClient,
@@ -824,6 +837,7 @@ app.get('/api/chats', auth, async (req, res) => {
     `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,c.avatar,c.auto_delete_seconds,m.read_at,m.pinned,m.muted,m.archived,m.draft,m.draft_updated_at,
  CASE WHEN c.kind='direct' THEN peer.name ELSE c.title END AS title,
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
+ (SELECT count(*)::int FROM scheduled_messages sm WHERE sm.chat_id=c.id AND sm.sender_id=$1) AS scheduled_count,
  CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color,'avatar',peer.avatar,'last_seen_at',peer.last_seen_at,'show_last_seen',peer.show_last_seen) END AS peer,
  CASE WHEN last.created_at IS NULL THEN NULL ELSE json_build_object('body',last.body,'created_at',last.created_at,'sender_id',last.sender_id,'file_id',last.file_id,'file',last.file) END AS last_message,
  (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=messages.id AND hm.user_id=$1) AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread,
@@ -964,8 +978,15 @@ app.put('/api/chats/:id/draft', auth, async (req, res) => {
     'UPDATE members SET draft=$1,draft_updated_at=clock_timestamp() WHERE chat_id=$2 AND user_id=$3',
     [draft, chat.id, user(req).id],
   );
+  // The text is read back per stream: pg_notify payloads stop at 8000 bytes. The device that
+  // typed it is skipped, or a late echo would overwrite what it typed since.
   await pool.query("SELECT pg_notify('galinka', $1)", [
-    JSON.stringify({ type: 'draft', chatId: chat.id, forUserId: user(req).id, draft }),
+    JSON.stringify({
+      type: 'draft',
+      chatId: chat.id,
+      forUserId: user(req).id,
+      origin: digest((req as AuthedRequest).sessionToken),
+    }),
   ]);
   res.json({ ok: true, draft });
 });
@@ -1115,21 +1136,28 @@ const emojiSchema = z
   .trim()
   .min(1)
   .max(16)
-  .refine((v) => !/[A-Za-z0-9\s<>]/.test(v) && /\p{Emoji}/u.test(v), 'Выберите корректный эмодзи.');
+  .refine(
+    (v) =>
+      /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\p{Emoji_Modifier}|[\u200d\ufe0f\u20e3#*0-9])+$/u.test(
+        v,
+      ) && /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u.test(v),
+    'Выберите корректный эмодзи.',
+  );
 
-async function resolveLinkPreview(text: string): Promise<LinkPreviewData | null> {
-  const url = extractFirstUrl(text);
-  if (!url) return null;
-  const cached = await pool.query<{ preview: LinkPreviewData }>(
+async function cachedLinkPreview(url: string) {
+  const { rows } = await pool.query<{ preview: LinkPreviewData }>(
     "SELECT preview FROM link_previews WHERE url=$1 AND fetched_at>now()-interval '7 days'",
     [url],
   );
-  if (cached.rows[0]) return cached.rows[0].preview;
+  return rows[0]?.preview ?? null;
+}
+async function resolveLinkPreview(text: string): Promise<LinkPreviewData | null> {
+  const url = extractFirstUrl(text);
+  if (!url) return null;
+  const cached = await cachedLinkPreview(url);
+  if (cached) return cached;
   try {
-    const preview = await Promise.race([
-      fetchLinkPreview(url),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3500)),
-    ]);
+    const preview = await fetchLinkPreview(url);
     if (preview) {
       await pool.query(
         `INSERT INTO link_previews(url,preview,fetched_at) VALUES($1,$2,clock_timestamp())
@@ -1141,6 +1169,33 @@ async function resolveLinkPreview(text: string): Promise<LinkPreviewData | null>
   } catch {
     return null;
   }
+}
+/**
+ * The card for a message's first link. A cached card is stored with the message; otherwise the
+ * message goes out at once and the card is attached by `attachLinkPreview` when the site answers.
+ */
+async function instantLinkPreview(text: string) {
+  const url = extractFirstUrl(text);
+  return url ? cachedLinkPreview(url) : null;
+}
+function attachLinkPreview(chatId: string, messageId: string, senderId: string, body: string) {
+  if (!extractFirstUrl(body)) return;
+  void resolveLinkPreview(body)
+    .then(async (preview) => {
+      if (!preview || stopping) return;
+      // Skip when the text was edited meanwhile or the card is already there.
+      const { rowCount } = await pool.query(
+        'UPDATE messages SET link_preview=$1 WHERE id=$2 AND body=$3 AND link_preview IS NULL AND deleted_at IS NULL',
+        [JSON.stringify(preview), messageId, body],
+      );
+      if (rowCount)
+        await notify(pool, chatId, undefined, undefined, {
+          event: 'message.updated',
+          messageId,
+          senderId,
+        });
+    })
+    .catch((error) => console.error('link preview', error));
 }
 
 const pollSelectSQL = `CASE WHEN p.id IS NULL THEN NULL ELSE json_build_object(
@@ -1213,7 +1268,8 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
     })
     .parse(req.body);
   requireValue(data.body || data.fileId, 400, 'Напишите сообщение или выберите файл.');
-  const linkPreview = data.skipPreview ? null : await resolveLinkPreview(data.body);
+  const linkPreview = data.skipPreview ? null : await instantLinkPreview(data.body);
+  let created = false;
   const id = await transaction(async (db) => {
     const chat = await lockedMember(String(req.params.id), user(req).id, db);
     // Resolve retries before checking references: the replied-to message might have
@@ -1262,8 +1318,8 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       ],
     );
     if (rows[0]) {
-      if (anyPushEnabled && !data.silent)
-        await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [rows[0].id]);
+      created = true;
+      await queuePush(db, chat.kind, rows[0].id, data.silent);
       const reply = chat.nelya ? nelyaReply(data.body) : null;
       if (reply)
         await db.query('INSERT INTO messages(id,chat_id,body,nonce,expires_at) VALUES($1,$2,$3,$4,$5)', [
@@ -1288,6 +1344,8 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
     requireValue(retried.rows[0], 409, 'Идентификатор сообщения уже использован.');
     return retried.rows[0].id;
   });
+  if (created && !linkPreview && !data.skipPreview)
+    attachLinkPreview(String(req.params.id), id, user(req).id, data.body);
   res.status(201).json({ id });
 });
 app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
@@ -1295,11 +1353,12 @@ app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
     .object({ body: z.string().trim().max(8000) })
     .strict()
     .parse(req.body);
-  const linkPreview = await resolveLinkPreview(body);
+  const instant = await instantLinkPreview(body);
+  let refetchPreview = false;
   await transaction(async (db) => {
     const chat = await lockedMember(String(req.params.id), user(req).id, db);
     const target = await db.query(
-      'SELECT body,file_id,poll_id FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 AND deleted_at IS NULL FOR UPDATE',
+      'SELECT body,file_id,poll_id,link_preview FROM messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 AND deleted_at IS NULL FOR UPDATE',
       [uuid.parse(req.params.messageId), chat.id, user(req).id],
     );
     requireValue(target.rows[0], 404, 'Можно изменить только своё сообщение.');
@@ -1310,9 +1369,13 @@ app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
         'INSERT INTO message_edits(id,message_id,previous_body,edited_at) VALUES($1,$2,$3,clock_timestamp())',
         [randomUUID(), req.params.messageId, target.rows[0].body],
       );
+      // Same link: keep the card (or its absence, if the author removed it).
+      const sameLink = extractFirstUrl(body) === extractFirstUrl(target.rows[0].body);
+      const preview = sameLink ? target.rows[0].link_preview : instant;
+      refetchPreview = !sameLink && !instant;
       await db.query(
         'UPDATE messages SET body=$1,edited_at=clock_timestamp(),link_preview=$2 WHERE id=$3',
-        [body, linkPreview ? JSON.stringify(linkPreview) : null, req.params.messageId],
+        [body, preview ? JSON.stringify(preview) : null, req.params.messageId],
       );
       await notify(db, chat.id, undefined, undefined, {
         event: 'message.updated',
@@ -1321,6 +1384,8 @@ app.patch('/api/chats/:id/messages/:messageId', auth, async (req, res) => {
       });
     }
   });
+  if (refetchPreview)
+    attachLinkPreview(String(req.params.id), String(req.params.messageId), user(req).id, body);
   res.json({ ok: true });
 });
 app.get('/api/chats/:id/messages/:messageId/edits', auth, async (req, res) => {
@@ -1539,8 +1604,7 @@ app.post('/api/chats/:id/forward', auth, async (req, res) => {
       ids.push(id);
     }
     // One notification for the batch, as for a single message.
-    if (anyPushEnabled)
-      await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [ids.at(-1)]);
+    await queuePush(db, chat.kind, ids.at(-1)!);
     // A single message travels with its event; a batch makes open chats refetch.
     await notify(
       db,
@@ -1555,7 +1619,7 @@ app.post('/api/chats/:id/forward', auth, async (req, res) => {
   });
   res.status(201).json({ ids });
 });
-app.get('/api/link-preview', auth, async (req, res) => {
+app.get('/api/link-preview', externalLimit, auth, async (req, res) => {
   const url = z.string().trim().min(1).max(2048).parse(req.query.url);
   await assertSafePublicUrl(url);
   const preview = await resolveLinkPreview(url);
@@ -1571,7 +1635,7 @@ app.get('/api/link-preview/image', auth, async (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=86400');
   res.send(result!.buffer);
 });
-app.post('/api/chats/:id/tiktok', auth, async (req, res) => {
+app.post('/api/chats/:id/tiktok', externalLimit, auth, async (req, res) => {
   const data = z
     .object({
       url: z.string().trim().min(1).max(2048),
@@ -1581,6 +1645,8 @@ app.post('/api/chats/:id/tiktok', auth, async (req, res) => {
     })
     .strict()
     .parse(req.body);
+  // Do not fetch 20 MB for a chat the user cannot post to.
+  await member(String(req.params.id), user(req).id);
   const downloaded = await downloadTikTokVideo(data.url);
   const fileId = randomUUID();
   const filepath = path.join(directory, fileId);
@@ -1618,15 +1684,15 @@ app.post('/api/chats/:id/tiktok', auth, async (req, res) => {
           messageId,
           chat.id,
           user(req).id,
-          data.caption ?? downloaded.title,
+          // The video speaks for itself; its TikTok description is mostly hashtags.
+          data.caption ?? '',
           fileId,
           randomUUID(),
           data.replyTo ?? null,
           expiresAt,
         ],
       );
-      if (anyPushEnabled && !data.silent)
-        await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [messageId]);
+      await queuePush(db, chat.kind, messageId, data.silent);
       await notify(db, chat.id, undefined, undefined, {
         event: 'message.created',
         messageId,
@@ -1641,25 +1707,49 @@ app.post('/api/chats/:id/tiktok', auth, async (req, res) => {
     throw err;
   }
 });
-app.get('/api/gifs', auth, async (req, res) => {
+// Animated stickers: Noto Animated Emoji (CC BY 4.0) as Lottie, fetched once and kept on disk.
+const stickerDir = path.join(directory, 'stickers');
+const stickerLoads = new Map<string, Promise<Buffer>>();
+async function loadSticker(code: string) {
+  const file = path.join(stickerDir, `${code}.json`);
+  try {
+    return await readFile(file);
+  } catch {
+    /* Not cached yet. */
+  }
+  const response = await fetch(
+    `https://fonts.gstatic.com/s/e/notoemoji/latest/${code}/lottie.json`,
+    { signal: AbortSignal.timeout(10_000) },
+  );
+  if (!response.ok) throw new HttpError(404, 'Стикер не найден.');
+  const data = Buffer.from(await response.arrayBuffer());
+  requireValue(data.length < 2 * 1024 * 1024, 502, 'Стикер недоступен.');
+  JSON.parse(data.toString('utf8'));
+  await mkdir(stickerDir, { recursive: true });
+  await writeFile(file, data);
+  return data;
+}
+app.get('/api/stickers/:code', async (req, res) => {
+  const code = String(req.params.code).replace(/\.json$/, '');
+  requireValue(/^[0-9a-f]{2,6}(?:_[0-9a-f]{2,6}){0,9}$/.test(code), 404, 'Стикер не найден.');
+  let load = stickerLoads.get(code);
+  if (!load) {
+    load = loadSticker(code);
+    stickerLoads.set(code, load);
+    const forget = () => stickerLoads.delete(code);
+    load.then(forget, forget);
+  }
+  const data = await load;
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+  res.send(data);
+});
+app.get('/api/gifs', externalLimit, auth, async (req, res) => {
   const q = z.string().trim().max(100).optional().parse(req.query.q) ?? '';
   const limitRaw = Number(req.query.limit ?? 18);
   const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(30, Math.floor(limitRaw))) : 18;
   const items = await searchGifs(q, limit);
   res.json({ items });
-});
-app.post('/api/translate', auth, async (req, res) => {
-  const data = z
-    .object({
-      text: z.string().trim().min(1).max(4000),
-      targetLang: z
-        .enum(['ru', 'en', 'de', 'fr', 'es', 'it', 'pt', 'zh', 'ja', 'ko', 'uk', 'kk', 'tr'])
-        .default('ru'),
-    })
-    .strict()
-    .parse(req.body);
-  const translated = await translateText(data.text, data.targetLang);
-  res.json(translated);
 });
 async function deliverScheduledRow(
   db: PoolClient,
@@ -1671,7 +1761,10 @@ async function deliverScheduledRow(
     file_id: string | null;
     reply_to_id: string | null;
     silent: boolean;
+    is_reminder: boolean;
   },
+  /** Delivered by the timer rather than "send now": a due reminder notifies its author. */
+  due: boolean,
 ) {
   await db.query('DELETE FROM scheduled_messages WHERE id=$1', [row.id]);
   const { rows: chats } = await db.query(
@@ -1691,7 +1784,7 @@ async function deliverScheduledRow(
   const expiresAt = chat.auto_delete_seconds
     ? new Date(Date.now() + Number(chat.auto_delete_seconds) * 1000)
     : null;
-  const preview = await resolveLinkPreview(row.body);
+  const preview = await instantLinkPreview(row.body);
   const messageId = randomUUID();
   await db.query(
     'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id,link_preview,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
@@ -1707,8 +1800,9 @@ async function deliverScheduledRow(
       expiresAt,
     ],
   );
-  if (anyPushEnabled && !row.silent)
+  if (due && row.is_reminder && chat.kind === 'saved' && anyPushEnabled)
     await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [messageId]);
+  else await queuePush(db, chat.kind, messageId, row.silent);
   const reply = chat.nelya ? nelyaReply(row.body) : null;
   if (reply)
     await db.query('INSERT INTO messages(id,chat_id,body,nonce,expires_at) VALUES($1,$2,$3,$4,$5)', [
@@ -1724,7 +1818,9 @@ async function deliverScheduledRow(
     senderId: row.sender_id,
     silent: row.silent || undefined,
   });
-  return messageId;
+  // The author's scheduled list shrank.
+  await notify(db, row.chat_id, undefined, undefined, undefined, row.sender_id);
+  return { messageId, needsPreview: !preview, row };
 }
 app.get('/api/chats/:id/scheduled', auth, async (req, res) => {
   const chat = await member(String(req.params.id), user(req).id);
@@ -1812,16 +1908,18 @@ app.delete('/api/chats/:id/scheduled/:scheduleId', auth, async (req, res) => {
   res.json({ ok: true });
 });
 app.post('/api/chats/:id/scheduled/:scheduleId/send', auth, async (req, res) => {
-  const messageId = await transaction(async (db) => {
+  const delivered = await transaction(async (db) => {
     const chat = await lockedMember(String(req.params.id), user(req).id, db);
     const { rows } = await db.query(
       'SELECT * FROM scheduled_messages WHERE id=$1 AND chat_id=$2 AND sender_id=$3 FOR UPDATE',
       [uuid.parse(req.params.scheduleId), chat.id, user(req).id],
     );
     requireValue(rows[0], 404, 'Отложенное сообщение не найдено.');
-    return deliverScheduledRow(db, rows[0]);
+    return deliverScheduledRow(db, rows[0], false);
   });
-  res.status(201).json({ id: messageId });
+  if (delivered?.needsPreview)
+    attachLinkPreview(delivered.row.chat_id, delivered.messageId, delivered.row.sender_id, delivered.row.body);
+  res.status(201).json({ id: delivered?.messageId ?? null });
 });
 app.post('/api/chats/:id/polls', auth, async (req, res) => {
   const data = z
@@ -1857,8 +1955,7 @@ app.post('/api/chats/:id/polls', auth, async (req, res) => {
       'INSERT INTO messages(id,chat_id,sender_id,body,nonce,poll_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
       [messageId, chat.id, user(req).id, data.question, data.nonce, pollId, expiresAt],
     );
-    if (anyPushEnabled)
-      await db.query('INSERT INTO push_jobs(message_id) VALUES($1)', [messageId]);
+    await queuePush(db, chat.kind, messageId);
     await notify(db, chat.id, undefined, undefined, {
       event: 'message.created',
       messageId,
@@ -2313,7 +2410,7 @@ async function listen() {
         revokedUserId?: string;
         removedUserId?: string;
         forUserId?: string;
-        draft?: string;
+        origin?: string;
         event?: 'message.created' | 'message.updated';
         messageId?: string;
         senderId?: string;
@@ -2335,7 +2432,11 @@ async function listen() {
       const messageCache = new Map<string, unknown>();
       const payloadFor = async (viewerId: string) => {
         if (change.type === 'draft') {
-          return { type: 'draft', chatId: change.chatId, draft: change.draft ?? '' };
+          const { rows: found } = await pool.query(
+            'SELECT draft FROM members WHERE chat_id=$1 AND user_id=$2',
+            [change.chatId, viewerId],
+          );
+          return { type: 'draft', chatId: change.chatId, draft: found[0]?.draft ?? '' };
         }
         if (change.event && change.messageId) {
           if (!messageCache.has(viewerId)) {
@@ -2353,6 +2454,7 @@ async function listen() {
       for (const [res, info] of streams)
         if (ids.has(info.userId)) {
           if (change.forUserId && info.userId !== change.forUserId) continue;
+          if (change.origin && digest(info.token) === change.origin) continue;
           if (change.type === 'typing' && info.userId === change.userId) continue;
           if (res.writableLength > 1024 * 1024) {
             res.end();
@@ -2589,12 +2691,17 @@ const stopPush = startPushWorker(pool);
 server.requestTimeout = 120_000;
 async function deliverDueScheduledMessages() {
   if (stopping) return;
-  await transaction(async (db) => {
+  const done = await transaction(async (db) => {
     const { rows } = await db.query(
       'SELECT * FROM scheduled_messages WHERE scheduled_for<=clock_timestamp() ORDER BY scheduled_for ASC LIMIT 20 FOR UPDATE SKIP LOCKED',
     );
-    for (const row of rows) await deliverScheduledRow(db, row);
+    const delivered = [];
+    for (const row of rows) delivered.push(await deliverScheduledRow(db, row, true));
+    return delivered;
   });
+  for (const item of done)
+    if (item?.needsPreview)
+      attachLinkPreview(item.row.chat_id, item.messageId, item.row.sender_id, item.row.body);
 }
 async function purgeExpiredMessages() {
   if (stopping) return;

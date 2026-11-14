@@ -446,7 +446,9 @@ export function useConversation({
     jumpingToLatest.current = false;
     if (hasOlder && !loading && event.deltaY < 0 && event.currentTarget.scrollTop <= 0)
       void loadOlder();
-    // A floating message menu would stay put while its message scrolls away.
+    // A floating message menu would stay put while its message scrolls away; scrolling
+    // inside the menu itself (the emoji grid, the list of readers) keeps it open.
+    if (event.target instanceof Element && event.target.closest('.message-menu-content')) return;
     document.querySelectorAll('details.message-menu[open]').forEach((menu) => closeMenu(menu));
   }
 

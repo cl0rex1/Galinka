@@ -1,8 +1,25 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Download, FileText, Play, X, ZoomIn, ZoomOut } from 'lucide-react';
+import {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  FileText,
+  Play,
+  X,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
 import { API_BASE, isDemo } from './api';
 import { getDemoFileUrl } from './demo';
-import type { Attachment } from './types';
+import type { Attachment, Person } from './types';
+import { Avatar } from './Avatar';
+import { GalleryContext, type GalleryPhoto } from './gallery';
 import { AudioPlayer } from './AudioPlayer';
 import { motionAllowed } from './ui';
 import { VideoPlayer } from './VideoPlayer';
@@ -40,6 +57,17 @@ export function MediaAttachment({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [failed, setFailed] = useState(false);
+  const gallery = useContext(GalleryContext);
+  const inGallery = gallery?.photos.some((photo) => photo.file.id === file.id);
+  const photos: GalleryPhoto[] = inGallery
+    ? gallery!.photos
+    : [
+        {
+          file,
+          sender: { id: '', name: fileLabel(file.name), color: 2, username: '' },
+          at: new Date().toISOString(),
+        },
+      ];
   const url = isDemo()
     ? getDemoFileUrl(file.id)
     : `${API_BASE}/files/${encodeURIComponent(file.id)}?inline=1`;
@@ -97,9 +125,14 @@ export function MediaAttachment({
       </button>
       {expanded && (
         <PhotoViewer
-          src={url}
-          name={file.name}
-          onDownload={onDownload}
+          photos={photos}
+          start={Math.max(
+            0,
+            photos.findIndex((photo) => photo.file.id === file.id),
+          )}
+          onDownload={(target) =>
+            target.id === file.id ? onDownload() : gallery?.download(target)
+          }
           onClose={() => setExpanded(false)}
         />
       )}
@@ -107,19 +140,30 @@ export function MediaAttachment({
   );
 }
 
+const viewerDate = new Intl.DateTimeFormat('ru', {
+  day: 'numeric',
+  month: 'long',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+const fileUrl = (file: Attachment) =>
+  isDemo() ? getDemoFileUrl(file.id) : `${API_BASE}/files/${encodeURIComponent(file.id)}?inline=1`;
+
 /**
- * Full-screen photo. Wheel, pinch, double click or tap and the buttons zoom around the pointer;
- * dragging pans a zoomed photo. At normal size a downward drag closes the viewer.
+ * Full-screen photo, as in Telegram: who sent it and when on top, the caption below, arrows and
+ * a horizontal swipe to the other photos of the chat. Wheel, pinch, double click or tap zoom
+ * around the pointer; dragging pans a zoomed photo; at normal size a vertical drag or a click
+ * beside the photo closes the viewer.
  */
 function PhotoViewer({
-  src,
-  name,
+  photos,
+  start,
   onDownload,
   onClose,
 }: {
-  src: string;
-  name: string;
-  onDownload: () => void;
+  photos: GalleryPhoto[];
+  start: number;
+  onDownload: (file: Attachment) => void;
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -127,26 +171,33 @@ function PhotoViewer({
   const picture = useRef<HTMLImageElement>(null);
   const view = useRef({ scale: 1, x: 0, y: 0 });
   const pointers = useRef(new Map<number, { x: number; y: number }>());
-  const gesture = useRef<{ distance: number; scale: number; dragY: number; moved: boolean }>({
-    distance: 0,
-    scale: 1,
-    dragY: 0,
-    moved: false,
-  });
+  const gesture = useRef({ distance: 0, scale: 1, dragX: 0, dragY: 0, moved: false, axis: '' });
   const lastTap = useRef(0);
-  const [zoomed, setZoomed] = useState(false);
+  const [index, setIndex] = useState(start);
+  const [scale, setScale] = useState(1);
   const [closing, setClosing] = useState(false);
+  const photo = photos[index];
+  const zoomed = scale > 1.01;
 
   useEffect(() => {
     const element = dialog.current!;
     element.showModal();
     return () => element.close();
   }, []);
+  // Each photo opens at normal size.
+  useEffect(() => {
+    view.current = { scale: 1, x: 0, y: 0 };
+    gesture.current.dragX = 0;
+    apply(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index]);
   const close = () => {
     if (closing) return;
     setClosing(true);
     setTimeout(onClose, motionAllowed() ? 180 : 0);
   };
+  const step = (by: number) =>
+    setIndex((current) => Math.min(photos.length - 1, Math.max(0, current + by)));
 
   // Write the transform straight to the image; React does not re-render on every move.
   function apply(animated: boolean) {
@@ -160,8 +211,8 @@ function PhotoViewer({
     v.x = Math.min(limitX, Math.max(-limitX, v.x));
     v.y = Math.min(limitY, Math.max(-limitY, v.y));
     img.style.transition = animated ? '' : 'none';
-    img.style.transform = `translate(${v.x}px, ${v.y + gesture.current.dragY}px) scale(${v.scale})`;
-    setZoomed(v.scale > 1.01);
+    img.style.transform = `translate(${v.x + gesture.current.dragX}px, ${v.y + gesture.current.dragY}px) scale(${v.scale})`;
+    setScale(v.scale);
   }
   /** Zoom to `next`, keeping the point under (clientX, clientY) in place. */
   function zoomAt(next: number, clientX?: number, clientY?: number, animated = true) {
@@ -177,11 +228,24 @@ function PhotoViewer({
     apply(animated);
   }
   const toggleZoom = (x?: number, y?: number) => zoomAt(view.current.scale > 1.01 ? 1 : 2.5, x, y);
+  /** Whether a point is on the drawn picture, not the empty space beside it. */
+  function onPicture(x: number, y: number) {
+    const img = picture.current;
+    if (!img?.naturalWidth) return true;
+    const box = img.getBoundingClientRect();
+    const fit = Math.min(box.width / img.naturalWidth, box.height / img.naturalHeight);
+    const w = img.naturalWidth * fit,
+      h = img.naturalHeight * fit;
+    const left = box.left + (box.width - w) / 2,
+      top = box.top + (box.height - h) / 2;
+    return x >= left && x <= left + w && y >= top && y <= top + h;
+  }
 
   function down(event: ReactPointerEvent<HTMLDivElement>) {
     event.currentTarget.setPointerCapture(event.pointerId);
     pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     gesture.current.moved = false;
+    gesture.current.axis = '';
     if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
       gesture.current.distance = Math.hypot(a.x - b.x, a.y - b.y);
@@ -193,7 +257,9 @@ function PhotoViewer({
     if (!last) return;
     const point = { x: event.clientX, y: event.clientY };
     pointers.current.set(event.pointerId, point);
-    if (Math.hypot(point.x - last.x, point.y - last.y) > 0) gesture.current.moved = true;
+    const dx = point.x - last.x,
+      dy = point.y - last.y;
+    if (Math.hypot(dx, dy) > 0) gesture.current.moved = true;
     if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
       const distance = Math.hypot(a.x - b.x, a.y - b.y);
@@ -207,31 +273,42 @@ function PhotoViewer({
       return;
     }
     if (view.current.scale > 1.01) {
-      view.current.x += point.x - last.x;
-      view.current.y += point.y - last.y;
+      view.current.x += dx;
+      view.current.y += dy;
       apply(false);
-    } else if (event.pointerType !== 'mouse' || event.buttons === 1) {
-      // Not zoomed: follow a vertical drag, fading the backdrop, to swipe the photo away.
-      gesture.current.dragY = Math.max(-200, gesture.current.dragY + point.y - last.y);
-      dialog.current?.style.setProperty(
-        '--drag',
-        String(Math.min(1, Math.abs(gesture.current.dragY) / 300)),
-      );
-      apply(false);
+      return;
     }
+    if (event.pointerType === 'mouse' && event.buttons !== 1) return;
+    // Not zoomed: sideways goes to the next photo, up or down swipes the viewer away.
+    const g = gesture.current;
+    g.axis ||= Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    if (g.axis === 'x') g.dragX += dx;
+    else {
+      g.dragY = Math.max(-200, g.dragY + dy);
+      dialog.current?.style.setProperty('--drag', String(Math.min(1, Math.abs(g.dragY) / 300)));
+    }
+    apply(false);
   }
   function up(event: ReactPointerEvent<HTMLDivElement>) {
     pointers.current.delete(event.pointerId);
     if (pointers.current.size) return;
-    const drag = gesture.current.dragY;
-    gesture.current.dragY = 0;
+    const g = gesture.current;
+    const { dragX, dragY } = g;
+    g.dragX = 0;
+    g.dragY = 0;
     dialog.current?.style.setProperty('--drag', '0');
-    if (Math.abs(drag) > 110) {
+    if (Math.abs(dragY) > 110) {
       close();
       return;
     }
+    if (dragX < -80 && index < photos.length - 1) return step(1);
+    if (dragX > 80 && index > 0) return step(-1);
     apply(true);
-    if (gesture.current.moved) return;
+    if (g.moved) return;
+    if (!zoomed && !onPicture(event.clientX, event.clientY)) {
+      close();
+      return;
+    }
     // Double tap (touch) zooms; a mouse double click is handled by onDoubleClick.
     if (event.pointerType !== 'mouse') {
       const now = Date.now();
@@ -242,12 +319,13 @@ function PhotoViewer({
     }
   }
 
+  if (!photo) return null;
   return (
     <dialog
       ref={dialog}
       className="media-dialog"
       data-closing={closing || undefined}
-      aria-label={`Просмотр фото ${name}`}
+      aria-label="Просмотр фотографии"
       onCancel={(event) => {
         event.preventDefault();
         close();
@@ -256,33 +334,20 @@ function PhotoViewer({
         if (event.key === '+' || event.key === '=') zoomAt(view.current.scale * 1.5);
         else if (event.key === '-') zoomAt(view.current.scale / 1.5);
         else if (event.key === '0') zoomAt(1);
+        else if (event.key === 'ArrowLeft') step(-1);
+        else if (event.key === 'ArrowRight') step(1);
       }}
     >
       <div className="media-dialog-head">
-        <h2>{name}</h2>
+        <Avatar person={photo.sender as Person} size="small" showPresence={false} />
+        <div className="media-dialog-title">
+          <strong>{photo.sender.name}</strong>
+          <span>{viewerDate.format(new Date(photo.at))}</span>
+        </div>
         <button
           type="button"
           className="icon-button"
-          onClick={() => zoomAt(view.current.scale / 1.5)}
-          disabled={!zoomed}
-          aria-label="Уменьшить"
-          title="Уменьшить"
-        >
-          <ZoomOut size={20} />
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          onClick={() => zoomAt(view.current.scale * 1.5)}
-          aria-label="Увеличить"
-          title="Увеличить"
-        >
-          <ZoomIn size={20} />
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          onClick={onDownload}
+          onClick={() => onDownload(photo.file)}
           aria-label="Скачать фотографию"
           title="Скачать"
         >
@@ -315,7 +380,74 @@ function PhotoViewer({
           )
         }
       >
-        <img ref={picture} className="media-full-image" src={src} alt={name} draggable={false} />
+        <img
+          key={photo.file.id}
+          ref={picture}
+          className="media-full-image"
+          src={fileUrl(photo.file)}
+          alt={photo.caption || 'Фотография'}
+          draggable={false}
+        />
+      </div>
+      {index > 0 && (
+        <button
+          type="button"
+          className="media-nav prev"
+          aria-label="Предыдущая фотография"
+          onClick={() => step(-1)}
+        >
+          <ChevronLeft size={30} />
+        </button>
+      )}
+      {index < photos.length - 1 && (
+        <button
+          type="button"
+          className="media-nav next"
+          aria-label="Следующая фотография"
+          onClick={() => step(1)}
+        >
+          <ChevronRight size={30} />
+        </button>
+      )}
+      <div className="media-dialog-foot">
+        {photo.caption && <p className="media-caption">{photo.caption}</p>}
+        <div className="media-toolbar">
+          {photos.length > 1 && (
+            <span className="media-counter">
+              {index + 1} из {photos.length}
+            </span>
+          )}
+          <div className="media-zoom">
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => zoomAt(view.current.scale / 1.5)}
+              disabled={!zoomed}
+              aria-label="Уменьшить"
+              title="Уменьшить"
+            >
+              <ZoomOut size={18} />
+            </button>
+            <button
+              type="button"
+              className="media-zoom-value"
+              onClick={() => zoomAt(1)}
+              title="Исходный размер"
+            >
+              {Math.round(scale * 100)}%
+            </button>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => zoomAt(view.current.scale * 1.5)}
+              disabled={scale >= 5}
+              aria-label="Увеличить"
+              title="Увеличить"
+            >
+              <ZoomIn size={18} />
+            </button>
+          </div>
+        </div>
       </div>
     </dialog>
   );

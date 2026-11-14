@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -14,32 +15,21 @@ import {
   Check,
   CheckCheck,
   Clock3,
-  CircleCheck,
-  Copy,
-  Download,
-  ExternalLink,
-  Eye,
   Forward,
-  History,
-  Languages,
   MoreHorizontal,
-  Pencil,
   Pin,
-  PinOff,
-  Play,
-  Plus,
   Reply,
   RotateCw,
   Timer,
-  Trash2,
   X,
 } from 'lucide-react';
-import { api, API_BASE } from './api';
-import { lookPrefs } from './Appearance';
+
 import { Avatar } from './Avatar';
-import { EmojiPicker } from './EmojiPicker';
+import { MessageMenuBody } from './MessageMenu';
 import { fileLabel, MediaAttachment } from './MediaAttachment';
-import { MessageText, plainText } from './MessageText';
+import { bareKind, MessageText, plainText } from './MessageText';
+import { LinkPreviewCard } from './LinkPreview';
+import { GalleryContext } from './gallery';
 import { closeMenu, openMenu as showMenu } from './ui';
 import type { Attachment, Chat, Message, Person } from './types';
 
@@ -83,7 +73,6 @@ export type MessageActions = {
   /** Start selecting with this message, or toggle it while selecting. */
   select: (message: Message) => void;
   edits: (message: Message) => void;
-  details: (message: Message) => void;
   votePoll: (message: Message, optionIndices: number[]) => void;
   closePoll: (message: Message) => void;
 };
@@ -142,59 +131,9 @@ const MessageRow = memo(function MessageRow({
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const held = useRef(false);
   const bot = !m.sender_id;
-  const [moreReactions, setMoreReactions] = useState(false);
-  const [embedOpen, setEmbedOpen] = useState(false);
-  const [translation, setTranslation] = useState<{
-    text: string;
-    open: boolean;
-    busy?: boolean;
-  } | null>(null);
-  const [autoTranslate, setAutoTranslate] = useState(() => lookPrefs().autoTranslate);
-  useEffect(() => {
-    const sync = () => setAutoTranslate(lookPrefs().autoTranslate);
-    window.addEventListener('galinka-look-changed', sync);
-    return () => window.removeEventListener('galinka-look-changed', sync);
-  }, []);
-  useEffect(() => {
-    if (
-      !autoTranslate ||
-      own ||
-      m.pending ||
-      m.poll ||
-      !m.body ||
-      m.body.startsWith('[') ||
-      !/[A-Za-z]{3,}/.test(m.body)
-    )
-      return;
-    let live = true;
-    api<{ translated: string }>('/translate', 'POST', { text: m.body, targetLang: 'ru' })
-      .then((res) => {
-        if (live && res.translated && res.translated !== m.body) {
-          setTranslation({ text: res.translated, open: true });
-        }
-      })
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [autoTranslate, own, m.id, m.body, m.pending, m.poll]);
-  async function toggleTranslation() {
-    if (translation) {
-      setTranslation((prev) => (prev ? { ...prev, open: !prev.open } : null));
-      return;
-    }
-    const targetLang = /[а-яё]/i.test(m.body) ? 'en' : 'ru';
-    setTranslation({ text: '', open: true, busy: true });
-    try {
-      const res = await api<{ translated: string }>('/translate', 'POST', {
-        text: m.body,
-        targetLang,
-      });
-      setTranslation({ text: res.translated, open: true, busy: false });
-    } catch {
-      setTranslation(null);
-    }
-  }
+  const bare = !m.file && !m.poll && !m.link_preview ? bareKind(m.body) : null;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuPoint = useRef<{ x: number; y: number } | undefined>(undefined);
   // Reactions seen on the previous render: new ones rise in, changed counts roll.
   const seen = useRef<Map<string, number> | null>(null);
   const previous = seen.current;
@@ -207,7 +146,7 @@ const MessageRow = memo(function MessageRow({
   }
   useEffect(() => cancelPress, []);
   function openMenu(point?: { x: number; y: number }) {
-    setMoreReactions(false);
+    menuPoint.current = point;
     document.querySelectorAll('details.message-menu[open]').forEach((element) => {
       if (element !== menu.current) closeMenu(element);
     });
@@ -307,7 +246,7 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
         <div className="message-content">
-          <div className="bubble">
+          <div className={`bubble ${bare ? `bare bare-${bare}` : ''}`}>
             {!own && !continued && kind === 'group' && (
               <div className={`sender-name tone-text-${(m.sender.color ?? 2) % 6}`}>
                 {m.sender.name}
@@ -351,69 +290,7 @@ const MessageRow = memo(function MessageRow({
             {m.body && !m.poll && (
               <MessageText text={m.body} highlight={highlight} onMention={actions.mention} />
             )}
-            {m.link_preview && (
-              <div className="link-preview-wrap">
-                {embedOpen && m.link_preview.embed_url ? (
-                  <div className={`link-preview-embed ${m.link_preview.provider || 'web'}`}>
-                    <iframe
-                      src={m.link_preview.embed_url}
-                      title={m.link_preview.title}
-                      sandbox="allow-scripts allow-same-origin allow-presentation"
-                      allow="encrypted-media; picture-in-picture"
-                      allowFullScreen
-                      loading="lazy"
-                    />
-                  </div>
-                ) : (
-                  <a
-                    className="link-preview-card"
-                    href={m.link_preview.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {m.link_preview.image && (
-                      <img
-                        className="link-preview-img"
-                        src={
-                          m.link_preview.image.startsWith('data:')
-                            ? m.link_preview.image
-                            : `${API_BASE}/link-preview/image?url=${encodeURIComponent(m.link_preview.image)}`
-                        }
-                        alt=""
-                        loading="lazy"
-                      />
-                    )}
-                    <div className="link-preview-meta">
-                      <span className="link-preview-site">
-                        {m.link_preview.site}
-                        <ExternalLink size={12} />
-                      </span>
-                      <strong>{m.link_preview.title}</strong>
-                      {m.link_preview.description && <p>{m.link_preview.description}</p>}
-                    </div>
-                  </a>
-                )}
-                {m.link_preview.embed_url && (
-                  <button
-                    type="button"
-                    className="embed-toggle-btn"
-                    onClick={() => setEmbedOpen((open) => !open)}
-                  >
-                    {embedOpen ? (
-                      <>
-                        <X size={13} />
-                        Скрыть плеер
-                      </>
-                    ) : (
-                      <>
-                        <Play size={13} />
-                        {m.link_preview.provider === 'spotify' ? 'Слушать в чате' : 'Смотреть в чате'}
-                      </>
-                    )}
-                  </button>
-                )}
-              </div>
-            )}
+            {m.link_preview && <LinkPreviewCard preview={m.link_preview} />}
             {m.poll && (
               <div className="poll-card" role="group" aria-label={`Опрос: ${m.poll.question}`}>
                 <div className="poll-question">{m.poll.question}</div>
@@ -435,8 +312,8 @@ const MessageRow = memo(function MessageRow({
                         disabled={m.poll!.closed || m.pending}
                         className={`poll-option ${opt.voted ? 'voted' : ''}`}
                         onClick={() => {
-                          const currentlyVoted = m.poll!.options
-                            .filter((o) => o.voted)
+                          const currentlyVoted = m
+                            .poll!.options.filter((o) => o.voted)
                             .map((o) => o.index);
                           const next = m.poll!.multiple
                             ? opt.voted
@@ -460,7 +337,10 @@ const MessageRow = memo(function MessageRow({
                         </span>
                         {!m.poll!.anonymous && opt.voters && opt.voters.length > 0 && (
                           <span className="poll-option-voters">
-                            {opt.voters.slice(0, 4).map((v) => v.name).join(', ')}
+                            {opt.voters
+                              .slice(0, 4)
+                              .map((v) => v.name)
+                              .join(', ')}
                           </span>
                         )}
                       </button>
@@ -479,11 +359,6 @@ const MessageRow = memo(function MessageRow({
                     </button>
                   )}
                 </div>
-              </div>
-            )}
-            {translation?.open && (
-              <div className="message-translation">
-                <span>{translation.busy ? 'Перевод…' : translation.text}</span>
               </div>
             )}
             <span className="message-time">
@@ -563,7 +438,11 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
         {!m.pending && !selecting && (
-          <details ref={menu} className="message-menu">
+          <details
+            ref={menu}
+            className="message-menu"
+            onToggle={(event) => setMenuOpen(event.currentTarget.open)}
+          >
             <summary
               aria-label="Действия с сообщением"
               onClick={(event) => {
@@ -576,131 +455,19 @@ const MessageRow = memo(function MessageRow({
               <MoreHorizontal size={18} />
             </summary>
             <div className="message-menu-content">
-              <span>Реакция</span>
-              <div className="reaction-bar">
-                {['❤', '👍', '😂', '🔥', '🥳', '😭'].map((emoji) => (
-                  <button
-                    key={emoji}
-                    aria-label={`Реакция ${emoji}`}
-                    onClick={(event) => {
-                      actions.react(m, emoji);
-                      const details = event.currentTarget.closest('details');
-                      if (details) closeMenu(details);
-                    }}
-                  >
-                    {emoji}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  className="reaction-more-btn"
-                  aria-label="Ещё реакции"
-                  onClick={() => setMoreReactions((v) => !v)}
-                >
-                  <Plus size={15} />
-                </button>
-              </div>
-              {moreReactions && (
-                <EmojiPicker
-                  open
-                  mode="reaction"
-                  onSelectEmoji={(emoji) => {
-                    actions.react(m, emoji);
-                    setMoreReactions(false);
-                    if (menu.current) closeMenu(menu.current);
-                  }}
-                />
-              )}
-              <button
-                className="message-action"
-                disabled={sending}
-                onClick={() => actions.reply(m)}
-              >
-                <Reply size={16} />
-                Ответить
-              </button>
-              <button className="message-action" onClick={() => actions.forward(m)}>
-                <Forward size={16} />
-                Переслать
-              </button>
-              {pinned !== null && (
-                <button className="message-action" onClick={() => actions.pin(m)}>
-                  {pinned ? <PinOff size={16} /> : <Pin size={16} />}
-                  {pinned ? 'Открепить' : 'Закрепить'}
-                </button>
-              )}
-              {m.body && (
-                <button className="message-action" onClick={() => actions.copy(m)}>
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
-                  {copied ? 'Скопировано' : 'Копировать'}
-                </button>
-              )}
-              {m.body && !m.poll && (
-                <button
-                  className="message-action"
-                  onClick={() => {
-                    void toggleTranslation();
-                    if (menu.current) closeMenu(menu.current);
-                  }}
-                >
-                  <Languages size={16} />
-                  {translation?.open ? 'Скрыть перевод' : 'Перевести'}
-                </button>
-              )}
-              {(kind === 'group' || (m.read_by || 0) > 0 || m.reactions.length > 0) && (
-                <button
-                  className="message-action"
-                  onClick={() => {
-                    actions.details(m);
-                    if (menu.current) closeMenu(menu.current);
-                  }}
-                >
-                  <Eye size={16} />
-                  Кто прочитал
-                </button>
-              )}
-              {m.edited_at && (
-                <button
-                  className="message-action"
-                  onClick={() => {
-                    actions.edits(m);
-                    if (menu.current) closeMenu(menu.current);
-                  }}
-                >
-                  <History size={16} />
-                  История правок
-                </button>
-              )}
-              {m.file && (
-                <button
-                  className="message-action"
-                  onClick={() => {
-                    actions.download(m.file!);
-                    if (menu.current) closeMenu(menu.current);
-                  }}
-                >
-                  <Download size={16} />
-                  Скачать
-                </button>
-              )}
-              {own && !m.poll && (
-                <button
-                  className="message-action"
-                  disabled={sending || savingEdit}
-                  onClick={() => actions.edit(m)}
-                >
-                  <Pencil size={16} />
-                  Редактировать
-                </button>
-              )}
-              <button className="message-action" onClick={() => actions.select(m)}>
-                <CircleCheck size={16} />
-                Выбрать
-              </button>
-              <button className="delete-action" onClick={() => actions.remove(m)}>
-                <Trash2 size={15} />
-                Удалить
-              </button>
+              <MessageMenuBody
+                m={m}
+                own={own}
+                kind={kind}
+                pinned={pinned}
+                copied={copied}
+                sending={sending}
+                savingEdit={savingEdit}
+                open={menuOpen}
+                actions={actions}
+                close={() => menu.current && closeMenu(menu.current)}
+                reposition={() => menu.current && actions.menu(menu.current, menuPoint.current)}
+              />
             </div>
           </details>
         )}
@@ -805,6 +572,22 @@ export const MessageList = memo(function MessageList({
   highlight?: string;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const gallery = useMemo(
+    () => ({
+      photos: messages
+        .filter(
+          (m) => !m.pending && m.file && /^image\/(png|jpeg|gif|webp)$/.test(m.file.mime || ''),
+        )
+        .map((m) => ({
+          file: m.file!,
+          sender: m.sender,
+          at: m.created_at,
+          caption: plainText(m.body).trim() || undefined,
+        })),
+      download: (file: Attachment) => actions.download(file),
+    }),
+    [messages, actions],
+  );
   const heightsRef = useRef<Map<string, number>>(new Map());
   const anchorRef = useRef<{ key: string; offset: number } | null>(null);
   const revealTargetRef = useRef<{ index: number; until: number } | null>(null);
@@ -884,7 +667,10 @@ export const MessageList = memo(function MessageList({
       )
         return;
       anchorRef.current = null;
-      const start = Math.max(0, Math.min(index - Math.floor(MIN_WINDOW / 2), msgs.length - MIN_WINDOW));
+      const start = Math.max(
+        0,
+        Math.min(index - Math.floor(MIN_WINDOW / 2), msgs.length - MIN_WINDOW),
+      );
       const end = Math.min(msgs.length, start + MIN_WINDOW);
       revealTargetRef.current = { index, until: Date.now() + 900 };
       flushSync(() => setRange({ start, end }));
@@ -932,7 +718,9 @@ export const MessageList = memo(function MessageList({
     const scroller = listEl?.closest<HTMLElement>('.messages');
     if (!listEl || !scroller) return;
     const escaped = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(anchor.key) : anchor.key;
-    const target = listEl.querySelector<HTMLElement>(`.message-group-item[data-item-key="${escaped}"]`);
+    const target = listEl.querySelector<HTMLElement>(
+      `.message-group-item[data-item-key="${escaped}"]`,
+    );
     if (!target) return;
     const actual = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
     if (Math.abs(actual - anchor.offset) >= 1) {
@@ -944,7 +732,8 @@ export const MessageList = memo(function MessageList({
   let bottomSpacer = 0;
   if (messages.length > VIRTUAL_THRESHOLD) {
     const heights = heightsRef.current;
-    for (let i = 0; i < start; i++) topSpacer += heights.get(itemKey(messages[i])) ?? DEFAULT_ROW_HEIGHT;
+    for (let i = 0; i < start; i++)
+      topSpacer += heights.get(itemKey(messages[i])) ?? DEFAULT_ROW_HEIGHT;
     for (let i = end; i < messages.length; i++)
       bottomSpacer += heights.get(itemKey(messages[i])) ?? DEFAULT_ROW_HEIGHT;
   }
@@ -966,56 +755,62 @@ export const MessageList = memo(function MessageList({
     days.at(-1)!.items.push(index);
   }
   return (
-    <div ref={listRef} className={`message-list kind-${kind}`}>
-      {topSpacer > 0 && (
-        <div className="message-spacer" style={{ height: topSpacer, flexShrink: 0 }} aria-hidden="true" />
-      )}
-      {days.map((day) => (
-        <section className="message-day" key={day.key}>
-          <div className="date-divider">
-            <span>{day.label}</span>
-          </div>
-          {day.items.map((index) => {
-            const message = messages[index];
-            const key = itemKey(message);
-            return (
-              // Keyed by nonce: the server's copy replaces a just-sent bubble without a remount.
-              <Fragment key={key}>
-                {message.id === unreadFrom && (
-                  <div className="unread-divider" role="separator">
-                    <span>Новые сообщения</span>
-                  </div>
-                )}
-                <MessageRow
-                  message={message}
-                  itemKey={key}
-                  own={message.sender_id === meId}
-                  canDeleteForAll={message.sender_id === meId || Boolean(moderator)}
-                  pinned={canPin ? message.id === pinnedId : null}
-                  selecting={Boolean(selection)}
-                  selected={Boolean(selection?.has(message.id))}
-                  kind={kind}
-                  continued={grouped(messages[index - 1], message)}
-                  showAvatar={!grouped(message, messages[index + 1])}
-                  fresh={fresh.has(message.id)}
-                  copied={copiedId === message.id}
-                  sending={sending}
-                  savingEdit={savingEdit}
-                  actions={actions}
-                  highlight={highlight}
-                />
-              </Fragment>
-            );
-          })}
-        </section>
-      ))}
-      {bottomSpacer > 0 && (
-        <div
-          className="message-spacer"
-          style={{ height: bottomSpacer, flexShrink: 0 }}
-          aria-hidden="true"
-        />
-      )}
-    </div>
+    <GalleryContext.Provider value={gallery}>
+      <div ref={listRef} className={`message-list kind-${kind}`}>
+        {topSpacer > 0 && (
+          <div
+            className="message-spacer"
+            style={{ height: topSpacer, flexShrink: 0 }}
+            aria-hidden="true"
+          />
+        )}
+        {days.map((day) => (
+          <section className="message-day" key={day.key}>
+            <div className="date-divider">
+              <span>{day.label}</span>
+            </div>
+            {day.items.map((index) => {
+              const message = messages[index];
+              const key = itemKey(message);
+              return (
+                // Keyed by nonce: the server's copy replaces a just-sent bubble without a remount.
+                <Fragment key={key}>
+                  {message.id === unreadFrom && (
+                    <div className="unread-divider" role="separator">
+                      <span>Новые сообщения</span>
+                    </div>
+                  )}
+                  <MessageRow
+                    message={message}
+                    itemKey={key}
+                    own={message.sender_id === meId}
+                    canDeleteForAll={message.sender_id === meId || Boolean(moderator)}
+                    pinned={canPin ? message.id === pinnedId : null}
+                    selecting={Boolean(selection)}
+                    selected={Boolean(selection?.has(message.id))}
+                    kind={kind}
+                    continued={grouped(messages[index - 1], message)}
+                    showAvatar={!grouped(message, messages[index + 1])}
+                    fresh={fresh.has(message.id)}
+                    copied={copiedId === message.id}
+                    sending={sending}
+                    savingEdit={savingEdit}
+                    actions={actions}
+                    highlight={highlight}
+                  />
+                </Fragment>
+              );
+            })}
+          </section>
+        ))}
+        {bottomSpacer > 0 && (
+          <div
+            className="message-spacer"
+            style={{ height: bottomSpacer, flexShrink: 0 }}
+            aria-hidden="true"
+          />
+        )}
+      </div>
+    </GalleryContext.Provider>
   );
 });

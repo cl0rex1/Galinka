@@ -150,7 +150,7 @@ test('real messenger features synchronize replies, edits, media and group permis
     await expect(answerAlice.locator('.message-quote')).toContainText('Алиса');
 
     await originalAlice.locator('summary').click();
-    await originalAlice.getByRole('button', { name: 'Редактировать', exact: true }).click();
+    await originalAlice.getByRole('button', { name: 'Изменить', exact: true }).click();
     const corrected = `Встречаемся в воскресенье ${suffix}`;
     await alice.getByRole('textbox', { name: 'Сообщение', exact: true }).fill(corrected);
     await alice.getByRole('button', { name: 'Сохранить изменения', exact: true }).click();
@@ -201,7 +201,7 @@ test('real messenger features synchronize replies, edits, media and group permis
     const preview = bob.getByRole('button', { name: 'Открыть фото friends.png', exact: true });
     await expect(preview.locator('img')).toHaveJSProperty('naturalWidth', 1);
     await preview.click();
-    const lightbox = bob.getByRole('dialog', { name: 'Просмотр фото friends.png', exact: true });
+    const lightbox = bob.getByRole('dialog', { name: 'Просмотр фотографии', exact: true });
     await expect(lightbox).toBeVisible();
     await expect(lightbox.locator('.media-full-image')).toHaveJSProperty('naturalWidth', 1);
     await lightbox.getByRole('button', { name: 'Закрыть фотографию', exact: true }).click();
