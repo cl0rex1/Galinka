@@ -2378,7 +2378,8 @@ app.get('/api/events', auth, async (req, res) => {
         res.end();
         return;
       }
-      res.write(': heartbeat\n\n');
+      // Named, so clients before 0.14 ignore it; newer ones use it to notice a dead stream.
+      res.write(': heartbeat\n\nevent: ping\ndata: {}\n\n');
     } catch {
       res.end();
     }

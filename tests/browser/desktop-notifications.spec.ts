@@ -63,8 +63,11 @@ async function desktopSession(page: Page) {
     };
     class FakeEventSource {
       closed = false;
+      readyState = 1;
       onmessage: ((event: MessageEvent) => void) | null = null;
       onerror: (() => void) | null = null;
+      onopen: (() => void) | null = null;
+      addEventListener() {}
       constructor() {
         sources.push(this);
       }
