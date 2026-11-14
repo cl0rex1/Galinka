@@ -19,6 +19,7 @@ import {
   ScanLine,
   WifiOff,
   ChevronDown,
+  CalendarDays,
   ChevronUp,
   Megaphone,
   SquarePen,
@@ -35,6 +36,7 @@ import { fileLabel } from './MediaAttachment';
 import { plainText } from './MessageText';
 import { Announcements } from './Announcements';
 import { api, ApiError, isDemo } from './api';
+import { badgeImage } from './sounds';
 import { useUpdates } from './updates';
 import { useLiveMessages } from './useLiveMessages';
 import { useConversation } from './useConversation';
@@ -59,7 +61,13 @@ import { Auth } from './Auth';
 import { GroupSettings } from './GroupSettings';
 import { Settings } from './Settings';
 import { PersonCard } from './PersonCard';
-import { SearchResults } from './SearchResults';
+import {
+  hasFilters,
+  rememberSearch,
+  searchParams,
+  SearchResults,
+  type SearchFilters,
+} from './SearchResults';
 import { installedApp, touchDevice } from './platform';
 import { currentAccent, ShareSheet } from './Share';
 import { ThemeImport } from './Appearance';
@@ -140,6 +148,9 @@ export default function App() {
       null,
     ),
     [jumpTarget, setJumpTarget] = useState<{ chat: string; id: string } | null>(null),
+    [searchFilters, setSearchFilters] = useState<SearchFilters>({}),
+    /** The sidebar search is open: focused, typed into, or filtered. */
+    [searchActive, setSearchActive] = useState(false),
     [themeImport, setThemeImport] = useState<CustomTheme | null>(null),
     [loginRequest, setLoginRequest] = useState(''),
     [scanning, setScanning] = useState(false),
@@ -304,6 +315,9 @@ export default function App() {
     if (!demo) {
       const result = unreadCount ? badge.setAppBadge?.(unreadCount) : badge.clearAppBadge?.();
       void result?.catch(() => {});
+      void window.galinkaDesktop
+        ?.setBadge?.(unreadCount, unreadCount ? badgeImage(unreadCount) : null)
+        .catch(() => {});
     }
   }, [unreadCount, demo]);
 
@@ -557,10 +571,13 @@ export default function App() {
     void conversation.showMessage(hits[next]);
   }
 
-  // Search in the sidebar: chats, people and messages from every chat, as in Telegram.
+  // Search in the sidebar: chats, people and messages from every chat, as in Telegram; filters
+  // narrow the messages by author, kind and days.
+  const searchKey = searchParams(listQuery.trim(), searchFilters);
   useEffect(() => {
     const query = listQuery.trim();
-    if (query.length < 2) {
+    const filtered = hasFilters(searchFilters);
+    if (query.length < 2 && !filtered) {
       setFound(null);
       return;
     }
@@ -568,10 +585,12 @@ export default function App() {
     const timer = setTimeout(() => {
       const options = { signal: controller.signal };
       Promise.all([
-        api<SearchHit[]>(`/search?q=${encodeURIComponent(query)}`, 'GET', undefined, options),
-        api<Person[]>(`/users?q=${encodeURIComponent(query)}`, 'GET', undefined, options),
+        api<SearchHit[]>(`/search?${searchKey}`, 'GET', undefined, options),
+        query.length >= 2 && !filtered
+          ? api<Person[]>(`/users?q=${encodeURIComponent(query)}`, 'GET', undefined, options)
+          : Promise.resolve([]),
       ])
-        .then(([messages, people]) => setFound({ query, messages, people }))
+        .then(([messages, people]) => setFound({ query: searchKey, messages, people }))
         .catch((cause) => {
           if (!controller.signal.aborted) report(cause);
         });
@@ -580,7 +599,12 @@ export default function App() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [listQuery]);
+  }, [searchKey]);
+  function closeSearch() {
+    setListQuery('');
+    setSearchFilters({});
+    setSearchActive(false);
+  }
 
   // A message picked in search opens once its chat has loaded.
   useEffect(() => {
@@ -596,6 +620,7 @@ export default function App() {
   }, [jumpTarget, conversation.loading, activeId, conversation.messages]);
 
   // Folders: the list slides in from the side of the folder chosen, the underline follows.
+  const datePicker = useRef<HTMLInputElement>(null);
   const folderTabs = useTabIndicator(filter);
   const info = usePresence(infoOpen, 260);
   const search = usePresence(searchOpen, 160);
@@ -672,7 +697,7 @@ export default function App() {
 
   async function setChatPreference(
     chat: Chat,
-    changes: { pinned?: boolean; muted?: boolean; archived?: boolean },
+    changes: { pinned?: boolean; muted?: boolean; archived?: boolean; sound?: Chat['sound'] },
   ) {
     if (preferenceBusy) return;
     setPreferenceBusy(true);
@@ -981,14 +1006,20 @@ export default function App() {
             placeholder="Поиск"
             value={listQuery}
             onChange={(e) => setListQuery(e.target.value)}
+            onFocus={() => setSearchActive(true)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape') return;
+              closeSearch();
+              e.currentTarget.blur();
+            }}
           />
-          {listQuery && (
-            <button aria-label="Очистить поиск" onClick={() => setListQuery('')}>
+          {(listQuery || searchActive) && (
+            <button aria-label="Закрыть поиск" onClick={closeSearch}>
               <X size={16} />
             </button>
           )}
         </label>
-        {filter !== 'Архив' && !listQuery.trim() && (
+        {filter !== 'Архив' && !searchActive && !listQuery.trim() && (
           <div className="chat-filters" aria-label="Фильтр чатов" ref={folderTabs}>
             {folders.slice(0, 4).map((f) => (
               <button
@@ -1002,20 +1033,28 @@ export default function App() {
             ))}
           </div>
         )}
-        {listQuery.trim() ? (
+        {searchActive || listQuery.trim() || hasFilters(searchFilters) ? (
           <SearchResults
             query={listQuery.trim()}
             chats={chats}
-            found={found?.query === listQuery.trim() ? found : null}
+            found={found?.query === searchKey ? found : null}
             me={me}
+            filters={searchFilters}
+            onFilters={setSearchFilters}
+            onQuery={setListQuery}
             onChat={(id) => {
+              rememberSearch(me.id, listQuery, id);
               select(id);
-              setListQuery('');
+              closeSearch();
             }}
-            onPerson={setPerson}
+            onPerson={(person) => {
+              rememberSearch(me.id, listQuery);
+              setPerson(person);
+            }}
             onMessage={(hit) => {
+              rememberSearch(me.id, listQuery, hit.chat_id);
               select(hit.chat_id);
-              setListQuery('');
+              closeSearch();
               setJumpTarget({ chat: hit.chat_id, id: hit.id });
             }}
           />
@@ -1250,6 +1289,32 @@ export default function App() {
                   }}
                   autoFocus
                 />
+                <IconButton
+                  label="Перейти к дате"
+                  onClick={() => {
+                    const picker = datePicker.current;
+                    if (!picker) return;
+                    picker.max = new Date().toLocaleDateString('sv');
+                    try {
+                      picker.showPicker();
+                    } catch {
+                      picker.click();
+                    }
+                  }}
+                >
+                  <CalendarDays size={18} />
+                </IconButton>
+                <input
+                  ref={datePicker}
+                  type="date"
+                  className="date-jump"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  onChange={(e) => {
+                    if (e.target.value) void conversation.showDate(e.target.value);
+                    e.target.value = '';
+                  }}
+                />
                 {hits && (
                   <span className="search-count" role="status">
                     {hits.length ? `${hitIndex + 1} из ${hits.length}` : 'Не найдено'}
@@ -1374,6 +1439,7 @@ export default function App() {
                         key={active.id}
                         messages={conversation.messages}
                         meId={me.id}
+                        meUsername={me.username}
                         kind={active.kind}
                         moderator={active.kind === 'group' && active.owner_id === me.id}
                         unreadFrom={conversation.unreadFrom}
@@ -1399,7 +1465,11 @@ export default function App() {
                   meId={me.id}
                   messages={conversation.messages}
                   awayFromBottom={conversation.awayFromBottom}
-                  onJumpToLatest={conversation.jumpToLatest}
+                  onJumpToLatest={
+                    conversation.returnTo ? conversation.goBack : conversation.jumpToLatest
+                  }
+                  canReturn={Boolean(conversation.returnTo)}
+                  onJumpToMention={() => void conversation.jumpToMention()}
                   onTyping={(action) => sendTyping(active.id, action)}
                   onError={setError}
                   onOpenPoll={() => setModal('poll')}
@@ -1419,6 +1489,7 @@ export default function App() {
                   nelyaBusy={working}
                   onClose={() => setInfoOpen(false)}
                   onMute={() => void setChatPreference(active, { muted: !active.muted })}
+                  onSound={(sound) => void setChatPreference(active, { sound })}
                   onSearch={() => {
                     if (window.innerWidth <= 1180) setInfoOpen(false);
                     setSearchOpen(true);

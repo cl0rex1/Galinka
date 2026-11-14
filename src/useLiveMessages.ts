@@ -16,7 +16,7 @@ export type LiveContext = {
     cache: MutableRefObject<Map<string, CachedConversation>>;
     requestEpoch: MutableRefObject<number>;
     chatRequestEpoch: MutableRefObject<number>;
-    notification: MutableRefObject<{ notify: (chatId: string, messageId?: string) => void }>;
+    notification: MutableRefObject<{ notify: (chat: Chat, messageId: string) => void }>;
   };
   set: {
     messages: Dispatch<SetStateAction<Message[]>>;
@@ -78,7 +78,7 @@ export function useLiveMessages(c: LiveContext) {
     const show = (chat: Chat | undefined) => {
       if (
         chat &&
-        !chat.muted &&
+        // Muted or not: a mention gets through a muted group, and the server knows the rules.
         !(
           document.visibilityState === 'visible' &&
           document.hasFocus() &&
@@ -86,7 +86,7 @@ export function useLiveMessages(c: LiveContext) {
           sectionRef.current === 'chats'
         )
       )
-        notificationRef.current.notify(chat.id, messageId);
+        notificationRef.current.notify(chat, messageId);
     };
     const target = chatsRef.current.find((chat) => chat.id === chatId);
     if (target) show(target);

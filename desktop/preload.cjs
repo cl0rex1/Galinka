@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('galinkaDesktop', {
   install: () => ipcRenderer.invoke('updates:install'),
   releases: () => ipcRenderer.invoke('updates:releases'),
   setAutoDownload: (enabled) => ipcRenderer.invoke('updates:auto-download', enabled),
+  setBadge: (count, image) => ipcRenderer.invoke('badge:set', { count, image }),
   onStatus: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('updates:status', listener);

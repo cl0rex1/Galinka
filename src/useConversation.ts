@@ -10,6 +10,7 @@ import {
 import { flushSync } from 'react-dom';
 import { api, ApiError } from './api';
 import { firstUnread, reconcileMessages, type CachedConversation } from './conversation';
+import { clearChatNotifications } from './notifications';
 import { closeMenu, motionAllowed } from './ui';
 import type { Chat, Message, Person } from './types';
 
@@ -57,7 +58,11 @@ export function useConversation({
     [unreadFrom, setUnreadFrom] = useState<string | null>(null),
     [loading, setLoading] = useState(false),
     [hasOlder, setHasOlder] = useState(false),
-    [paging, setPaging] = useState(false);
+    [paging, setPaging] = useState(false),
+    /** Where the reader was before jumping to a message far away; the "back" button goes there. */
+    [returnTo, setReturnTo] = useState<string | null>(null);
+  const returnRef = useRef<string | null>(null);
+  returnRef.current = returnTo;
 
   const conversationCache = useRef(new Map<string, CachedConversation>());
   const cacheOwner = useRef<string | null>(null);
@@ -99,6 +104,7 @@ export function useConversation({
       lastRead.current[id] = lastMessageId;
       try {
         await api(`/chats/${id}/read`, 'POST', { lastMessageId });
+        void clearChatNotifications(id);
         // Refresh instead of clearing the count blindly: a newer message may have arrived meanwhile.
         await refreshChats();
       } catch (e) {
@@ -177,6 +183,7 @@ export function useConversation({
     setAwayFromBottom(cached ? !cached.following : false);
     setNewMessageIds([]);
     setUnreadFrom(null);
+    setReturnTo(null);
     onChatOpenedRef.current?.();
     const unread = chatsRef.current.find((chat) => chat.id === activeId)?.unread ?? 0;
     jumpingToLatest.current = false;
@@ -341,6 +348,81 @@ export function useConversation({
     if (!jumpingToLatest.current && activeId && latest) void markRead(activeId, latest.id);
   }
 
+  /** Open the oldest unread message that names the viewer. */
+  async function jumpToMention() {
+    const id = activeRef.current;
+    if (!id) return;
+    try {
+      const [first] = await api<string[]>(`/chats/${id}/mentions`);
+      if (first && id === activeRef.current) await showMessage(first);
+    } catch (e) {
+      report(e);
+    }
+  }
+
+  // Back at the newest messages: there is nowhere to return to.
+  useEffect(() => {
+    if (!awayFromBottom) setReturnTo(null);
+  }, [awayFromBottom]);
+
+  /**
+   * Where the reader is, before a jump changes it: the message a third of the way down the
+   * screen. Null at the newest messages, where the "down" button already leads back.
+   */
+  function readingPlace() {
+    return followBottom.current ? null : visibleMessageId();
+  }
+  function visibleMessageId() {
+    const el = scroller.current;
+    if (!el) return null;
+    const line = el.getBoundingClientRect().top + el.clientHeight / 3;
+    for (const row of el.querySelectorAll<HTMLElement>('[data-message-id]'))
+      if (row.getBoundingClientRect().bottom >= line) return row.dataset.messageId ?? null;
+    return null;
+  }
+
+  /**
+   * Prepend everything from a message (`through=<id>`) or a moment (`since=<iso>`) up to what is
+   * loaded, in one request instead of a page at a time. False when nothing was added.
+   */
+  async function loadThrough(query: string) {
+    const id = activeRef.current;
+    const epoch = requestEpoch.current;
+    if (!id) return false;
+    let added = false;
+    // The server sends at most 3000 at once; a longer way back takes a few calls.
+    for (let round = 0; round < 10; round++) {
+      const oldest = messagesRef.current.find((message) => !message.pending);
+      const before = oldest ? `&before=${encodeURIComponent(oldest.id)}` : '';
+      setPaging(true);
+      let data: { messages: Message[]; hasOlder: boolean; complete: boolean };
+      try {
+        data = await api(`/chats/${id}/messages?${query}${before}`);
+      } catch (e) {
+        if (activeRef.current === id && epoch === requestEpoch.current) report(e);
+        return added;
+      } finally {
+        setPaging(false);
+      }
+      if (activeRef.current !== id || epoch !== requestEpoch.current) return false;
+      if (!Array.isArray(data?.messages)) return added;
+      followBottom.current = false;
+      setAwayFromBottom(true);
+      const el = scroller.current;
+      if (el) scrollRestore.current = { id, top: el.scrollTop, height: el.scrollHeight };
+      flushSync(() => {
+        setMessages((prev) => [
+          ...data.messages.filter((m) => !prev.some((old) => old.id === m.id)),
+          ...prev,
+        ]);
+        setHasOlder(data.hasOlder);
+      });
+      added ||= data.messages.length > 0;
+      if (data.complete) break;
+    }
+    return added;
+  }
+
   /** Prepend one page of older history. Returns false when there is nothing older. */
   function loadOlder() {
     const id = activeRef.current;
@@ -380,9 +462,16 @@ export function useConversation({
     return promise;
   }
 
-  /** Scroll to a message and light it up, loading older pages until it is on screen. */
-  async function showMessage(messageId: string) {
+  /**
+   * Scroll to a message and light it up, loading the history up to it first when it is far back.
+   * The place the reader left is kept for the "back" button, unless `remember` is false.
+   */
+  async function showMessage(
+    messageId: string,
+    { remember = true, from = readingPlace() }: { remember?: boolean; from?: string | null } = {},
+  ) {
     const id = activeRef.current;
+    if (remember && from && from !== messageId && !returnRef.current) setReturnTo(from);
     for (let page = 0; page < 40 && id === activeRef.current; page++) {
       let row = scroller.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
       if (!row && scroller.current) {
@@ -407,9 +496,37 @@ export function useConversation({
         setTimeout(() => row.classList.remove('flash'), 1200);
         return;
       }
-      if (!(await loadOlder())) break;
+      // Loaded but not drawn yet (a long list draws only what is near the screen): try again.
+      if (messagesRef.current.some((message) => message.id === messageId)) continue;
+      // Not loaded: fetch everything down to it at once; page by page only as a fallback.
+      const loaded = page === 0 ? await loadThrough(`through=${messageId}`) : await loadOlder();
+      if (!loaded) break;
     }
     if (id === activeRef.current) onError('Сообщение не найдено в истории.');
+  }
+
+  /** Back to where the reader was before the last jump. */
+  function goBack() {
+    const target = returnRef.current;
+    setReturnTo(null);
+    if (target) void showMessage(target, { remember: false });
+    else jumpToLatest();
+  }
+
+  /** Open the chat at a day (YYYY-MM-DD, local): its first message, or the next one after it. */
+  async function showDate(day: string) {
+    const start = new Date(`${day}T00:00`);
+    if (Number.isNaN(start.getTime())) return;
+    // Taken now: loading the way back moves what is on screen.
+    const from = readingPlace();
+    const oldest = messagesRef.current.find((message) => !message.pending);
+    if (hasOlder && (!oldest || new Date(oldest.created_at) > start))
+      await loadThrough(`since=${encodeURIComponent(start.toISOString())}`);
+    const target = messagesRef.current.find(
+      (message) => !message.pending && new Date(message.created_at) >= start,
+    );
+    if (target) await showMessage(target.id, { from });
+    else onError('С этого дня сообщений нет.');
   }
 
   async function refreshMembers() {
@@ -502,7 +619,11 @@ export function useConversation({
     loadMessages,
     loadOlder,
     showMessage,
+    showDate,
+    returnTo,
+    goBack,
     jumpToLatest,
+    jumpToMention,
     refreshMembers,
     syncCacheOwner,
     resetConversation,

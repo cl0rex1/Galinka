@@ -267,7 +267,10 @@ test(
       const transports: PushTransports = {
         browser: async (sub, payload) => {
           browserCalls.push(sub.endpoint);
-          assert.deepEqual(JSON.parse(payload), {
+          // The unread count for the app icon comes along; the message text never does.
+          const { badge, ...rest } = JSON.parse(payload);
+          assert.ok(Number.isInteger(badge) && badge >= 1);
+          assert.deepEqual(rest, {
             title: 'Galinka',
             body: 'Новое сообщение',
             chatId: chat,

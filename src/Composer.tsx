@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import {
   ArrowDown,
   ArrowUp,
+  AtSign,
   BarChart2,
   BellOff,
   CalendarClock,
@@ -14,6 +15,7 @@ import {
   Pencil,
   Reply,
   Smile,
+  Undo2,
   X,
 } from 'lucide-react';
 import { lookPrefs } from './Appearance';
@@ -34,6 +36,8 @@ export function Composer({
   messages,
   awayFromBottom,
   onJumpToLatest,
+  onJumpToMention,
+  canReturn = false,
   onTyping,
   onError,
   onOpenPoll,
@@ -46,6 +50,10 @@ export function Composer({
   messages: Message[];
   awayFromBottom: boolean;
   onJumpToLatest: () => void;
+  /** Opens the oldest unread message that names you. */
+  onJumpToMention: () => void;
+  /** The reader jumped away from where they were: the round button takes them back first. */
+  canReturn?: boolean;
   onTyping: (action: 'voice' | 'video') => void;
   onError: (message: string) => void;
   onOpenPoll: () => void;
@@ -111,12 +119,22 @@ export function Composer({
         always sits above it, however tall the reply bar and draft make it. */}
       <button
         type="button"
+        className={`jump-to-latest jump-to-mention ${active.unread_mentions ? 'shown' : ''}`}
+        inert={!active.unread_mentions}
+        onClick={onJumpToMention}
+        aria-label="К упоминанию"
+      >
+        <AtSign size={20} />
+        {!!active.unread_mentions && active.unread_mentions > 1 && <b>{active.unread_mentions}</b>}
+      </button>
+      <button
+        type="button"
         className={`jump-to-latest ${awayFromBottom ? 'shown' : ''}`}
         inert={!awayFromBottom}
         onClick={onJumpToLatest}
-        aria-label="К последним сообщениям"
+        aria-label={canReturn ? 'Вернуться к месту, откуда перешли' : 'К последним сообщениям'}
       >
-        <ArrowDown size={20} />
+        {canReturn ? <Undo2 size={20} /> : <ArrowDown size={20} />}
         {active.unread > 0 && <b key={active.unread}>{active.unread}</b>}
       </button>
       {contextBar.mounted && shownContext && (

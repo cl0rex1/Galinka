@@ -1,6 +1,7 @@
 import { Bell, BellOff, QrCode, Search, Users, X } from 'lucide-react';
 import { Avatar, seenText } from './Avatar';
 import { ProfileHero } from './ProfileHero';
+import { CHAT_SOUNDS, playTone } from './sounds';
 import { IconButton } from './ui';
 import type { Chat, Person } from './types';
 
@@ -15,6 +16,7 @@ export function ChatInfo({
   nelyaBusy,
   onClose,
   onMute,
+  onSound,
   onSearch,
   onInvite,
   onManage,
@@ -30,6 +32,7 @@ export function ChatInfo({
   nelyaBusy: boolean;
   onClose: () => void;
   onMute: () => void;
+  onSound: (sound: NonNullable<Chat['sound']>) => void;
   onSearch: () => void;
   onInvite: () => void;
   onManage: () => void;
@@ -96,6 +99,36 @@ export function ChatInfo({
               )}
             </button>
           ))}
+        </div>
+      )}
+      {chat.kind !== 'saved' && (
+        <div className="info-section">
+          <div className="settings-row">
+            <div>
+              <h3>Звук уведомлений</h3>
+              <p>
+                {chat.muted
+                  ? 'Чат без уведомлений: звучат только упоминания.'
+                  : 'Для этого чата, на всех устройствах.'}
+              </p>
+            </div>
+            <select
+              aria-label="Звук уведомлений"
+              value={chat.sound ?? 'default'}
+              disabled={muteBusy}
+              onChange={(event) => {
+                const sound = event.target.value as NonNullable<Chat['sound']>;
+                playTone(sound);
+                onSound(sound);
+              }}
+            >
+              {CHAT_SOUNDS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       )}
       <div className="info-section">

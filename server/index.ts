@@ -37,6 +37,8 @@ import {
   webPushSubscriptionSchema,
   startPushWorker,
   messageInfoSQL,
+  mentionsSQL,
+  quietSQL,
   previewText,
 } from './push.js';
 
@@ -204,14 +206,22 @@ type User = {
   show_last_seen: boolean;
   group_invites: 'all' | 'nobody';
   notify_preview: 'full' | 'sender' | 'none';
+  notify_direct: boolean;
+  notify_groups: boolean;
+  mention_policy: 'all' | 'known' | 'none';
+  quiet_from: number | null;
+  quiet_to: number | null;
+  time_zone: string;
 };
+const accountSQL = `show_last_seen,group_invites,notify_preview,notify_direct,notify_groups,mention_policy,quiet_from,quiet_to,time_zone`;
 type AuthedRequest = Request & { user: User; sessionToken: string };
 async function auth(req: Request, res: Response, next: NextFunction) {
   try {
     const raw = readCookie(req.headers.cookie);
     const token = digest(raw);
     const { rows } = await pool.query(
-      `SELECT u.id,u.username,u.name,u.color,u.role,u.avatar,u.show_last_seen,u.group_invites,u.notify_preview,(s.expires_at<now()+interval '15 days' OR s.last_seen_at<now()-interval '1 hour') AS stale
+      `SELECT u.id,u.username,u.name,u.color,u.role,u.avatar,u.show_last_seen,u.group_invites,u.notify_preview,
+       u.notify_direct,u.notify_groups,u.mention_policy,u.quiet_from,u.quiet_to,u.time_zone,(s.expires_at<now()+interval '15 days' OR s.last_seen_at<now()-interval '1 hour') AS stale
        FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>now() AND NOT u.blocked`,
       [token],
     );
@@ -342,16 +352,18 @@ const pushToken = z.object({
     .min(20)
     .max(4096)
     .regex(/^[A-Za-z0-9_:\-]+$/),
+  /** The Android build draws its own notification with Reply / Mark as read. */
+  actions: z.boolean().optional(),
 });
 app.post('/api/push/devices', auth, async (req, res) => {
   requireValue(pushEnabled, 503, 'Пуши пока не подключены.');
-  const { token } = pushToken.parse(req.body);
+  const { token, actions } = pushToken.parse(req.body);
   await transaction(async (db) => {
     await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user(req).id]);
     await db.query(
-      `INSERT INTO push_devices(token,user_id,session_token) VALUES($1,$2,$3)
-      ON CONFLICT(token) DO UPDATE SET user_id=$2,session_token=$3,updated_at=now()`,
-      [token, user(req).id, (req as AuthedRequest).sessionToken],
+      `INSERT INTO push_devices(token,user_id,session_token,native_actions) VALUES($1,$2,$3,$4)
+      ON CONFLICT(token) DO UPDATE SET user_id=$2,session_token=$3,native_actions=$4,updated_at=now()`,
+      [token, user(req).id, (req as AuthedRequest).sessionToken, actions === true],
     );
     await db.query(
       'DELETE FROM push_devices WHERE user_id=$1 AND token IN (SELECT token FROM push_devices WHERE user_id=$1 ORDER BY updated_at DESC OFFSET 12)',
@@ -806,17 +818,46 @@ app.patch('/api/me/settings', auth, async (req, res) => {
       show_last_seen: z.boolean().optional(),
       group_invites: z.enum(['all', 'nobody']).optional(),
       notify_preview: z.enum(['full', 'sender', 'none']).optional(),
+      notify_direct: z.boolean().optional(),
+      notify_groups: z.boolean().optional(),
+      mention_policy: z.enum(['all', 'known', 'none']).optional(),
+      /** Minutes after local midnight; null turns quiet hours off. */
+      quiet_hours: z
+        .object({
+          from: z.number().int().min(0).max(1439),
+          to: z.number().int().min(0).max(1439),
+        })
+        .nullable()
+        .optional(),
+      time_zone: z.string().min(1).max(64).optional(),
     })
     .strict()
     .parse(req.body);
+  if (data.time_zone) {
+    const known = await pool.query('SELECT 1 FROM pg_timezone_names WHERE name=$1', [
+      data.time_zone,
+    ]);
+    requireValue(known.rowCount, 400, 'Неизвестный часовой пояс.');
+  }
   const { rows } = await pool.query(
     `UPDATE users SET show_last_seen=COALESCE($1,show_last_seen),group_invites=COALESCE($2,group_invites),
-     notify_preview=COALESCE($3,notify_preview) WHERE id=$4
-     RETURNING ${personSQL},show_last_seen,group_invites,notify_preview`,
+     notify_preview=COALESCE($3,notify_preview),notify_direct=COALESCE($4,notify_direct),
+     notify_groups=COALESCE($5,notify_groups),mention_policy=COALESCE($6,mention_policy),
+     quiet_from=CASE WHEN $7 THEN $8::smallint ELSE quiet_from END,
+     quiet_to=CASE WHEN $7 THEN $9::smallint ELSE quiet_to END,
+     time_zone=COALESCE($10,time_zone) WHERE id=$11
+     RETURNING ${personSQL},${accountSQL}`,
     [
       data.show_last_seen ?? null,
       data.group_invites ?? null,
       data.notify_preview ?? null,
+      data.notify_direct ?? null,
+      data.notify_groups ?? null,
+      data.mention_policy ?? null,
+      data.quiet_hours !== undefined,
+      data.quiet_hours?.from ?? null,
+      data.quiet_hours?.to ?? null,
+      data.time_zone ?? null,
       user(req).id,
     ],
   );
@@ -825,22 +866,33 @@ app.patch('/api/me/settings', auth, async (req, res) => {
 // Desktop and in-app notifications ask for the text the same way pushes build it.
 app.get('/api/messages/:id/notification', auth, async (req, res) => {
   const id = uuid.parse(req.params.id);
+  // The same decision a push makes: whether to show it at all, and whether without a sound.
   const { rows } = await pool.query(
-    `${messageInfoSQL} AND EXISTS(SELECT 1 FROM members WHERE chat_id=m.chat_id AND user_id=$2)`,
+    `SELECT info.*,
+       (c.kind='group' AND ${mentionsSQL('msg', '$2')}) AS mention,
+       (c.kind='saved' OR (c.kind='group' AND ${mentionsSQL('msg', '$2')})
+         OR (NOT member.muted AND CASE c.kind WHEN 'direct' THEN recipient.notify_direct WHEN 'group' THEN recipient.notify_groups ELSE true END)) AS notify,
+       ${quietSQL} AS quiet
+     FROM (${messageInfoSQL}) info
+     JOIN messages msg ON msg.id=$1 JOIN chats c ON c.id=msg.chat_id
+     JOIN members member ON member.chat_id=msg.chat_id AND member.user_id=$2
+     JOIN users recipient ON recipient.id=$2`,
     [id, user(req).id],
   );
   requireValue(rows[0], 404, 'Сообщение не найдено.');
-  res.json(previewText(rows[0], user(req).notify_preview));
+  const { mention, notify, quiet } = rows[0];
+  res.json({ ...previewText(rows[0], user(req).notify_preview), mention, notify, quiet });
 });
 app.get('/api/chats', auth, async (req, res) => {
   const { rows } = await pool.query(
-    `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,c.avatar,c.auto_delete_seconds,m.read_at,m.pinned,m.muted,m.archived,m.draft,m.draft_updated_at,
+    `SELECT c.id,c.kind,c.owner_id,c.nelya,c.created_at,c.avatar,c.auto_delete_seconds,m.read_at,m.pinned,m.muted,m.sound,m.archived,m.draft,m.draft_updated_at,
  CASE WHEN c.kind='direct' THEN peer.name ELSE c.title END AS title,
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
  (SELECT count(*)::int FROM scheduled_messages sm WHERE sm.chat_id=c.id AND sm.sender_id=$1) AS scheduled_count,
  CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color,'avatar',peer.avatar,'last_seen_at',peer.last_seen_at,'show_last_seen',peer.show_last_seen) END AS peer,
  CASE WHEN last.created_at IS NULL THEN NULL ELSE json_build_object('body',last.body,'created_at',last.created_at,'sender_id',last.sender_id,'file_id',last.file_id,'file',last.file) END AS last_message,
  (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=messages.id AND hm.user_id=$1) AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread,
+ CASE WHEN c.kind='group' THEN (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=messages.id AND hm.user_id=$1) AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1 AND ${mentionsSQL('messages', '$1')}) ELSE 0 END AS unread_mentions,
  (SELECT json_build_object('id',pm.id,'body',pm.body,'file_name',pf.name) FROM messages pm LEFT JOIN files pf ON pf.id=pm.file_id
    WHERE pm.id=c.pinned_message_id AND pm.deleted_at IS NULL AND (pm.expires_at IS NULL OR pm.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=pm.id AND hm.user_id=$1)) AS pinned_message
  FROM chats c JOIN members m ON m.chat_id=c.id
@@ -957,6 +1009,8 @@ app.patch('/api/chats/:id/preferences', auth, async (req, res) => {
       pinned: z.boolean().optional(),
       muted: z.boolean().optional(),
       archived: z.boolean().optional(),
+      /** Notification sound for this chat; "silent" still notifies, without a sound. */
+      sound: z.enum(['default', 'soft', 'bright', 'silent']).optional(),
     })
     .strict()
     .refine((value) => Object.keys(value).length > 0)
@@ -964,8 +1018,8 @@ app.patch('/api/chats/:id/preferences', auth, async (req, res) => {
   await transaction(async (db) => {
     const chat = await lockedMember(String(req.params.id), user(req).id, db);
     await db.query(
-      'UPDATE members SET pinned=COALESCE($1,pinned),muted=COALESCE($2,muted),archived=COALESCE($3,archived) WHERE chat_id=$4 AND user_id=$5',
-      [data.pinned, data.muted, data.archived, chat.id, user(req).id],
+      'UPDATE members SET pinned=COALESCE($1,pinned),muted=COALESCE($2,muted),archived=COALESCE($3,archived),sound=COALESCE($6,sound) WHERE chat_id=$4 AND user_id=$5',
+      [data.pinned, data.muted, data.archived, chat.id, user(req).id, data.sound],
     );
     await notify(db, chat.id);
   });
@@ -1083,6 +1137,20 @@ app.post('/api/chats/:id/read', auth, async (req, res) => {
       ]);
   });
   res.json({ ok: true });
+});
+// Unread messages that name the viewer, oldest first: where the "@" button leads.
+app.get('/api/chats/:id/mentions', auth, async (req, res) => {
+  const chat = await member(String(req.params.id), user(req).id);
+  if (chat.kind !== 'group') return res.json([]);
+  const { rows } = await pool.query(
+    `SELECT msg.id FROM messages msg JOIN members mem ON mem.chat_id=msg.chat_id AND mem.user_id=$2
+     WHERE msg.chat_id=$1 AND msg.deleted_at IS NULL AND (msg.expires_at IS NULL OR msg.expires_at>now())
+     AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=msg.id AND hm.user_id=$2)
+     AND msg.created_at>mem.read_at AND msg.sender_id IS DISTINCT FROM $2 AND ${mentionsSQL('msg', '$2')}
+     ORDER BY msg.created_at,msg.id LIMIT 100`,
+    [chat.id, user(req).id],
+  );
+  res.json(rows.map((row) => row.id));
 });
 app.post('/api/chats/:id/invite', auth, async (req, res) => {
   const token = randomBytes(24).toString('base64url');
@@ -1216,9 +1284,11 @@ const pollSelectSQL = `CASE WHEN p.id IS NULL THEN NULL ELSE json_build_object(
   ),'[]'::json)
 ) END AS poll`;
 
-const visibleMessageWhere = `m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$2)`;
+/** @все or @all as a word of its own; the client highlights by the same rule. */
+const MENTION_ALL = /(^|[^\p{L}\p{N}_@])@(все|all)(?![\p{L}\p{N}_])/iu;
+const visibleMessageWhere =`m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$2)`;
 
-const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.expires_at,m.link_preview,m.nonce,m.forwarded_from,
+const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.expires_at,m.link_preview,m.nonce,m.forwarded_from,m.mention_all,
  CASE WHEN u.id IS NULL THEN json_build_object('id','nelya','name','Неля','username','nelya','color',5) ELSE json_build_object('id',u.id,'name',u.name,'username',u.username,'color',u.color) END AS sender,
  CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file,
  CASE WHEN replied.id IS NULL THEN NULL ELSE json_build_object('id',replied.id,'body',replied.body,'sender',json_build_object('id',COALESCE(reply_user.id::text,'nelya'),'name',COALESCE(reply_user.name,'Неля')),'file_name',reply_file.name) END AS reply,
@@ -1233,6 +1303,36 @@ app.get('/api/chats/:id/messages', auth, async (req, res) => {
   await member(String(req.params.id), user(req).id);
   const q = z.string().trim().max(100).optional().parse(req.query.q);
   const before = uuid.optional().parse(req.query.before);
+  const through = uuid.optional().parse(req.query.through);
+  const since = z.coerce.date().optional().parse(req.query.since);
+  if (through || since) {
+    // Everything from a message (or a date) up to `before`, plus a little older context, in
+    // one request: jumping to a search hit or a day far back must not page 60 at a time.
+    // ponytail: capped at 3000 messages per call; the client repeats the call past the cap.
+    const anchor = through
+      ? '(SELECT created_at,id FROM messages WHERE id=$3 AND chat_id=$1)'
+      : "($3::timestamptz,'00000000-0000-0000-0000-000000000000'::uuid)";
+    const where = `m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) AND ${visibleMessageWhere}`;
+    const params = [req.params.id, user(req).id, through ?? since!.toISOString(), before ?? null];
+    const range = await pool.query(
+      `${messageSQL} WHERE ${where} AND (m.created_at,m.id)>=${anchor}
+       AND ($4::uuid IS NULL OR (m.created_at,m.id)<(SELECT created_at,id FROM messages WHERE id=$4 AND chat_id=$1))
+       ORDER BY m.created_at DESC,m.id DESC LIMIT 3000`,
+      params,
+    );
+    const complete = range.rows.length < 3000;
+    const older = complete
+      ? await pool.query(
+          `${messageSQL} WHERE ${where} AND (m.created_at,m.id)<${anchor} ORDER BY m.created_at DESC,m.id DESC LIMIT 20`,
+          params.slice(0, 3),
+        )
+      : { rows: [] };
+    return res.json({
+      messages: [...older.rows.reverse(), ...range.rows.reverse()],
+      hasOlder: !complete || older.rows.length === 20,
+      complete,
+    });
+  }
   const { rows } = await pool.query(
     `${messageSQL} WHERE m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) AND ${visibleMessageWhere} AND ($3::text IS NULL OR m.body ILIKE $3) AND ($4::uuid IS NULL OR (m.created_at,m.id)<(SELECT created_at,id FROM messages WHERE id=$4 AND chat_id=$1)) ORDER BY m.created_at DESC,m.id DESC LIMIT 60`,
     [req.params.id, user(req).id, q ? contains(q) : null, before || null],
@@ -1242,16 +1342,52 @@ app.get('/api/chats/:id/messages', auth, async (req, res) => {
 // Search across every chat the user is in; the client opens a hit in its conversation.
 // ILIKE pattern for a literal substring; the messages_body_trgm index serves it.
 const contains = (text: string) => `%${text.replace(/[\\%_]/g, '\\$&')}%`;
+/** SQL per attachment kind; names follow what the app records (see fileLabel on the client). */
+const searchKinds = {
+  photo: "f.id IS NOT NULL AND f.mime LIKE 'image/%'",
+  video: "f.id IS NOT NULL AND f.mime LIKE 'video/%' AND f.name NOT LIKE 'Кружок%'",
+  voice: "f.id IS NOT NULL AND (f.name LIKE 'Голосовое-%' OR f.name LIKE 'Кружок%')",
+  file: "f.id IS NOT NULL AND f.mime NOT LIKE 'image/%' AND f.mime NOT LIKE 'video/%' AND f.name NOT LIKE 'Голосовое-%'",
+  link: "m.body ~* 'https?://'",
+} as const;
 app.get('/api/search', auth, async (req, res) => {
-  const q = z.string().trim().min(2).max(100).parse(req.query.q);
+  const filters = z
+    .object({
+      q: z.string().trim().max(100).optional(),
+      /** A user id, or "me". */
+      from: z.union([uuid, z.literal('me')]).optional(),
+      type: z.enum(['photo', 'video', 'voice', 'file', 'link']).optional(),
+      after: z.coerce.date().optional(),
+      before: z.coerce.date().optional(),
+    })
+    .parse(req.query);
+  const q = filters.q || '';
+  // Without words, a filter alone is enough ("all photos from Anna").
+  requireValue(
+    q.length >= 2 || filters.from || filters.type || filters.after || filters.before,
+    400,
+    'Введите хотя бы две буквы или выберите фильтр.',
+  );
+  const from = filters.from === 'me' ? user(req).id : filters.from;
   const { rows } = await pool.query(
-    `SELECT m.id,m.chat_id,m.body,m.created_at,m.sender_id,COALESCE(u.name,'Неля') AS sender_name
+    `SELECT m.id,m.chat_id,m.body,m.created_at,m.sender_id,COALESCE(u.name,'Неля') AS sender_name,
+       CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file
      FROM messages m JOIN members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=$1
-     LEFT JOIN users u ON u.id=m.sender_id
+     LEFT JOIN users u ON u.id=m.sender_id LEFT JOIN files f ON f.id=m.file_id
      WHERE m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now())
      AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$1)
-     AND m.body ILIKE $2 ORDER BY m.created_at DESC,m.id DESC LIMIT 50`,
-    [user(req).id, contains(q)],
+     AND ($2::text IS NULL OR m.body ILIKE $2 OR f.name ILIKE $2)
+     AND ($3::uuid IS NULL OR m.sender_id=$3)
+     AND ($4::timestamptz IS NULL OR m.created_at>=$4) AND ($5::timestamptz IS NULL OR m.created_at<$5)
+     ${filters.type ? `AND ${searchKinds[filters.type]}` : ''}
+     ORDER BY m.created_at DESC,m.id DESC LIMIT 50`,
+    [
+      user(req).id,
+      q.length >= 2 ? contains(q) : null,
+      from ?? null,
+      filters.after ?? null,
+      filters.before ?? null,
+    ],
   );
   res.json(rows);
 });
@@ -1303,8 +1439,19 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
     const expiresAt = chat.auto_delete_seconds
       ? new Date(Date.now() + Number(chat.auto_delete_seconds) * 1000)
       : null;
+    // @все from the group owner mentions everyone, once per ten minutes so it stays useful.
+    // From anyone else it is plain text.
+    const mentionAll =
+      chat.kind === 'group' && chat.owner_id === user(req).id && MENTION_ALL.test(data.body);
+    if (mentionAll) {
+      const recent = await db.query(
+        "SELECT 1 FROM messages WHERE chat_id=$1 AND mention_all AND created_at>now()-interval '10 minutes'",
+        [chat.id],
+      );
+      requireValue(!recent.rowCount, 429, 'Упомянуть всех можно раз в 10 минут.');
+    }
     const { rows } = await db.query(
-      'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id,link_preview,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(sender_id,nonce) DO NOTHING RETURNING id',
+      'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id,link_preview,expires_at,mention_all) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(sender_id,nonce) DO NOTHING RETURNING id',
       [
         randomUUID(),
         chat.id,
@@ -1315,6 +1462,7 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
         data.replyTo,
         linkPreview ? JSON.stringify(linkPreview) : null,
         expiresAt,
+        mentionAll,
       ],
     );
     if (rows[0]) {

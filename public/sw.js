@@ -96,19 +96,81 @@ self.addEventListener('push', (event) => {
   // The server writes the text according to the recipient's preview setting.
   const text = (value, fallback, limit) =>
     typeof value === 'string' && value.trim() ? value.slice(0, limit) : fallback;
+  // The unread count on the installed app's icon, while the app itself is closed.
+  if (Number.isInteger(data.badge) && data.badge >= 0)
+    self.navigator.setAppBadge?.(data.badge).catch(() => {});
   event.waitUntil(
     self.registration.showNotification(text(data.title, 'Galinka', 80), {
       body: text(data.body, 'Новое сообщение', 200),
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       tag: chatId ? `galinka-${chatId}` : 'galinka-message',
+      // One notification per chat; a newer message replaces it and still alerts, unless the
+      // server says it should be quiet (quiet hours, a chat set to no sound).
+      renotify: !data.silent,
+      silent: data.silent === true,
       data: { chatId, messageId },
+      // Answer or mark as read without opening the app. A browser without text actions shows
+      // "Ответить" as a plain button, which opens the chat instead.
+      actions:
+        chatId && messageId
+          ? [
+              { action: 'reply', type: 'text', title: 'Ответить', placeholder: 'Сообщение' },
+              { action: 'read', title: 'Прочитано' },
+            ]
+          : [],
     }),
   );
 });
+// The session cookie goes with these requests; the API is the same one the app uses.
+const API = '/messenger';
+const post = (path, body) =>
+  fetch(`${API}${path}`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then((response) => {
+    if (!response.ok) throw new Error(String(response.status));
+  });
+
+/** Send the typed answer as a reply to the notified message, then mark the chat read. */
+async function replyFromNotification(chatId, messageId, text) {
+  try {
+    // The nonce makes a retry harmless: the server answers a repeat with the same message.
+    await post(`/chats/${chatId}/messages`, {
+      body: text,
+      nonce: crypto.randomUUID(),
+      replyTo: messageId,
+    });
+    await post(`/chats/${chatId}/read`, { lastMessageId: messageId }).catch(() => {});
+  } catch {
+    // Offline, signed out or refused: say so, and let a tap open the chat to try again.
+    await self.registration.showNotification('Не отправлено', {
+      body: text.slice(0, 120),
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: `galinka-${chatId}`,
+      data: { chatId },
+    });
+  }
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const chatId = event.notification.data?.chatId;
+  const messageId = event.notification.data?.messageId;
+  if (validId(chatId) && validId(messageId)) {
+    if (event.action === 'read') {
+      event.waitUntil(post(`/chats/${chatId}/read`, { lastMessageId: messageId }).catch(() => {}));
+      return;
+    }
+    const text = typeof event.reply === 'string' ? event.reply.trim().slice(0, 8000) : '';
+    if (event.action === 'reply' && text) {
+      event.waitUntil(replyFromNotification(chatId, messageId, text));
+      return;
+    }
+  }
   const target = new URL(
     validId(chatId) ? `/app?chat=${encodeURIComponent(chatId)}` : '/app',
     self.location.origin,

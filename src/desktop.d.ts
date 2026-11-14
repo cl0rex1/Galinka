@@ -15,6 +15,8 @@ declare global {
       install: () => Promise<boolean>;
       releases: () => Promise<void>;
       setAutoDownload: (enabled: boolean) => Promise<UpdateStatus>;
+      /** Unread count on the dock/taskbar icon; `image` is the Windows overlay (PNG data URL). */
+      setBadge?: (count: number, image: string | null) => Promise<void>;
       onStatus: (callback: (status: UpdateStatus) => void) => () => void;
       notifications: {
         status: () => Promise<DesktopNotificationStatus>;

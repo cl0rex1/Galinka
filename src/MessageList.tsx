@@ -2,6 +2,7 @@ import {
   Fragment,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -27,7 +28,7 @@ import {
 import { Avatar } from './Avatar';
 import { MessageMenuBody } from './MessageMenu';
 import { fileLabel, MediaAttachment } from './MediaAttachment';
-import { bareKind, MessageText, plainText } from './MessageText';
+import { bareKind, mentionsUser, MessageText, plainText, SelfContext } from './MessageText';
 import { LinkPreviewCard } from './LinkPreview';
 import { GalleryContext } from './gallery';
 import { closeMenu, openMenu as showMenu } from './ui';
@@ -128,6 +129,7 @@ const MessageRow = memo(function MessageRow({
   itemKey: rowKey,
 }: RowProps) {
   const menu = useRef<HTMLDetailsElement>(null);
+  const self = useContext(SelfContext);
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const held = useRef(false);
   const bot = !m.sender_id;
@@ -246,7 +248,9 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
         <div className="message-content">
-          <div className={`bubble ${bare ? `bare bare-${bare}` : ''}`}>
+          <div
+            className={`bubble ${bare ? `bare bare-${bare}` : ''} ${!own && kind === 'group' && (m.mention_all || mentionsUser(m.body, self)) ? 'mentions-me' : ''}`}
+          >
             {!own && !continued && kind === 'group' && (
               <div className={`sender-name tone-text-${(m.sender.color ?? 2) % 6}`}>
                 {m.sender.name}
@@ -538,6 +542,7 @@ function computeRange(
 export const MessageList = memo(function MessageList({
   messages,
   meId,
+  meUsername = '',
   kind,
   moderator,
   unreadFrom,
@@ -554,6 +559,8 @@ export const MessageList = memo(function MessageList({
 }: {
   messages: Message[];
   meId: string;
+  /** Login of the viewer: messages that name it are lit up. */
+  meUsername?: string;
   kind: Chat['kind'];
   /** The group owner may delete anyone's messages. */
   moderator?: boolean;
@@ -756,6 +763,7 @@ export const MessageList = memo(function MessageList({
   }
   return (
     <GalleryContext.Provider value={gallery}>
+      <SelfContext.Provider value={meUsername}>
       <div ref={listRef} className={`message-list kind-${kind}`}>
         {topSpacer > 0 && (
           <div
@@ -811,6 +819,7 @@ export const MessageList = memo(function MessageList({
           />
         )}
       </div>
+      </SelfContext.Provider>
     </GalleryContext.Provider>
   );
 });

@@ -2,6 +2,13 @@
 <resources>
     <string name="app_name">Galinka</string>
     <string name="title_activity_main">Galinka</string>
+    <string name="reply">Ответить</string>
+    <string name="mark_read">Прочитано</string>
+    <string name="not_sent">Не отправлено</string>
+    <string name="new_message">Новое сообщение</string>
+    <string name="you">Вы</string>
+    <string name="channel_messages">Сообщения</string>
+    <string name="channel_quiet">Сообщения без звука</string>
     <string name="package_name">me.quiby.galinka</string>
     <string name="custom_url_scheme">me.quiby.galinka</string>
 </resources>

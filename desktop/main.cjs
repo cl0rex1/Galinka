@@ -338,6 +338,22 @@ ipcMain.handle('notifications:enabled', (event, enabled) => {
   }
   return notificationStatus();
 });
+// Unread count on the icon: the dock on macOS, the launcher on Linux, an overlay on Windows.
+ipcMain.handle('badge:set', (event, options) => {
+  trusted(event);
+  const count = Number.isInteger(options?.count) && options.count > 0 ? Math.min(options.count, 9999) : 0;
+  app.setBadgeCount(count);
+  if (process.platform === 'win32' && window && !window.isDestroyed()) {
+    const image =
+      count &&
+      typeof options.image === 'string' &&
+      options.image.length < 20000 &&
+      /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(options.image)
+        ? nativeImage.createFromDataURL(options.image)
+        : null;
+    window.setOverlayIcon(image && !image.isEmpty() ? image : null, count ? `Непрочитанных: ${count}` : '');
+  }
+});
 ipcMain.handle('notifications:clear', (event) => {
   trusted(event);
   savePreferences({ notifications: false });
@@ -381,7 +397,8 @@ ipcMain.handle('notifications:show', (event, options) => {
     title: text(options.title, 'Galinka', 80),
     body: text(options.body, 'Новое сообщение', 200),
     icon: iconPath,
-    silent: false,
+    // The app plays the chat's own tone (or none in quiet hours), so the system stays quiet.
+    silent: true,
   });
   notifications.set(chatId, notification);
   notification.on('click', () => {

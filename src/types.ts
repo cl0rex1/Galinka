@@ -70,6 +70,8 @@ export type ScheduledMessage = {
 };
 export type Message = {
   id: string;
+  /** The group owner's @все: it mentions every member. */
+  mention_all?: boolean;
   chat_id: string;
   sender_id: string | null;
   sender: Person;
@@ -106,6 +108,8 @@ export type Chat = {
   nelya: boolean;
   pinned?: boolean;
   muted?: boolean;
+  /** Notification sound for this chat; 'silent' notifies without one. */
+  sound?: 'default' | 'soft' | 'bright' | 'silent';
   archived?: boolean;
   auto_delete_seconds?: number | null;
   /** Own scheduled messages and reminders waiting in this chat. */
@@ -115,6 +119,8 @@ export type Chat = {
   member_count: number;
   peer: Person | null;
   unread: number;
+  /** Unread messages in this group that name you with @. */
+  unread_mentions?: number;
   created_at: string;
   pinned_message?: { id: string; body: string; file_name?: string | null } | null;
   last_message: {
@@ -133,6 +139,7 @@ export type SearchHit = {
   created_at: string;
   sender_id: string | null;
   sender_name: string;
+  file?: Attachment | null;
 };
 export type ClientErrorEntry = {
   id: string;

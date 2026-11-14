@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { api } from './api';
+import { alertInApp } from './sounds';
+import type { Chat } from './types';
 
 export const isNative = Capacitor.getPlatform() === 'android';
 const nativePush = isNative && import.meta.env.VITE_NATIVE_PUSH === 'true';
@@ -29,6 +31,32 @@ function preference(key: string, value?: 'on' | 'off') {
 async function worker() {
   await navigator.serviceWorker.register('/sw.js');
   return navigator.serviceWorker.ready;
+}
+
+/**
+ * A chat was read here: its notifications on this device go away, and with them their share of
+ * the number on the app icon. Best effort; nothing to do on a platform without them.
+ */
+export async function clearChatNotifications(chatId: string) {
+  try {
+    if (nativePush) {
+      const { notifications } = await PushNotifications.getDeliveredNotifications();
+      const ours = notifications.filter((item) => item.tag === chatId);
+      // The summary holds two chats or more; with one left it would only repeat it.
+      const others = notifications.filter(
+        (item) => item.tag && item.tag !== chatId && item.tag !== 'galinka-summary',
+      );
+      const summary = others.length < 2 ? notifications.filter((item) => item.tag === 'galinka-summary') : [];
+      if (ours.length || summary.length)
+        await PushNotifications.removeDeliveredNotifications({ notifications: [...ours, ...summary] });
+    } else if (browserPush) {
+      const registration = await navigator.serviceWorker.getRegistration();
+      const shown = await registration?.getNotifications({ tag: `galinka-${chatId}` });
+      shown?.forEach((notification) => notification.close());
+    }
+  } catch {
+    /* Not supported here. */
+  }
 }
 function applicationKey(key: string) {
   const binary = atob(key.replace(/-/g, '+').replace(/_/g, '/'));
@@ -139,7 +167,7 @@ export function useNotifications(
             if (disposed) return;
             deviceToken = value;
             try {
-              await api('/push/devices', 'POST', { token: value });
+              await api('/push/devices', 'POST', { token: value, actions: true });
               if (!disposed) {
                 preference(key, 'on');
                 set('enabled');
@@ -282,19 +310,28 @@ export function useNotifications(
       operation.current = false;
     }
   }
-  function notify(chatId: string, messageId?: string) {
-    if (!demo && userId && phase === 'enabled' && validChat(chatId) && window.galinkaDesktop) {
-      const desktop = window.galinkaDesktop;
-      // Author and text as chosen in settings; a failed lookup still shows a plain notice.
-      void (
-        messageId && validChat(messageId)
-          ? api<{ title: string; body: string }>(`/messages/${messageId}/notification`)
-          : Promise.reject()
-      )
-        .catch(() => ({ title: undefined, body: undefined }))
-        .then((text) => desktop.notifications.show({ chatId, ...text }))
-        .catch(() => {});
-    }
+  /**
+   * A message arrived in a chat the user is not looking at. The server decides, as for a push,
+   * whether it notifies at all (muted chat, chat kind turned off, mention) and whether quietly
+   * (quiet hours, a chat without sound); the chat's own tone plays here.
+   */
+  function notify(chat: Chat, messageId: string) {
+    if (demo || !userId || !validChat(chat.id) || !validChat(messageId)) return;
+    const desktop = window.galinkaDesktop;
+    const showDesktop = Boolean(desktop) && phase === 'enabled';
+    // A hidden browser tab gets a push from the service worker instead; ringing here as well
+    // would sound twice.
+    const audible = showDesktop || document.visibilityState === 'visible';
+    if (!showDesktop && !audible) return;
+    void api<{ title: string; body: string; notify: boolean; quiet: boolean }>(
+      `/messages/${messageId}/notification`,
+    )
+      .then(({ notify: shown, quiet, title, body }) => {
+        if (!shown) return;
+        if (!quiet && audible) alertInApp(chat.sound);
+        if (showDesktop) return desktop!.notifications.show({ chatId: chat.id, title, body });
+      })
+      .catch(() => {});
   }
   return { phase, toggle, notify, background };
 }

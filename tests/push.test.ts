@@ -21,6 +21,32 @@ test('Android pushes identify the chat without sending private content', () => {
   assert.equal(invalidPushToken('messaging/server-unavailable'), false);
 });
 
+test('Android builds with notification actions get a data-only message carrying the text', () => {
+  const payload = pushPayload(
+    ['device'],
+    'chat-id',
+    'message-id',
+    { title: 'Неля', body: 'Привет' },
+    true,
+  );
+  assert.equal(payload.notification, undefined);
+  assert.deepEqual(payload.data, {
+    chatId: 'chat-id',
+    messageId: 'message-id',
+    actions: '1',
+    quiet: '0',
+    unread: '0',
+    title: 'Неля',
+    body: 'Привет',
+  });
+  assert.equal(payload.android?.priority, 'high');
+  // Quiet hours or a chat set to no sound: the app draws it on its silent channel.
+  const quiet = pushPayload(['device'], 'chat-id', 'message-id', undefined, true, true);
+  assert.equal(quiet.data?.quiet, '1');
+  assert.equal(JSON.parse(browserPushPayload('c', 'm', undefined, true)).silent, true);
+  assert.equal(JSON.parse(browserPushPayload('c', 'm')).silent, undefined);
+});
+
 test('Web Push accepts real provider endpoints and rejects SSRF destinations', () => {
   for (const endpoint of [
     'https://fcm.googleapis.com/fcm/send/a',
@@ -113,10 +139,7 @@ test('notification text follows each recipient: author and text, author only, or
   });
   assert.deepEqual(previewText(group, 'none'), { title: 'Galinka', body: 'Новое сообщение' });
   // An animated sticker reads as its emoji; a due reminder in Saved Messages says what it is.
-  assert.equal(
-    previewText({ ...group, body: '[sticker:1f602]' }, 'full').body,
-    'Макс: 😂 Стикер',
-  );
+  assert.equal(previewText({ ...group, body: '[sticker:1f602]' }, 'full').body, 'Макс: 😂 Стикер');
   assert.equal(previewText({ ...group, kind: 'saved' }, 'full').title, 'Напоминание');
   const photo = { ...group, kind: 'direct', body: '', file_name: 'a.jpg', mime: 'image/jpeg' };
   assert.deepEqual(previewText(photo, 'full'), { title: 'Макс', body: 'Фотография' });

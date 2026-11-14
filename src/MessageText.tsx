@@ -1,4 +1,4 @@
-import { Fragment, memo, useState, type ReactNode } from 'react';
+import { createContext, Fragment, memo, useContext, useState, type ReactNode } from 'react';
 import { GifArtwork, StickerArtwork } from './EmojiPicker';
 import { animatedCode, codeEmoji, isStickerCode, Sticker } from './Sticker';
 
@@ -38,21 +38,41 @@ export const plainText = (text: string) =>
 
 type Leaf = (text: string, key: string) => ReactNode;
 
+/** The viewer's own login, so a mention of them can be set apart from the rest. */
+export const SelfContext = createContext('');
+/** Does the text name this login as @login? Same rule as the server's mention count. */
+export const mentionsUser = (text: string, username: string) =>
+  !!username && new RegExp(`(^|[^a-z0-9_@])@${username}($|[^a-z0-9_])`, 'i').test(text);
+
 // Render addresses and @usernames without interpreting message text as HTML.
 function linkify(
   text: string,
   key: string,
   highlight?: string,
   onMention?: (username: string) => void,
+  self?: string,
 ): ReactNode[] {
   const parts: ReactNode[] = [];
   let position = 0;
   for (const match of text.matchAll(
-    /https?:\/\/[^\s<>"']+|(?<![\w.@])@([a-z0-9_]{3,24})(?![\w@])/gi,
+    /https?:\/\/[^\s<>"']+|(?<![\p{L}\p{N}_.@])@(все|all)(?![\p{L}\p{N}_@])|(?<![\w.@])@([a-z0-9_]{3,24})(?![\w@])/giu,
   )) {
     const start = match.index;
     if (match[1]) {
-      const username = match[1].toLowerCase();
+      // @все: nobody's profile to open, but it reads as a mention.
+      parts.push(
+        <Fragment key={`${key}t${position}`}>
+          {marked(text.slice(position, start), highlight)}
+        </Fragment>,
+        <span key={`${key}a${start}`} className="message-mention all">
+          {marked(match[0], highlight)}
+        </span>,
+      );
+      position = start + match[0].length;
+      continue;
+    }
+    if (match[2]) {
+      const username = match[2].toLowerCase();
       parts.push(
         <Fragment key={`${key}t${position}`}>
           {marked(text.slice(position, start), highlight)}
@@ -60,7 +80,7 @@ function linkify(
         <a
           key={`${key}m${start}`}
           href={`/app?u=${encodeURIComponent(username)}`}
-          className="message-mention"
+          className={`message-mention ${username === self ? 'me' : ''}`}
           onClick={
             onMention
               ? (event) => {
@@ -214,6 +234,7 @@ export const MessageText = memo(function MessageText({
   highlight?: string;
   onMention?: (username: string) => void;
 }) {
+  const self = useContext(SelfContext);
   const trimmed = text.trim();
   const kind = bareKind(text);
   if (kind === 'emoji') {
@@ -254,7 +275,7 @@ export const MessageText = memo(function MessageText({
       </figure>
     );
   }
-  const leaf: Leaf = (part, key) => linkify(part, key, highlight, onMention);
+  const leaf: Leaf = (part, key) => linkify(part, key, highlight, onMention, self);
   const parts = blocks(text);
   // Plain text stays one inline paragraph, so the time can sit at the end of its last line.
   if (parts.every((part) => part.kind === 'text'))

@@ -126,14 +126,20 @@ export function useComposer({
     mentionCursor === null || sending || savingCurrentEdit
       ? null
       : /(?:^|\s)@([\p{L}\p{N}_]{0,24})$/u.exec(composerValue.slice(0, mentionCursor));
+  // The group owner can call everyone with @все (the server allows it once per ten minutes).
+  const everyone: Person | null =
+    active?.kind === 'group' && active.owner_id === me?.id
+      ? { id: 'everyone', username: 'все', name: 'Упомянуть всех', color: 2 }
+      : null;
   const mentionOptions = mention
-    ? members
+    ? [...(everyone ? [everyone] : []), ...members]
         .filter(
           (member) =>
             member.id !== me?.id &&
             member.username &&
             (member.username.toLowerCase().startsWith(mention[1].toLowerCase()) ||
-              member.name.toLowerCase().startsWith(mention[1].toLowerCase())),
+              member.name.toLowerCase().startsWith(mention[1].toLowerCase()) ||
+              (member === everyone && 'all'.startsWith(mention[1].toLowerCase()))),
         )
         .slice(0, 6)
     : [];

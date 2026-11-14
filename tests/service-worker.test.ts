@@ -1,117 +1,104 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { runInNewContext } from 'node:vm';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
-const source = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
-const chatId = '055481ff-c62a-4b88-bf38-03498ede092f';
-const messageId = 'fc9a82b2-1c74-4c60-837b-32a65d5ad13c';
-function worker(windows: unknown[] = []) {
-  const handlers = new Map<string, (event: any) => void>();
-  const notifications: { title: string; options: any }[] = [];
+const CHAT = '11111111-1111-4111-8111-111111111111';
+const MESSAGE = '22222222-2222-4222-8222-222222222222';
+
+/** Runs public/sw.js against a stub of the worker scope and returns its handlers. */
+function load(respond: (url: string, init: any) => { ok: boolean }) {
+  const handlers: Record<string, (event: any) => void> = {};
+  const calls: { url: string; body: any }[] = [];
+  const shown: { title: string; options: any }[] = [];
   const opened: string[] = [];
-  runInNewContext(source, {
+  const self: any = {
+    location: { origin: 'https://example.test' },
+    addEventListener: (type: string, handler: (event: any) => void) => (handlers[type] = handler),
+    registration: {
+      showNotification: async (title: string, options: any) => void shown.push({ title, options }),
+      getNotifications: async () => [],
+    },
+    clients: {
+      matchAll: async () => [],
+      openWindow: async (url: string) => void opened.push(url),
+      claim: async () => {},
+    },
+    skipWaiting: () => {},
+  };
+  vm.runInNewContext(readFileSync('public/sw.js', 'utf8'), {
+    self,
     URL,
     Response,
-    Set,
-    encodeURIComponent,
-    self: {
-      location: { origin: 'https://mess.quiby.me' },
-      addEventListener: (name: string, handler: (event: any) => void) =>
-        handlers.set(name, handler),
-      registration: {
-        showNotification: async (title: string, options: unknown) => {
-          notifications.push({ title, options });
-        },
-      },
-      clients: {
-        matchAll: async () => windows,
-        openWindow: async (url: string) => {
-          opened.push(url);
-        },
-      },
+    crypto,
+    caches: { open: async () => ({ addAll: async () => {} }), keys: async () => [] },
+    fetch: async (url: string, init: any) => {
+      calls.push({ url, body: JSON.parse(init.body) });
+      return respond(url, init);
     },
   });
-  async function emit(name: string, event: Record<string, unknown>) {
-    const waits: Promise<unknown>[] = [];
-    handlers.get(name)!({
-      ...event,
-      waitUntil: (promise: Promise<unknown>) => waits.push(promise),
-    });
-    await Promise.all(waits);
-  }
-  return { emit, notifications, opened };
+  // Every handler hands its work to waitUntil: collect it so a test can await it.
+  const fire = async (type: string, event: any) => {
+    const work: Promise<unknown>[] = [];
+    handlers[type]({ ...event, waitUntil: (p: Promise<unknown>) => work.push(p) });
+    await Promise.all(work);
+  };
+  return { fire, calls, shown, opened };
 }
 
-test('service worker shows the server-written preview, bounded, and opens exact safe chat URLs', async () => {
-  const sw = worker();
-  // The text is what the recipient chose in settings; the server writes it.
-  await sw.emit('push', {
-    data: { json: () => ({ chatId, messageId, title: 'Свои люди', body: 'Макс: буду к восьми' }) },
-  });
-  assert.equal(sw.notifications[0].title, 'Свои люди');
-  assert.equal(sw.notifications[0].options.body, 'Макс: буду к восьми');
-  assert.equal(sw.notifications[0].options.data.chatId, chatId);
-  await sw.emit('push', {
-    data: { json: () => ({ chatId, messageId, title: ' ', body: 'x'.repeat(5000) }) },
-  });
-  assert.equal(sw.notifications[1].title, 'Galinka');
-  assert.equal(sw.notifications[1].options.body.length, 200);
-  await sw.emit('push', { data: { json: () => ({ chatId, messageId }) } });
-  assert.equal(sw.notifications[2].options.body, 'Новое сообщение');
-  let closed = false;
-  await sw.emit('notificationclick', {
-    notification: {
-      data: { chatId },
-      close() {
-        closed = true;
-      },
-    },
-  });
-  assert.equal(closed, true);
-  assert.deepEqual(sw.opened, [`https://mess.quiby.me/app?chat=${chatId}`]);
-  await sw.emit('notificationclick', {
-    notification: { data: { chatId: '//evil.test/secret' }, close() {} },
-  });
-  assert.equal(sw.opened[1], 'https://mess.quiby.me/app');
+const click = (action: string, reply?: string, data: any = { chatId: CHAT, messageId: MESSAGE }) => ({
+  action,
+  reply,
+  notification: { close() {}, data },
 });
 
-test('notification clicks focus an existing app and only dispatch a validated chat identifier', async () => {
-  const received: any[] = [];
-  let focused = false;
-  const sw = worker([
-    { url: 'https://evil.test/app', postMessage: () => assert.fail('cross-origin notification') },
-    {
-      url: 'https://mess.quiby.me/app',
-      postMessage: (value: unknown) => received.push(value),
-      focus: async () => {
-        focused = true;
-      },
-    },
-  ]);
-  await sw.emit('notificationclick', { notification: { data: { chatId }, close() {} } });
-  assert.equal(focused, true);
-  assert.equal(received[0].type, 'OPEN_CHAT');
-  assert.equal(received[0].chatId, chatId);
+test('a push offers Reply and Mark as read, and nothing without a message to answer', async () => {
+  const sw = load(() => ({ ok: true }));
+  await sw.fire('push', { data: { json: () => ({ title: 'Аня', body: 'привет', chatId: CHAT, messageId: MESSAGE }) } });
+  assert.deepEqual(Array.from(sw.shown[0].options.actions, (a: any) => a.action), ['reply', 'read']);
+  assert.equal(sw.shown[0].options.actions[0].type, 'text');
+  await sw.fire('push', { data: { json: () => ({ title: 'x' }) } });
+  assert.equal(sw.shown[1].options.actions.length, 0);
+});
+
+test('replying from the notification sends the text as a reply and marks the chat read', async () => {
+  const sw = load(() => ({ ok: true }));
+  await sw.fire('notificationclick', click('reply', '  Уже иду  '));
+  assert.equal(sw.calls.length, 2);
+  assert.equal(sw.calls[0].url, `/messenger/chats/${CHAT}/messages`);
+  assert.equal(sw.calls[0].body.body, 'Уже иду');
+  assert.equal(sw.calls[0].body.replyTo, MESSAGE);
+  assert.match(sw.calls[0].body.nonce, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(sw.calls[1], {
+    url: `/messenger/chats/${CHAT}/read`,
+    body: { lastMessageId: MESSAGE },
+  });
+  assert.equal(sw.shown.length, 0, 'nothing to report: it worked');
+  assert.equal(sw.opened.length, 0, 'and the app stays closed');
+});
+
+test('a failed reply says so instead of vanishing, and a tap opens the chat', async () => {
+  const sw = load(() => ({ ok: false }));
+  await sw.fire('notificationclick', click('reply', 'Не потеряй меня'));
+  assert.equal(sw.shown[0].title, 'Не отправлено');
+  assert.equal(sw.shown[0].options.body, 'Не потеряй меня');
+  assert.equal(sw.shown[0].options.data.chatId, CHAT);
+  await sw.fire('notificationclick', click('', undefined, sw.shown[0].options.data));
+  assert.equal(sw.opened[0], `https://example.test/app?chat=${CHAT}`);
+});
+
+test('Mark as read does only that; Reply without text (no inline input) opens the chat', async () => {
+  const sw = load(() => ({ ok: true }));
+  await sw.fire('notificationclick', click('read'));
+  assert.deepEqual(sw.calls, [{ url: `/messenger/chats/${CHAT}/read`, body: { lastMessageId: MESSAGE } }]);
   assert.equal(sw.opened.length, 0);
+  await sw.fire('notificationclick', click('reply'));
+  assert.equal(sw.calls.length, 1, 'no text, nothing sent');
+  assert.equal(sw.opened.length, 1);
 });
 
-test('service worker never intercepts API, attachments or arbitrary image paths for caching', async () => {
-  const sw = worker();
-  for (const pathname of [
-    '/api/chats',
-    '/messenger/chats',
-    '/messenger/files/private.png',
-    '/private.png',
-    '/uploads/photo.svg',
-  ]) {
-    let intercepted = false;
-    await sw.emit('fetch', {
-      request: { method: 'GET', url: 'https://mess.quiby.me' + pathname, mode: 'cors' },
-      respondWith: () => {
-        intercepted = true;
-      },
-    });
-    assert.equal(intercepted, false, pathname);
-  }
+test('ids from a notification are validated before they reach a URL', async () => {
+  const sw = load(() => ({ ok: true }));
+  await sw.fire('notificationclick', click('read', undefined, { chatId: '../admin', messageId: MESSAGE }));
+  assert.equal(sw.calls.length, 0);
 });

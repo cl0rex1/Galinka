@@ -19,7 +19,7 @@ import { Security } from './Security';
 import { Appearance, LookSettings } from './Appearance';
 import { api, upload } from './api';
 import { PhotoPicker, photoForm } from './AvatarEditor';
-import { PreviewSettings, PrivacySettings } from './Privacy';
+import { NotificationPreferences, PreviewSettings, PrivacySettings } from './Privacy';
 import { currentAccent, profileLink, ShareSheet, themeLink } from './Share';
 import { Updates } from './updates';
 import type { Person } from './types';
@@ -173,6 +173,7 @@ export function Settings({
           <>
             <NotificationSettings state={notifications} demo={demo} />
             <PreviewSettings />
+            <NotificationPreferences />
           </>
         )}
         {tab === 'privacy' && <PrivacySettings />}

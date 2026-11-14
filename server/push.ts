@@ -117,8 +117,10 @@ const attachmentWord = (info: MessageInfo) =>
 /** Message text without formatting marks; spoilers stay hidden. Keep in sync with src/MessageText. */
 export const plainText = (text: string) =>
   text
-    .replace(/\[sticker:([0-9a-f]{2,6}(?:_[0-9a-f]{2,6})*)\]/g, (_, code: string) =>
-      `${String.fromCodePoint(...code.split('_').map((hex) => parseInt(hex, 16)))} Стикер`,
+    .replace(
+      /\[sticker:([0-9a-f]{2,6}(?:_[0-9a-f]{2,6})*)\]/g,
+      (_, code: string) =>
+        `${String.fromCodePoint(...code.split('_').map((hex) => parseInt(hex, 16)))} Стикер`,
     )
     .replace(/\[sticker:[^:\]]+:([^\]]+)\]/g, 'Стикер: $1')
     .replace(/\[sticker:[^\]]+\]/g, 'Стикер')
@@ -137,6 +139,21 @@ export function previewText(info: MessageInfo | undefined, mode: Preview): Notif
   const text = content.length > 180 ? `${content.slice(0, 177)}…` : content;
   return { title, body: group ? `${info.sender}: ${text}` : text };
 }
+/**
+ * SQL: does message `m` (a table alias) mention user `recipient`? @login or an owner's @все,
+ * filtered by who the recipient lets mention them. The rule lives in the database (migration 009).
+ */
+export const mentionsSQL = (m: string, recipient: string) =>
+  `mentions_user(${m}.body,${m}.mention_all,${m}.sender_id,${recipient})`;
+/** SQL: unread messages for the app icon (chats with sound) and in this chat (the notification). */
+const unreadSQL = `(SELECT count(*)::int FROM messages x JOIN members mm ON mm.chat_id=x.chat_id AND mm.user_id=recipient.id
+    WHERE NOT mm.muted AND x.created_at>mm.read_at AND x.sender_id IS DISTINCT FROM recipient.id
+    AND x.deleted_at IS NULL AND (x.expires_at IS NULL OR x.expires_at>now())) AS badge,
+  (SELECT count(*)::int FROM messages x WHERE x.chat_id=m.chat_id AND x.created_at>member.read_at
+    AND x.sender_id IS DISTINCT FROM recipient.id AND x.deleted_at IS NULL
+    AND (x.expires_at IS NULL OR x.expires_at>now())) AS chat_unread`;
+/** SQL: a recipient's quiet hours, or this chat set to no sound: notify without a sound. */
+export const quietSQL = `(member.sound='silent' OR in_quiet_hours(recipient.quiet_from,recipient.quiet_to,recipient.time_zone))`;
 export const messageInfoSQL = `SELECT m.body,f.name AS file_name,f.mime,c.kind,c.title,COALESCE(u.name,'Неля') AS sender
   FROM messages m JOIN chats c ON c.id=m.chat_id LEFT JOIN users u ON u.id=m.sender_id
   LEFT JOIN files f ON f.id=m.file_id WHERE m.id=$1`;
@@ -146,7 +163,26 @@ export function pushPayload(
   chatId: string,
   messageId: string,
   text: NotificationText = generic,
+  actions = false,
+  quiet = false,
+  unread = 0,
 ): MulticastMessage {
+  // Builds that draw their own notification (Reply / Mark as read) get a data-only message:
+  // with a `notification` field the system would draw it in the background and skip the app.
+  // Older builds keep the notification form. `quiet`: shown without sound or vibration.
+  if (actions)
+    return {
+      tokens,
+      data: {
+        chatId,
+        messageId,
+        actions: '1',
+        quiet: quiet ? '1' : '0',
+        unread: String(unread),
+        ...text,
+      },
+      android: { priority: 'high', ttl: 86400_000 },
+    };
   return {
     tokens,
     // What the text says follows the recipient's preview setting; 'private' visibility keeps
@@ -170,8 +206,16 @@ export function browserPushPayload(
   chatId: string,
   messageId: string,
   text: NotificationText = generic,
+  quiet = false,
+  badge?: number,
 ) {
-  return JSON.stringify({ ...text, chatId, messageId });
+  return JSON.stringify({
+    ...text,
+    chatId,
+    messageId,
+    ...(quiet ? { silent: true } : {}),
+    ...(badge !== undefined ? { badge } : {}),
+  });
 }
 
 export function invalidPushToken(code?: string) {
@@ -228,11 +272,15 @@ async function deliveryTransaction<T>(
 // Saved Messages get a job only for a due reminder, which goes to the author themself.
 const recipients = (table: 'push_devices' | 'web_push_subscriptions') => `FROM messages m
   JOIN chats chat ON chat.id=m.chat_id
-  JOIN members member ON member.chat_id=m.chat_id AND (member.user_id<>m.sender_id OR chat.kind='saved') AND member.read_at<m.created_at AND NOT member.muted
+  JOIN members member ON member.chat_id=m.chat_id AND (member.user_id<>m.sender_id OR chat.kind='saved') AND member.read_at<m.created_at
   JOIN ${table} d ON d.user_id=member.user_id
   JOIN users recipient ON recipient.id=d.user_id AND NOT recipient.blocked
   JOIN sessions s ON s.token=d.session_token AND s.user_id=d.user_id AND s.expires_at>now()
-  WHERE m.id=$1`;
+  WHERE m.id=$1 AND (
+    chat.kind='saved'
+    -- A mention gets through a muted chat and "no group notifications".
+    OR (chat.kind='group' AND ${mentionsSQL('m', 'recipient.id')})
+    OR (NOT member.muted AND CASE chat.kind WHEN 'direct' THEN recipient.notify_direct WHEN 'group' THEN recipient.notify_groups ELSE true END))`;
 
 // Tests replace only the network transports. Each job is claimed by one replica;
 // successful destinations are persisted so a retry does not resend the whole batch.
@@ -265,14 +313,28 @@ export async function deliverPushJob(pool: Pool, transports: PushTransports) {
       for (let i = 0; i < pending.length; i += 100) {
         await deliveryTransaction(pool, job.message_id, async (recipientDb) => {
           const { rows: devices } = await recipientDb.query(
-            `SELECT d.token,m.chat_id,recipient.notify_preview ${recipients('push_devices')} AND d.token=ANY($2::text[]) FOR SHARE OF d,recipient,s`,
+            `SELECT d.token,d.native_actions,m.chat_id,recipient.notify_preview,${quietSQL} AS quiet,${unreadSQL} ${recipients('push_devices')} AND d.token=ANY($2::text[]) FOR SHARE OF d,recipient,s`,
             [job.message_id, pending.slice(i, i + 100).map((device) => device.token)],
           );
           if (!devices.length) return;
-          // One multicast per preview setting: everyone in it gets the same text.
-          for (const mode of ['full', 'sender', 'none'] as const) {
-            const group = devices.filter((device) => (device.notify_preview ?? 'none') === mode);
-            if (!group.length) continue;
+          // One multicast per preview setting, payload form and sound: everyone in it gets the
+          // same message.
+          const groups = new Map<string, typeof devices>();
+          for (const device of devices) {
+            const key = `${device.notify_preview ?? 'none'}|${Boolean(device.native_actions)}|${Boolean(device.quiet)}|${device.chat_unread}`;
+            groups.set(key, [...(groups.get(key) ?? []), device]);
+          }
+          for (const group of groups.values()) {
+            const mode = (group[0].notify_preview ?? 'none') as 'full' | 'sender' | 'none';
+            const actions = Boolean(group[0].native_actions);
+            const quiet = Boolean(group[0].quiet);
+            // Older builds cannot show a notification without the channel's sound: during quiet
+            // hours or in a chat set to no sound they get nothing, rather than a ring.
+            if (quiet && !actions) {
+              for (const device of group)
+                await markDelivered(recipientDb, job.message_id, 'android', device.token);
+              continue;
+            }
             let result: BatchResponse;
             try {
               result = await transports.android!(
@@ -281,6 +343,9 @@ export async function deliverPushJob(pool: Pool, transports: PushTransports) {
                   group[0].chat_id,
                   job.message_id,
                   previewText(info, mode),
+                  actions,
+                  quiet,
+                  group[0].chat_unread,
                 ),
               );
             } catch {
@@ -315,7 +380,7 @@ export async function deliverPushJob(pool: Pool, transports: PushTransports) {
           pending.slice(i, i + 8).map((candidate) =>
             deliveryTransaction(pool, job.message_id, async (recipientDb) => {
               const { rows: subscriptions } = await recipientDb.query(
-                `SELECT d.endpoint,d.p256dh,d.auth,m.chat_id,recipient.notify_preview ${recipients('web_push_subscriptions')}
+                `SELECT d.endpoint,d.p256dh,d.auth,m.chat_id,recipient.notify_preview,${quietSQL} AS quiet,${unreadSQL} ${recipients('web_push_subscriptions')}
                AND d.endpoint=$2 AND (d.expires_at IS NULL OR d.expires_at>now()) FOR SHARE OF d,recipient,s`,
                 [job.message_id, candidate.endpoint],
               );
@@ -339,6 +404,8 @@ export async function deliverPushJob(pool: Pool, transports: PushTransports) {
                     subscription.chat_id,
                     job.message_id,
                     previewText(info, subscription.notify_preview ?? 'none'),
+                    Boolean(subscription.quiet),
+                    subscription.badge,
                   ),
                 );
               } catch (error) {

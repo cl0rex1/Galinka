@@ -358,8 +358,17 @@ export async function demoRequest(url: string, method: string, body: unknown): P
     );
   else if (pathname === '/search') {
     const needle = (params.get('q') || '').toLowerCase();
+    const from = params.get('from') === 'me' ? self.id : params.get('from');
     result = state.messages
-      .filter((m) => !state.hidden.includes(m.id) && m.body.toLowerCase().includes(needle))
+      .filter(
+        (m) =>
+          !state.hidden.includes(m.id) &&
+          m.body.toLowerCase().includes(needle) &&
+          (!from || m.sender_id === from) &&
+          (params.get('type') !== 'link' || /https?:\/\//.test(m.body)) &&
+          (!params.get('after') || m.created_at >= params.get('after')!) &&
+          (!params.get('before') || m.created_at < params.get('before')!),
+      )
       .reverse()
       .slice(0, 50)
       .map((m) => ({
@@ -627,7 +636,27 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         mime: f.type.split(';')[0] || 'application/octet-stream',
       };
     } else if (parts[2] === 'messages') {
-      if (method === 'GET' && parts.length === 3)
+      const through = params.get('through');
+      const since = params.get('since');
+      if (method === 'GET' && parts.length === 3 && (through || since)) {
+        // From a message or a moment up to `before`, with a little older context.
+        const inChat = state.messages.filter(
+          (m) => m.chat_id === chat.id && !state.hidden.includes(m.id),
+        );
+        const end = params.get('before')
+          ? inChat.findIndex((m) => m.id === params.get('before'))
+          : inChat.length;
+        let start = through
+          ? inChat.findIndex((m) => m.id === through)
+          : inChat.findIndex((m) => m.created_at >= since!);
+        if (start < 0) start = end;
+        const from = Math.max(0, start - 20);
+        result = {
+          messages: inChat.slice(from, end < 0 ? inChat.length : end),
+          hasOlder: from > 0,
+          complete: true,
+        };
+      } else if (method === 'GET' && parts.length === 3)
         result = state.messages
           .filter(
             (m) =>

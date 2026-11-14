@@ -175,9 +175,16 @@ export function ChatList({
                   )}
                 </span>
                 {c.unread > 0 ? (
-                  <b key={c.unread} className={`unread ${c.muted ? 'muted-unread' : ''}`}>
-                    {c.unread > 99 ? '99+' : c.unread}
-                  </b>
+                  <>
+                    {!!c.unread_mentions && (
+                      <b className="unread mention-mark" role="img" aria-label="Вас упомянули">
+                        @
+                      </b>
+                    )}
+                    <b key={c.unread} className={`unread ${c.muted ? 'muted-unread' : ''}`}>
+                      {c.unread > 99 ? '99+' : c.unread}
+                    </b>
+                  </>
                 ) : (
                   c.pinned && <Pin size={13} className="pin-mark" aria-label="Закреплён" />
                 )}

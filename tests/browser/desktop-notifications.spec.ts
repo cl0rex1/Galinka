@@ -121,9 +121,17 @@ async function desktopSession(page: Page) {
       state.chatReads++;
       return route.fulfill({ json: state.chats });
     }
-    // The server writes the notification text per the user's preview setting.
+    // The server writes the notification text per the user's preview setting, and decides as
+    // for a push whether it notifies at all: not from a muted chat.
     if (/^\/api\/messages\/[^/]+\/notification$/.test(path))
-      return route.fulfill({ json: { title: 'Аня', body: 'Буду к восьми' } });
+      return route.fulfill({
+        json: {
+          title: 'Аня',
+          body: 'Буду к восьми',
+          notify: !path.includes(messageFor(mutedId)),
+          quiet: false,
+        },
+      });
     const json =
       path === '/api/me'
         ? person
@@ -149,13 +157,17 @@ async function desktopSession(page: Page) {
 
 // What reaches the native notification: the server's text, never the event's body.
 const shown = (chatId: string) => ({ chatId, title: 'Аня', body: 'Буду к восьми' });
+/** One message id per chat, so the notification lookup can tell the chats apart. */
+function messageFor(chatId: string) {
+  return `3${chatId.slice(1)}`;
+}
 async function emit(page: Page, chatId: string, senderId = friendId) {
   await page.evaluate((change) => (window as any).desktopTest.emit(change), {
     type: 'messages',
     event: 'message.created',
     chatId,
     senderId,
-    messageId: '30000000-0000-4000-8000-000000000001',
+    messageId: messageFor(chatId),
     // Event bodies are untrusted and must never become native notification text.
     body: 'Private message body',
     title: 'Private group name',
