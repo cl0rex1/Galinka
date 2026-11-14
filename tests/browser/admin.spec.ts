@@ -196,3 +196,76 @@ test('administrator manages users and published mobile content through the real 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('admin monitoring tab displays server metrics, clears client errors, and fits 320px', async ({
+  page,
+}) => {
+  let errors = [
+    {
+      id: 'err-1',
+      user_id: 'adm-1',
+      username: 'admin',
+      message: 'Test client failure',
+      stack: 'TypeError: broken\n  at App.tsx:10',
+      url: '/app',
+      user_agent: 'Playwright',
+      release: '0.13.0',
+      created_at: new Date().toISOString(),
+    },
+  ];
+  await page.route('**/api/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/me')
+      return route.fulfill({
+        json: { id: 'adm-1', name: 'Админ', username: 'admin', role: 'admin', color: 0 },
+      });
+    if (pathname === '/api/admin/users' || pathname === '/api/admin/announcements')
+      return route.fulfill({ json: { items: [], total: 0, page: 1 } });
+    if (pathname === '/api/admin/invites') return route.fulfill({ json: [] });
+    if (pathname === '/api/admin/monitoring') {
+      return route.fulfill({
+        json: {
+          health: {
+            ok: true,
+            startedAt: new Date().toISOString(),
+            uptimeSeconds: 125,
+            memoryBytes: 64 * 1024 * 1024,
+            version: '0.13.0',
+            build: 'abc1234',
+          },
+          metrics: {
+            requests: { total: 42, ok: 39, clientError: 2, serverError: 1 },
+            activeStreams: 3,
+            onlineUsers: 2,
+            users: 10,
+            chats: 4,
+            messages: 250,
+            storageBytes: 4096,
+            pushQueue: 0,
+            clientErrors: errors.length,
+          },
+          errors,
+        },
+      });
+    }
+    if (pathname === '/api/admin/client-errors' && route.request().method() === 'DELETE') {
+      errors = [];
+      return route.fulfill({ json: { ok: true } });
+    }
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto('/admin');
+  await page.getByRole('button', { name: 'Мониторинг', exact: true }).click();
+  await expect(page.locator('.admin-metrics')).toContainText('Работает');
+  await expect(page.locator('.admin-metrics')).toContainText('250 сообщ.');
+  await expect(page.locator('.admin-error-item')).toContainText('Test client failure');
+  const fits = await page.evaluate(
+    () => document.documentElement.scrollWidth <= window.innerWidth,
+  );
+  expect(fits).toBe(true);
+
+  await page.getByRole('button', { name: 'Очистить журнал', exact: true }).click();
+  await expect(page.locator('.admin-empty')).toContainText('Ошибок клиента не зафиксировано.');
+});

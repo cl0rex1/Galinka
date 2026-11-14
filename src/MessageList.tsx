@@ -1,4 +1,14 @@
-import { Fragment, memo, useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import {
+  Fragment,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
+import { flushSync } from 'react-dom';
 import {
   AlertCircle,
   Check,
@@ -22,6 +32,12 @@ import { fileLabel, MediaAttachment } from './MediaAttachment';
 import { MessageText, plainText } from './MessageText';
 import { closeMenu, openMenu as showMenu } from './ui';
 import type { Attachment, Chat, Message, Person } from './types';
+
+const VIRTUAL_THRESHOLD = 120;
+const OVERSCAN = 35;
+const MIN_WINDOW = 80;
+const DEFAULT_ROW_HEIGHT = 48;
+const itemKey = (message: Message) => (message.nonce ? `n:${message.nonce}` : message.id);
 
 const timeFormatter = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' });
 const dayFormatter = new Intl.DateTimeFormat('ru', { day: 'numeric', month: 'long' });
@@ -76,6 +92,7 @@ type RowProps = {
   savingEdit: boolean;
   actions: MessageActions;
   highlight?: string;
+  itemKey: string;
 };
 const interactive =
   'button, a, input, textarea, audio, video, details, [role="button"], [role="slider"]';
@@ -105,6 +122,7 @@ const MessageRow = memo(function MessageRow({
   savingEdit,
   actions,
   highlight,
+  itemKey: rowKey,
 }: RowProps) {
   const menu = useRef<HTMLDetailsElement>(null);
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
@@ -147,7 +165,7 @@ const MessageRow = memo(function MessageRow({
     };
   }
   return (
-    <div className="message-group-item">
+    <div className="message-group-item" data-item-key={rowKey}>
       <article
         data-message-id={m.id}
         className={`message-row ${fresh ? 'is-new' : ''} ${own ? 'own' : ''} ${bot ? 'bot' : ''} ${continued ? 'continued' : ''} ${showAvatar ? 'last' : ''} ${selected ? 'selected' : ''}`}
@@ -425,6 +443,65 @@ const MessageRow = memo(function MessageRow({
   );
 });
 
+function computeRange(
+  messages: Message[],
+  heights: Map<string, number>,
+  scroller: HTMLElement | null,
+  listEl: HTMLElement | null,
+  awayFromBottom: boolean | undefined,
+  revealTarget: { index: number; until: number } | null,
+) {
+  const count = messages.length;
+  if (count <= VIRTUAL_THRESHOLD) {
+    return { start: 0, end: count, firstVisible: 0, lastVisible: count };
+  }
+  let start = 0;
+  let end = count;
+  let firstVisible = 0;
+  let lastVisible = count;
+  if (!scroller || !listEl || (awayFromBottom === false && scroller.scrollTop === 0)) {
+    start = awayFromBottom === false ? Math.max(0, count - MIN_WINDOW) : 0;
+    end = Math.min(count, start + MIN_WINDOW);
+    firstVisible = start;
+    lastVisible = end;
+  } else {
+    let total = 0;
+    const offsets = new Float64Array(count + 1);
+    for (let i = 0; i < count; i++) {
+      offsets[i] = total;
+      total += heights.get(itemKey(messages[i])) ?? DEFAULT_ROW_HEIGHT;
+    }
+    offsets[count] = total;
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const listRect = listEl.getBoundingClientRect();
+    const listTop = listRect.top - scrollerRect.top + scroller.scrollTop;
+    const viewTop = Math.max(0, scroller.scrollTop - listTop);
+    const viewBottom = viewTop + Math.max(scroller.clientHeight, 480);
+
+    while (firstVisible < count - 1 && offsets[firstVisible + 1] < viewTop) firstVisible++;
+    lastVisible = firstVisible + 1;
+    while (lastVisible < count && offsets[lastVisible] <= viewBottom) lastVisible++;
+
+    start = Math.max(0, firstVisible - OVERSCAN);
+    end = Math.min(count, lastVisible + OVERSCAN);
+    if (end - start < MIN_WINDOW) {
+      const deficit = MIN_WINDOW - (end - start);
+      const addAfter = Math.min(count - end, Math.ceil(deficit / 2));
+      end += addAfter;
+      start = Math.max(0, start - (deficit - addAfter));
+    }
+  }
+  if (revealTarget && Date.now() < revealTarget.until) {
+    const idx = Math.max(0, Math.min(count - 1, revealTarget.index));
+    if (idx < start + 10 || idx >= end - 10) {
+      start = Math.max(0, Math.min(idx - Math.floor(MIN_WINDOW / 2), count - MIN_WINDOW));
+      end = Math.min(count, start + MIN_WINDOW);
+    }
+  }
+  return { start, end, firstVisible, lastVisible };
+}
+
 export const MessageList = memo(function MessageList({
   messages,
   meId,
@@ -438,6 +515,7 @@ export const MessageList = memo(function MessageList({
   copiedId,
   sending,
   savingEdit,
+  awayFromBottom,
   actions,
   highlight,
 }: {
@@ -456,15 +534,162 @@ export const MessageList = memo(function MessageList({
   copiedId: string | null;
   sending: boolean;
   savingEdit: boolean;
+  awayFromBottom?: boolean;
   actions: MessageActions;
   highlight?: string;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const heightsRef = useRef<Map<string, number>>(new Map());
+  const anchorRef = useRef<{ key: string; offset: number } | null>(null);
+  const revealTargetRef = useRef<{ index: number; until: number } | null>(null);
+  const [range, setRange] = useState<{ start: number; end: number } | null>(null);
+  const latestRef = useRef({ messages, awayFromBottom, range });
+  latestRef.current = { messages, awayFromBottom, range };
+
+  const measureRows = useCallback(() => {
+    const listEl = listRef.current;
+    if (!listEl) return;
+    listEl.querySelectorAll<HTMLElement>('.message-group-item[data-item-key]').forEach((item) => {
+      const key = item.dataset.itemKey;
+      if (!key) return;
+      const row = item.firstElementChild as HTMLElement | null;
+      const margin = row ? parseFloat(getComputedStyle(row).marginTop) || 0 : 0;
+      const h = item.offsetHeight + margin;
+      if (h > 0) heightsRef.current.set(key, h);
+    });
+  }, []);
+
+  const updateWindow = useCallback(() => {
+    const listEl = listRef.current;
+    const scroller = listEl?.closest<HTMLElement>('.messages') ?? null;
+    const { messages: msgs, awayFromBottom: away, range: cur } = latestRef.current;
+    if (!listEl || !scroller || msgs.length <= VIRTUAL_THRESHOLD) {
+      if (cur !== null) setRange(null);
+      return;
+    }
+    if (revealTargetRef.current && Date.now() >= revealTargetRef.current.until) {
+      revealTargetRef.current = null;
+    }
+    const next = computeRange(
+      msgs,
+      heightsRef.current,
+      scroller,
+      listEl,
+      away,
+      revealTargetRef.current,
+    );
+    if (
+      cur &&
+      next.firstVisible >= cur.start + 10 &&
+      next.lastVisible <= cur.end - 10 &&
+      !(cur.start > 0 && next.firstVisible <= OVERSCAN) &&
+      !(cur.end < msgs.length && next.lastVisible + OVERSCAN >= msgs.length)
+    ) {
+      return;
+    }
+    if (cur && next.start === cur.start && next.end === cur.end) return;
+    if (away !== false && scroller.scrollTop > 0 && !revealTargetRef.current) {
+      const scrollerTop = scroller.getBoundingClientRect().top;
+      const items = listEl.querySelectorAll<HTMLElement>('.message-group-item[data-item-key]');
+      for (const item of items) {
+        const top = item.getBoundingClientRect().top - scrollerTop;
+        if (top + item.offsetHeight > 0 && item.dataset.itemKey) {
+          anchorRef.current = { key: item.dataset.itemKey, offset: top };
+          break;
+        }
+      }
+    }
+    setRange({ start: next.start, end: next.end });
+  }, []);
+
+  useEffect(() => {
+    const listEl = listRef.current;
+    const scroller = listEl?.closest<HTMLElement>('.messages') ?? null;
+    if (!listEl || !scroller) return;
+    const onScroll = () => updateWindow();
+    const onReveal = (event: Event) => {
+      const index = (event as CustomEvent<{ index?: number }>).detail?.index;
+      const msgs = latestRef.current.messages;
+      if (
+        typeof index !== 'number' ||
+        index < 0 ||
+        index >= msgs.length ||
+        msgs.length <= VIRTUAL_THRESHOLD
+      )
+        return;
+      anchorRef.current = null;
+      const start = Math.max(0, Math.min(index - Math.floor(MIN_WINDOW / 2), msgs.length - MIN_WINDOW));
+      const end = Math.min(msgs.length, start + MIN_WINDOW);
+      revealTargetRef.current = { index, until: Date.now() + 900 };
+      flushSync(() => setRange({ start, end }));
+    };
+    const observer = new ResizeObserver(() => {
+      measureRows();
+      updateWindow();
+    });
+    observer.observe(listEl);
+    observer.observe(scroller);
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    scroller.addEventListener('galinka:reveal', onReveal);
+    return () => {
+      observer.disconnect();
+      scroller.removeEventListener('scroll', onScroll);
+      scroller.removeEventListener('galinka:reveal', onReveal);
+    };
+  }, [measureRows, updateWindow]);
+
+  let start = 0;
+  let end = messages.length;
+  if (messages.length > VIRTUAL_THRESHOLD) {
+    if (range) {
+      start = Math.min(range.start, Math.max(0, messages.length - 1));
+      end = Math.min(messages.length, range.end);
+      if (awayFromBottom === false) {
+        end = messages.length;
+        start = Math.max(0, Math.min(start, end - MIN_WINDOW), end - (MIN_WINDOW + 30));
+      } else if (end - start < MIN_WINDOW) {
+        end = Math.min(messages.length, start + MIN_WINDOW);
+        start = Math.max(0, end - MIN_WINDOW);
+      }
+    } else {
+      start = awayFromBottom === false ? Math.max(0, messages.length - MIN_WINDOW) : 0;
+      end = Math.min(messages.length, start + MIN_WINDOW);
+    }
+  }
+
+  useLayoutEffect(() => {
+    measureRows();
+    const anchor = anchorRef.current;
+    anchorRef.current = null;
+    if (!anchor) return;
+    const listEl = listRef.current;
+    const scroller = listEl?.closest<HTMLElement>('.messages');
+    if (!listEl || !scroller) return;
+    const escaped = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(anchor.key) : anchor.key;
+    const target = listEl.querySelector<HTMLElement>(`.message-group-item[data-item-key="${escaped}"]`);
+    if (!target) return;
+    const actual = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    if (Math.abs(actual - anchor.offset) >= 1) {
+      scroller.scrollTop += actual - anchor.offset;
+    }
+  }, [messages, start, end, selection, highlight, measureRows]);
+
+  let topSpacer = 0;
+  let bottomSpacer = 0;
+  if (messages.length > VIRTUAL_THRESHOLD) {
+    const heights = heightsRef.current;
+    for (let i = 0; i < start; i++) topSpacer += heights.get(itemKey(messages[i])) ?? DEFAULT_ROW_HEIGHT;
+    for (let i = end; i < messages.length; i++)
+      bottomSpacer += heights.get(itemKey(messages[i])) ?? DEFAULT_ROW_HEIGHT;
+  }
+
   const fresh = new Set(newMessageIds);
   const today = new Date().toDateString();
   // One section per day so the date pill can stick to the top while that day scrolls by.
   const days: { key: string; label: string; items: number[] }[] = [];
-  messages.forEach((message, index) => {
-    if (!index || !sameDay(messages[index - 1], message)) {
+  for (let index = start; index < end; index++) {
+    const message = messages[index];
+    if (!days.length || !sameDay(messages[index - 1], message)) {
       const date = new Date(message.created_at);
       days.push({
         key: date.toDateString(),
@@ -473,9 +698,12 @@ export const MessageList = memo(function MessageList({
       });
     }
     days.at(-1)!.items.push(index);
-  });
+  }
   return (
-    <div className={`message-list kind-${kind}`}>
+    <div ref={listRef} className={`message-list kind-${kind}`}>
+      {topSpacer > 0 && (
+        <div className="message-spacer" style={{ height: topSpacer, flexShrink: 0 }} aria-hidden="true" />
+      )}
       {days.map((day) => (
         <section className="message-day" key={day.key}>
           <div className="date-divider">
@@ -483,9 +711,10 @@ export const MessageList = memo(function MessageList({
           </div>
           {day.items.map((index) => {
             const message = messages[index];
+            const key = itemKey(message);
             return (
               // Keyed by nonce: the server's copy replaces a just-sent bubble without a remount.
-              <Fragment key={message.nonce ? `n:${message.nonce}` : message.id}>
+              <Fragment key={key}>
                 {message.id === unreadFrom && (
                   <div className="unread-divider" role="separator">
                     <span>Новые сообщения</span>
@@ -493,6 +722,7 @@ export const MessageList = memo(function MessageList({
                 )}
                 <MessageRow
                   message={message}
+                  itemKey={key}
                   own={message.sender_id === meId}
                   canDelete={message.sender_id === meId || Boolean(moderator)}
                   pinned={canPin ? message.id === pinnedId : null}
@@ -513,6 +743,13 @@ export const MessageList = memo(function MessageList({
           })}
         </section>
       ))}
+      {bottomSpacer > 0 && (
+        <div
+          className="message-spacer"
+          style={{ height: bottomSpacer, flexShrink: 0 }}
+          aria-hidden="true"
+        />
+      )}
     </div>
   );
 });

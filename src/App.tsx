@@ -1,12 +1,4 @@
-import {
-  useState,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useCallback,
-  useMemo,
-  type FormEvent,
-} from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import {
   MessageCircle,
   Search,
@@ -15,13 +7,6 @@ import {
   Settings2,
   Download,
   X,
-  Paperclip,
-  Images,
-  FileText,
-  Smile,
-  Check,
-  Reply,
-  Pencil,
   Pin,
   PinOff,
   Bell,
@@ -32,10 +17,7 @@ import {
   MoreVertical,
   Copy,
   ScanLine,
-  LoaderCircle,
   WifiOff,
-  ArrowUp,
-  ArrowDown,
   ChevronDown,
   ChevronUp,
   Megaphone,
@@ -46,16 +28,15 @@ import {
 import { useConversationGestures } from './gestures';
 import { Avatar, seenText } from './Avatar';
 import { MessageList, type MessageActions } from './MessageList';
-import { AttachmentPreview, type Transfer } from './AttachmentPreview';
-import { GroupSettings } from './GroupSettings';
-import { VoiceRecorder } from './VoiceRecorder';
-import { VideoNoteRecorder } from './VideoNoteRecorder';
 import { fileLabel } from './MediaAttachment';
 import { plainText } from './MessageText';
 import { Announcements } from './Announcements';
-import { api, upload, ApiError, isDemo } from './api';
+import { api, ApiError, isDemo } from './api';
 import { useUpdates } from './updates';
 import { useLiveMessages } from './useLiveMessages';
+import { useConversation } from './useConversation';
+import { useComposer } from './useComposer';
+import { Composer } from './Composer';
 import { NewChat } from './NewChat';
 import { ChatList, folders } from './ChatList';
 import { ChatInfo } from './ChatInfo';
@@ -63,32 +44,21 @@ import { DeleteMessages } from './DeleteMessages';
 import { downloadAttachment } from './download';
 import { ForwardDialog } from './ForwardDialog';
 import { typingText, useTyping, useTypingSender } from './typing';
-import { reconcileMessages, firstUnread, type CachedConversation } from './conversation';
 import { useNotifications, isNative, clearPushDevice } from './notifications';
 import { Auth } from './Auth';
+import { GroupSettings } from './GroupSettings';
 import { Settings } from './Settings';
 import { PersonCard } from './PersonCard';
 import { SearchResults } from './SearchResults';
 import { installedApp, touchDevice } from './platform';
 import { currentAccent, ShareSheet } from './Share';
-import { lookPrefs, ThemeImport } from './Appearance';
+import { ThemeImport } from './Appearance';
 import { LoginApprove } from './QrLogin';
 import { QrScanner, ScannedText } from './QrScanner';
 import { decodeTheme, type CustomTheme } from './theme';
-import {
-  closeMenu,
-  IconButton,
-  Modal,
-  motionAllowed,
-  plural,
-  toggleMenu,
-  usePresence,
-  useTabIndicator,
-} from './ui';
-import { compressImage } from './image';
+import { closeMenu, IconButton, Modal, plural, toggleMenu, usePresence, useTabIndicator } from './ui';
 import { App as NativeApp } from '@capacitor/app';
-import { flushSync } from 'react-dom';
-import type { Person, Chat, Message, Attachment, SearchHit } from './types';
+import type { Person, Chat, Message, SearchHit } from './types';
 
 type InstallEvent = Event & {
   prompt: () => Promise<void>;
@@ -115,8 +85,6 @@ export default function App() {
     [demo, setDemo] = useState(isDemo),
     [chats, setChats] = useState<Chat[]>([]),
     [activeId, setActiveId] = useState<string | null>(null),
-    [messages, setMessages] = useState<Message[]>([]),
-    [members, setMembers] = useState<Person[]>([]),
     [section, setSection] = useState<Section>('chats'),
     [modal, setModal] = useState<ModalKind>(null),
     [filter, setFilter] = useState('Все'),
@@ -124,38 +92,17 @@ export default function App() {
     [searchOpen, setSearchOpen] = useState(false),
     [messageQuery, setMessageQuery] = useState(''),
     [infoOpen, setInfoOpen] = useState(false),
-    [drafts, setDrafts] = useState<Record<string, string>>({}),
-    [replies, setReplies] = useState<Record<string, Message>>({}),
-    [editing, setEditing] = useState<{ message: Message; body: string } | null>(null),
-    [savingEdit, setSavingEdit] = useState(false),
     [copiedMessageId, setCopiedMessageId] = useState<string | null>(null),
     [preferenceBusy, setPreferenceBusy] = useState(false),
-    [sendingIds, setSendingIds] = useState<string[]>([]),
-    [transfers, setTransfers] = useState<Record<string, Transfer>>({}),
-    [attachments, setAttachments] = useState<
-      Record<string, { file: File; source?: File; uploaded?: Attachment }>
-    >({}),
-    [awayFromBottom, setAwayFromBottom] = useState(false),
-    [newMessageIds, setNewMessageIds] = useState<string[]>([]),
-    /** The first message that was unread when the chat was opened; the divider goes above it. */
-    [unreadFrom, setUnreadFrom] = useState<string | null>(null),
     [error, setError] = useState(''),
     [connected, setConnected] = useState(true),
-    [loading, setLoading] = useState(false),
-    [hasOlder, setHasOlder] = useState(false),
-    [paging, setPaging] = useState(false),
-    [mentionCursor, setMentionCursor] = useState<number | null>(null),
-    [mentionIndex, setMentionIndex] = useState(0),
     [install, setInstall] = useState<InstallEvent | null>(null),
     [inviteUrl, setInviteUrl] = useState(''),
     [deleteIds, setDeleteIds] = useState<string[]>([]),
     /** Selected message ids while selecting several, otherwise null. */
     [selection, setSelection] = useState<Set<string> | null>(null),
     [forwarding, setForwarding] = useState<string[] | null>(null),
-    /** The "send without sound" option over the send button. */
-    [sendOptions, setSendOptions] = useState(false),
     [name, setName] = useState(''),
-    [emojiOpen, setEmojiOpen] = useState(false),
     [person, setPerson] = useState<Person | null>(null),
     [dropping, setDropping] = useState(false),
     [hits, setHits] = useState<string[] | null>(null),
@@ -172,102 +119,30 @@ export default function App() {
   const [typing, setTyping] = useTyping();
   const sendTyping = useTypingSender(Boolean(me) && !demo);
   const initialized = useRef(false);
-  const conversationCache = useRef(new Map<string, CachedConversation>());
-  const cacheOwner = useRef<string | null>(null);
-  const cachedScroll = useRef<{
-    id: string;
-    top: number;
-    following: boolean;
-    messages: Message[];
-  } | null>(null);
-  const draftSnapshot = useRef<{ id: string; drafts: Record<string, string> } | null>(null);
-  if (me) draftSnapshot.current = { id: me.id, drafts };
   const sectionRef = useRef(section);
   sectionRef.current = section;
   const activeRef = useRef(activeId),
-    bottomRef = useRef<HTMLDivElement>(null),
-    scroller = useRef<HTMLDivElement>(null),
-    textarea = useRef<HTMLTextAreaElement>(null),
-    fileInput = useRef<HTMLInputElement>(null),
-    requestEpoch = useRef(0),
     chatRequestEpoch = useRef(0),
-    nonces = useRef<Record<string, string>>({}),
-    sendingChats = useRef(new Set<string>()),
-    textQueue = useRef<Record<string, Promise<unknown>>>({}),
-    lastRead = useRef<Record<string, string>>({}),
-    messagesRef = useRef(messages),
-    olderRequest = useRef<{ id: string; promise: Promise<boolean> } | null>(null),
-    lastScrollTop = useRef(0),
-    scrollRestore = useRef<{ id: string; top: number; height: number } | null>(null),
-    joined = useRef(false),
-    followBottom = useRef(true),
-    jumpingToLatest = useRef(false),
-    editRequest = useRef(false);
+    joined = useRef(false);
   activeRef.current = activeId;
-  messagesRef.current = messages;
-  const active = chats.find((c) => c.id === activeId),
-    draft = activeId ? drafts[activeId] || '' : '',
-    attachment = activeId ? attachments[activeId]?.file : undefined,
-    sending = activeId ? sendingIds.includes(activeId) : false,
-    reply = activeId ? replies[activeId] : undefined,
-    edit = editing?.message.chat_id === activeId ? editing : null,
-    composerValue = edit ? edit.body : draft,
-    savingCurrentEdit = Boolean(edit && savingEdit);
-  const mention =
-    mentionCursor === null || sending || savingCurrentEdit
-      ? null
-      : /(?:^|\s)@([\p{L}\p{N}_]{0,24})$/u.exec(composerValue.slice(0, mentionCursor));
-  const mentionOptions = mention
-    ? members
-        .filter(
-          (member) =>
-            member.id !== me?.id &&
-            member.username &&
-            (member.username.toLowerCase().startsWith(mention[1].toLowerCase()) ||
-              member.name.toLowerCase().startsWith(mention[1].toLowerCase())),
-        )
-        .slice(0, 6)
-    : [];
-  const mentionPanel = usePresence(mentionOptions.length > 0, 160);
-  const previousMentionOptions = useRef(mentionOptions);
-  if (mentionOptions.length) previousMentionOptions.current = mentionOptions;
-  const shownMentionOptions = mentionPanel.closing
-    ? previousMentionOptions.current
-    : mentionOptions;
-  const mentionList = useRef<HTMLDivElement>(null);
-  const selectedMention = mentionOptions[mentionIndex % mentionOptions.length];
-  useEffect(() => {
-    const list = mentionList.current;
-    const selected = list?.querySelector<HTMLElement>('.selected');
-    if (!list || !selected) return;
-    const top = selected.offsetTop;
-    const bottom = top + selected.offsetHeight;
-    const visibleBottom = list.scrollTop + list.clientHeight;
-    if (top < list.scrollTop || bottom > visibleBottom)
-      list.scrollTo({
-        top: top < list.scrollTop ? top : bottom - list.clientHeight,
-        behavior: 'auto',
-      });
-  }, [selectedMention?.id]);
+  const chatsRef = useRef(chats);
+  chatsRef.current = chats;
+  const active = chats.find((c) => c.id === activeId);
+
+  const resettersRef = useRef({
+    conversation: () => {},
+    composer: () => {},
+  });
   const report = useCallback((e: unknown) => {
     if (e instanceof ApiError && e.status === 401) {
       // A revoked/expired session must stop rendering private conversation data.
-      ++requestEpoch.current;
       ++chatRequestEpoch.current;
       initialized.current = false;
-      conversationCache.current.clear();
-      lastRead.current = {};
-      nonces.current = {};
+      resettersRef.current.conversation();
+      resettersRef.current.composer();
       setMe(null);
       setActiveId(null);
       setChats([]);
-      setMessages([]);
-      setMembers([]);
-      setAttachments({});
-      setTransfers({});
-      setDrafts({});
-      setReplies({});
-      setEditing(null);
       setModal(null);
       setInfoOpen(false);
       setSearchOpen(false);
@@ -280,60 +155,89 @@ export default function App() {
     }
     setError((e as Error).message || 'Не удалось выполнить действие.');
   }, []);
-  const handleLogin = useCallback((person: Person) => {
-    if (cacheOwner.current !== person.id) conversationCache.current.clear();
-    cacheOwner.current = person.id;
-    let saved: Record<string, string> = {};
-    try {
-      const value = JSON.parse(localStorage.getItem(`galinka-drafts:${person.id}`) || '{}');
-      if (value && typeof value === 'object' && !Array.isArray(value))
-        saved = Object.fromEntries(
-          Object.entries(value)
-            .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
-            .slice(0, 200)
-            .map(([id, text]) => [id, text.slice(0, 8000)]),
-        );
-    } catch {
-      /* Private browsing may disable local storage. */
+
+  const refreshChats = useCallback(async () => {
+    const epoch = ++chatRequestEpoch.current;
+    const data = await api<Chat[]>('/chats');
+    if (epoch !== chatRequestEpoch.current) return data;
+    setChats(data);
+    if (!initialized.current) {
+      initialized.current = true;
+      if (!window.matchMedia(narrowLayout).matches)
+        setActiveId((id) => id || data.find((chat) => !chat.archived)?.id || null);
     }
-    setError('');
-    setConnected(navigator.onLine);
-    setDrafts(saved);
-    setMe(person);
+    return data;
   }, []);
-  const persistDrafts = useCallback(() => {
-    const snapshot = draftSnapshot.current;
-    if (!snapshot) return;
-    try {
-      const saved = Object.fromEntries(
-        Object.entries(snapshot.drafts).filter(([, value]) => value.length > 0),
-      );
-      if (Object.keys(saved).length)
-        localStorage.setItem(`galinka-drafts:${snapshot.id}`, JSON.stringify(saved));
-      else localStorage.removeItem(`galinka-drafts:${snapshot.id}`);
-    } catch {
-      /* Storage limits must not interrupt typing or sending. */
-    }
+
+  const closeMenus = useCallback(() => {
+    document
+      .querySelectorAll('details.message-menu[open], details.chat-actions[open]')
+      .forEach((menu) => closeMenu(menu));
   }, []);
-  useEffect(() => {
-    if (!me) {
-      persistDrafts();
-      return;
-    }
-    const timer = setTimeout(persistDrafts, 200);
-    return () => clearTimeout(timer);
-  }, [drafts, me?.id, persistDrafts]);
-  useEffect(() => {
-    const hidden = () => {
-      if (document.hidden) persistDrafts();
-    };
-    window.addEventListener('pagehide', persistDrafts);
-    document.addEventListener('visibilitychange', hidden);
-    return () => {
-      window.removeEventListener('pagehide', persistDrafts);
-      document.removeEventListener('visibilitychange', hidden);
-    };
-  }, [persistDrafts]);
+
+  const conversation = useConversation({
+    me,
+    activeId,
+    active,
+    section,
+    ready,
+    infoOpen,
+    groupModalOpen: modal === 'group',
+    composerLayoutKey: '',
+    chatsRef,
+    activeRef,
+    sectionRef,
+    refreshChats,
+    report,
+    onError: setError,
+    onChatOpened: () => setSelection(null),
+  });
+
+  const composer = useComposer({
+    me,
+    demo,
+    activeId,
+    active,
+    members: conversation.members,
+    chatsRef,
+    activeRef,
+    sectionRef,
+    messagesRef: conversation.messagesRef,
+    setMessages: conversation.setMessages,
+    setNewMessageIds: conversation.setNewMessageIds,
+    stickOnSend: conversation.stickOnSend,
+    loadMessages: conversation.loadMessages,
+    refreshChats,
+    sendTyping,
+    report,
+    onError: setError,
+    closeMenus,
+  });
+
+  resettersRef.current = {
+    conversation: () => conversation.resetConversation(true),
+    composer: composer.resetComposer,
+  };
+
+  // Stick when following bottom as the composer reply/edit/attachment bar resizes:
+  useLayoutEffect(() => {
+    const el = conversation.scroller.current;
+    if (!el || conversation.awayFromBottom) return;
+    const bottom = el.scrollHeight - el.clientHeight;
+    if (Math.abs(el.scrollTop - bottom) >= 1) el.scrollTop = bottom;
+  }, [composer.layoutKey, conversation.awayFromBottom, conversation.scroller]);
+
+  const handleLogin = useCallback(
+    (account: Person) => {
+      conversation.syncCacheOwner(account.id);
+      composer.loadDraftsFor(account.id);
+      setError('');
+      setConnected(navigator.onLine);
+      setMe(account);
+    },
+    [],
+  );
+
   const notifications = useNotifications(me?.id, demo, (id) => {
     setActiveId(id);
     setSection('chats');
@@ -342,20 +246,20 @@ export default function App() {
   });
   const notificationRef = useRef(notifications);
   notificationRef.current = notifications;
-  const chatsRef = useRef(chats);
-  chatsRef.current = chats;
+
   const gestures = useConversationGestures({
-    enabled: Boolean(activeId && !sending && !modal && !editing && !searchOpen),
+    enabled: Boolean(activeId && !composer.sending && !modal && !composer.edit && !searchOpen),
     chatId: activeId,
     onReply: (id) => {
-      const message = messagesRef.current.find((item) => item.id === id);
-      if (message) startReply(message);
+      const message = conversation.messagesRef.current.find((item) => item.id === id);
+      if (message) composer.startReply(message);
     },
     onBack: () => {
       setActiveId(null);
       setInfoOpen(false);
     },
   });
+
   const unreadCount = chats
     .filter((chat) => !chat.muted)
     .reduce((total, chat) => total + chat.unread, 0);
@@ -370,13 +274,14 @@ export default function App() {
       void result?.catch(() => {});
     }
   }, [unreadCount, demo]);
+
   useEffect(() => {
     if (!isNative) return;
     const back = NativeApp.addListener('backButton', () => {
       if (modal) setModal(null);
       else if (selection) setSelection(null);
-      else if (emojiOpen) setEmojiOpen(false);
-      else if (edit) setEditing(null);
+      else if (composer.emojiOpen) composer.setEmojiOpen(false);
+      else if (composer.edit) composer.setEditing(null);
       else if (document.querySelector('details.message-menu[open], details.chat-actions[open]'))
         document
           .querySelectorAll('details.message-menu[open], details.chat-actions[open]')
@@ -392,12 +297,17 @@ export default function App() {
     return () => {
       void back.then((handle) => handle.remove());
     };
-  }, [modal, emojiOpen, infoOpen, searchOpen, section, activeId, edit, selection]);
-  useEffect(() => {
-    if (!textarea.current) return;
-    textarea.current.style.height = 'auto';
-    textarea.current.style.height = `${Math.min(textarea.current.scrollHeight, 160)}px`;
-  }, [composerValue]);
+  }, [
+    modal,
+    composer.emojiOpen,
+    composer.edit,
+    infoOpen,
+    searchOpen,
+    section,
+    activeId,
+    selection,
+  ]);
+
   useEffect(() => {
     if (new URLSearchParams(location.search).has('demo')) {
       sessionStorage.setItem('galinka-demo', 'true');
@@ -410,7 +320,8 @@ export default function App() {
           setError('Не удалось подключиться к серверу. Демоверсия доступна ниже.');
       })
       .finally(() => setReady(true));
-  }, []);
+  }, [handleLogin]);
+
   useEffect(() => {
     const handle = (e: Event) => {
       e.preventDefault();
@@ -419,90 +330,12 @@ export default function App() {
     window.addEventListener('beforeinstallprompt', handle);
     return () => window.removeEventListener('beforeinstallprompt', handle);
   }, []);
-  const refreshChats = useCallback(async () => {
-    const epoch = ++chatRequestEpoch.current;
-    const data = await api<Chat[]>('/chats');
-    if (epoch !== chatRequestEpoch.current) return data;
-    setChats(data);
-    if (!initialized.current) {
-      initialized.current = true;
-      if (!window.matchMedia(narrowLayout).matches)
-        setActiveId((id) => id || data.find((chat) => !chat.archived)?.id || null);
-    }
-    return data;
-  }, []);
-  const markRead = useCallback(
-    async (id: string, lastMessageId: string) => {
-      if (
-        activeRef.current !== id ||
-        !followBottom.current ||
-        sectionRef.current !== 'chats' ||
-        document.visibilityState !== 'visible' ||
-        lastRead.current[id] === lastMessageId
-      )
-        return;
-      lastRead.current[id] = lastMessageId;
-      try {
-        await api(`/chats/${id}/read`, 'POST', { lastMessageId });
-        // Refresh instead of clearing the count blindly: a newer message may have arrived meanwhile.
-        await refreshChats();
-      } catch (e) {
-        if (lastRead.current[id] === lastMessageId) delete lastRead.current[id];
-        if (e instanceof ApiError && e.status === 401) report(e);
-      }
-    },
-    [refreshChats, report],
-  );
-  const loadMessages = useCallback(
-    async (id: string, reset = false) => {
-      if (activeRef.current !== id) return;
-      const epoch = ++requestEpoch.current;
-      const data = await api<Message[]>(`/chats/${id}/messages`);
-      if (activeRef.current !== id || epoch !== requestEpoch.current) return;
-      const previous = messagesRef.current;
-      const latest = previous.at(-1);
-      const freshIds =
-        !reset && latest
-          ? data
-              .filter(
-                (m) =>
-                  !previous.some(
-                    (old) => old.id === m.id || (old.pending && old.nonce === m.nonce),
-                  ) && m.created_at >= latest.created_at,
-              )
-              .map((m) => m.id)
-          : [];
-      setNewMessageIds((previousIds) =>
-        previousIds.length === freshIds.length &&
-        previousIds.every((messageId, index) => messageId === freshIds[index])
-          ? previousIds
-          : freshIds,
-      );
-      const boundary = data.length ? previous.findIndex((m) => m.id === data[0].id) : -1;
-      setMessages((prev) => {
-        // Messages still on their way stay at the end until the server returns them.
-        const local = prev.filter((m) => m.pending && !data.some((d) => d.nonce === m.nonce));
-        if (reset || data.length < 60) return reconcileMessages(prev, [...data, ...local]);
-        const overlap = prev.findIndex((m) => m.id === data[0].id);
-        return reconcileMessages(prev, [
-          ...(overlap > 0 ? prev.slice(0, overlap) : []),
-          ...data,
-          ...local,
-        ]);
-      });
-      // A non-overlapping window means over 60 new messages arrived while offline.
-      // Expose older history again; retaining the old "fully loaded" flag would hide it.
-      if (reset || boundary < 0 || data.length < 60) setHasOlder(data.length === 60);
-      if (data.length) await markRead(id, data.at(-1)!.id);
-      return data;
-    },
-    [markRead],
-  );
+
   useEffect(() => {
     if (!me) return;
     let live = true;
-    const reportLive = (error: unknown) => {
-      if (live) report(error);
+    const reportLive = (err: unknown) => {
+      if (live) report(err);
     };
     refreshChats().catch(reportLive);
     const token = new URLSearchParams(location.search).get('join');
@@ -520,26 +353,27 @@ export default function App() {
       live = false;
     };
   }, [me?.id, demo, refreshChats, report]);
+
   useLiveMessages({
     enabled: Boolean(me) && !demo,
     meId: me?.id,
     refs: {
       active: activeRef,
       section: sectionRef,
-      messages: messagesRef,
+      messages: conversation.messagesRef,
       chats: chatsRef,
-      cache: conversationCache,
-      requestEpoch,
+      cache: conversation.conversationCache,
+      requestEpoch: conversation.requestEpoch,
       chatRequestEpoch,
       notification: notificationRef,
     },
     set: {
-      messages: setMessages,
-      newMessageIds: setNewMessageIds,
-      replies: setReplies,
-      editing: setEditing,
+      messages: conversation.setMessages,
+      newMessageIds: conversation.setNewMessageIds,
+      replies: composer.setReplies,
+      editing: composer.setEditing,
       chats: setChats,
-      members: setMembers,
+      members: conversation.setMembers,
       activeId: setActiveId,
       infoOpen: setInfoOpen,
       modal: setModal,
@@ -548,167 +382,11 @@ export default function App() {
       typing: setTyping,
     },
     refreshChats,
-    loadMessages,
-    markRead,
+    loadMessages: conversation.loadMessages,
+    markRead: conversation.markRead,
     report,
   });
-  useEffect(() => {
-    if (!activeId || (!infoOpen && modal !== 'group') || !me) return;
-    const controller = new AbortController();
-    api<Person[]>(`/chats/${activeId}/members`, 'GET', undefined, { signal: controller.signal })
-      .then(setMembers)
-      .catch((error) => {
-        if (!controller.signal.aborted) report(error);
-      });
-    return () => controller.abort();
-  }, [activeId, active?.member_count, active?.owner_id, infoOpen, modal, me?.id, report]);
-  useLayoutEffect(() => {
-    if (!activeId || !me) return;
-    let valid = true;
-    const cached = conversationCache.current.get(activeId);
-    setLoading(!cached);
-    setPaging(false);
-    olderRequest.current = null;
-    lastScrollTop.current = 0;
-    setMentionCursor(null);
-    setAwayFromBottom(cached ? !cached.following : false);
-    setNewMessageIds([]);
-    setUnreadFrom(null);
-    setSelection(null);
-    const unread = chatsRef.current.find((chat) => chat.id === activeId)?.unread ?? 0;
-    jumpingToLatest.current = false;
-    scrollRestore.current = null;
-    cachedScroll.current = cached
-      ? { id: activeId, top: cached.top, following: cached.following, messages: cached.messages }
-      : null;
-    setMessages(cached?.messages || []);
-    setHasOlder(cached?.hasOlder || false);
-    setMembers([]);
-    followBottom.current = cached?.following ?? true;
-    const timer = setTimeout(() => {
-      Promise.all([
-        loadMessages(activeId, !cached),
-        api<Person[]>(`/chats/${activeId}/members`).then((data) => {
-          if (valid) setMembers(data);
-        }),
-      ])
-        .then(([data]) => {
-          if (!valid) return;
-          if (unread && data) setUnreadFrom(firstUnread(data, unread, me.id));
-          refreshChats().catch(() => {});
-        })
-        .catch((e) => {
-          if (!valid) return;
-          if (e instanceof ApiError && [403, 404].includes(e.status)) {
-            conversationCache.current.delete(activeId);
-            setMessages([]);
-          }
-          report(e);
-        })
-        .finally(() => {
-          if (valid) setLoading(false);
-        });
-    }, 0);
-    return () => {
-      valid = false;
-      clearTimeout(timer);
-      ++requestEpoch.current;
-    };
-  }, [activeId, me?.id, loadMessages, refreshChats, report]);
-  // Open on the first unread message when it would be above the screen at the bottom.
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    const divider = el?.querySelector<HTMLElement>('.unread-divider');
-    if (!el || !divider || !followBottom.current) return;
-    const top = el.scrollTop + divider.getBoundingClientRect().top - el.getBoundingClientRect().top;
-    // Measured against the bottom position: this runs before the list sticks there.
-    if (top - 8 >= el.scrollHeight - el.clientHeight) return;
-    autoScroll.current = true;
-    el.scrollTop = Math.max(0, top - 8);
-    followBottom.current = false;
-    setAwayFromBottom(true);
-  }, [unreadFrom, loading]);
-  /** Scroll to the bottom, marking it as ours so onScroll does not mistake it for the user. */
-  const autoScroll = useRef(false);
-  function stickToBottom(el: HTMLElement) {
-    const bottom = el.scrollHeight - el.clientHeight;
-    if (Math.abs(el.scrollTop - bottom) < 1) return;
-    autoScroll.current = true;
-    el.scrollTop = bottom;
-  }
-  const glide = useRef<{ id: string | null; last?: string; height: number }>({
-    id: null,
-    height: 0,
-  });
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    if (!el) return;
-    const cached = cachedScroll.current;
-    if (cached && cached.id === activeId) {
-      // The chat-change effect queues its messages first; wait for that DOM to commit.
-      if (messages !== cached.messages) return;
-      if (cached.following) stickToBottom(el);
-      else el.scrollTop = cached.top;
-      cachedScroll.current = null;
-      return;
-    }
-    const restore = scrollRestore.current;
-    const last = messages.at(-1)?.id;
-    const previous = glide.current;
-    glide.current = { id: activeId, last, height: el.scrollHeight };
-    if (restore && restore.id === activeId) {
-      const top = restore.top + el.scrollHeight - restore.height;
-      if (Math.abs(el.scrollTop - top) >= 1) {
-        autoScroll.current = true;
-        el.scrollTop = top;
-      }
-      lastScrollTop.current = el.scrollTop;
-      scrollRestore.current = null;
-    } else if (followBottom.current) {
-      stickToBottom(el);
-      // A message arrived at the bottom: instead of jumping, the list slides up by the new
-      // height. Quick bursts add up into one continuous movement rather than a series of jerks.
-      const list = el.querySelector<HTMLElement>('.message-list');
-      const grown = el.scrollHeight - previous.height;
-      if (
-        list &&
-        previous.id === activeId &&
-        previous.last !== last &&
-        grown > 0 &&
-        grown < el.clientHeight &&
-        motionAllowed()
-      ) {
-        const running = list.getAnimations().find((animation) => animation.id === 'glide');
-        const offset = running ? new DOMMatrixReadOnly(getComputedStyle(list).transform).m42 : 0;
-        running?.cancel();
-        const animation = list.animate(
-          [{ transform: `translateY(${offset + grown}px)` }, { transform: 'none' }],
-          { duration: 260, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' },
-        );
-        animation.id = 'glide';
-      }
-    }
-  }, [messages, loading, section, activeId, reply?.id, edit?.message.id, attachment]);
-  useEffect(() => {
-    if (!activeId || loading || messages.some((message) => message.chat_id !== activeId)) return;
-    const cache = conversationCache.current;
-    cache.delete(activeId);
-    cache.set(activeId, {
-      messages,
-      hasOlder,
-      top: scroller.current?.scrollTop ?? 0,
-      following: followBottom.current,
-    });
-    let retained = [...cache.values()].reduce(
-      (total, conversation) => total + conversation.messages.length,
-      0,
-    );
-    while (cache.size > 20 || (cache.size > 1 && retained > 1000)) {
-      const oldest = cache.keys().next().value!;
-      retained -= cache.get(oldest)!.messages.length;
-      cache.delete(oldest);
-    }
-  }, [activeId, messages, hasOlder, loading]);
+
   useEffect(() => {
     const dismiss = (event: PointerEvent) => {
       const target = event.target as Element;
@@ -717,8 +395,8 @@ export default function App() {
         .forEach((menu) => {
           if (!menu.contains(target)) closeMenu(menu);
         });
-      if (!target.closest('.emoji-wrap')) setEmojiOpen(false);
-      if (!target.closest('.send-options')) setSendOptions(false);
+      if (!target.closest('.emoji-wrap')) composer.setEmojiOpen(false);
+      if (!target.closest('.send-options')) composer.setSendOptions(false);
     };
     const escape = (event: KeyboardEvent) => {
       if (
@@ -734,11 +412,11 @@ export default function App() {
         menus.forEach((menu) => closeMenu(menu));
         return;
       }
-      if (!editRequest.current) setEditing(null);
-      setEmojiOpen(false);
+      if (!composer.editRequest.current) composer.setEditing(null);
+      composer.setEmojiOpen(false);
       setInfoOpen(false);
       setSelection(null);
-      setSendOptions(false);
+      composer.setSendOptions(false);
     };
     document.addEventListener('pointerdown', dismiss);
     document.addEventListener('keydown', escape);
@@ -747,33 +425,7 @@ export default function App() {
       document.removeEventListener('keydown', escape);
     };
   }, []);
-  function jumpToLatest() {
-    followBottom.current = true;
-    setAwayFromBottom(false);
-    const el = scroller.current;
-    jumpingToLatest.current = !!el && el.scrollHeight - el.scrollTop - el.clientHeight >= 80;
-    el?.scrollTo({
-      top: el.scrollHeight,
-      behavior:
-        document.documentElement.dataset.motion === 'reduced' ||
-        window.matchMedia('(prefers-reduced-motion: reduce)').matches
-          ? 'instant'
-          : 'smooth',
-    });
-    const latest = messages.at(-1);
-    if (!jumpingToLatest.current && activeId && latest) void markRead(activeId, latest.id);
-  }
-  useEffect(() => {
-    const el = scroller.current;
-    if (!el) return;
-    const observer = new ResizeObserver(() => {
-      if (followBottom.current) stickToBottom(el);
-    });
-    observer.observe(el);
-    const content = el.querySelector('.message-list');
-    if (content) observer.observe(content);
-    return () => observer.disconnect();
-  }, [activeId, section, ready, me?.id, loading]);
+
   /**
    * Galinka links, opened from the address bar or the QR scanner: sign-in approval, a shared
    * theme, someone's profile, a group invite. Returns false for anything else.
@@ -818,6 +470,7 @@ export default function App() {
     } else return false;
     return true;
   }
+
   // Links in the address bar; ?join= on first load is handled with the chat list above.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -827,6 +480,7 @@ export default function App() {
     ['login', 'theme', 'u'].forEach((key) => params.delete(key));
     history.replaceState({}, '', `${location.pathname}${params.size ? `?${params}` : ''}`);
   }, [me?.id]);
+
   // Search in a chat, as in Telegram: the conversation stays whole; arrows walk the matches
   // from newest to oldest, loading older history when a match is further up.
   useEffect(() => {
@@ -845,7 +499,7 @@ export default function App() {
           const ids = matches.map((message) => message.id).reverse();
           setHits(ids);
           setHitIndex(0);
-          if (ids[0]) void showMessage(ids[0]);
+          if (ids[0]) void conversation.showMessage(ids[0]);
         })
         .catch((cause) => {
           if (!controller.signal.aborted) report(cause);
@@ -856,12 +510,14 @@ export default function App() {
       controller.abort();
     };
   }, [messageQuery, activeId, searchOpen]);
+
   function stepHit(delta: number) {
     if (!hits?.length) return;
     const next = Math.max(0, Math.min(hits.length - 1, hitIndex + delta));
     setHitIndex(next);
-    void showMessage(hits[next]);
+    void conversation.showMessage(hits[next]);
   }
+
   // Search in the sidebar: chats, people and messages from every chat, as in Telegram.
   useEffect(() => {
     const query = listQuery.trim();
@@ -886,28 +542,24 @@ export default function App() {
       controller.abort();
     };
   }, [listQuery]);
+
   // A message picked in search opens once its chat has loaded.
   useEffect(() => {
     if (
       !jumpTarget ||
-      loading ||
+      conversation.loading ||
       activeId !== jumpTarget.chat ||
-      !messages.some((message) => message.chat_id === jumpTarget.chat)
+      !conversation.messages.some((message) => message.chat_id === jumpTarget.chat)
     )
       return;
     setJumpTarget(null);
-    void showMessage(jumpTarget.id);
-  }, [jumpTarget, loading, activeId, messages]);
+    void conversation.showMessage(jumpTarget.id);
+  }, [jumpTarget, conversation.loading, activeId, conversation.messages]);
+
   // Folders: the list slides in from the side of the folder chosen, the underline follows.
   const folderTabs = useTabIndicator(filter);
   const info = usePresence(infoOpen, 260);
   const search = usePresence(searchOpen, 160);
-  // Keep the last reply, edit and error on screen while their bars fold away.
-  const context = edit || reply ? { edit, reply } : null;
-  const lastContext = useRef(context);
-  if (context) lastContext.current = context;
-  const contextBar = usePresence(Boolean(context), 160);
-  const shownContext = context || lastContext.current;
   const lastError = useRef(error);
   if (error) lastError.current = error;
   const errorBar = usePresence(Boolean(error), 160);
@@ -921,6 +573,7 @@ export default function App() {
       el.dataset.nav = pane === 'chat' ? 'push' : lastPane.current === 'chat' ? 'pop' : '';
     lastPane.current = pane;
   }, [pane]);
+
   function select(id: string) {
     if (window.innerWidth <= 1080) setInfoOpen(false);
     setActiveId(id);
@@ -928,44 +581,12 @@ export default function App() {
     setMessageQuery('');
     setSearchOpen(false);
     setError('');
-    setEmojiOpen(false);
-    setEditing(null);
+    composer.setEmojiOpen(false);
+    composer.setEditing(null);
     setCopiedMessageId(null);
     closeMenus();
   }
-  function changeDraft(value: string) {
-    if (edit) {
-      setEditing((previous) => (previous ? { ...previous, body: value } : null));
-      return;
-    }
-    if (!activeId) return;
-    setDrafts((prev) => ({ ...prev, [activeId]: value }));
-    delete nonces.current[activeId];
-    if (value.trim() && active?.kind !== 'saved') sendTyping(activeId);
-  }
-  function chooseMention(member: Person) {
-    const field = textarea.current;
-    if (!field || !mention || mentionCursor === null) return;
-    const start = mentionCursor - mention[1].length - 1;
-    const tail = composerValue.slice(mentionCursor);
-    const rest = tail.replace(/^[\p{L}\p{N}_]+/u, '');
-    const inserted = `@${member.username}${/^\s/.test(rest) ? '' : ' '}`;
-    const value = composerValue.slice(0, start) + inserted + rest;
-    if (value.length > 8000) return;
-    changeDraft(value);
-    setMentionCursor(null);
-    requestAnimationFrame(() => {
-      if (field !== textarea.current || activeId !== activeRef.current) return;
-      field.focus({ preventScroll: true });
-      const cursor = start + inserted.length + (/^\s/.test(rest) ? 1 : 0);
-      field.setSelectionRange(cursor, cursor);
-    });
-  }
-  function closeMenus() {
-    document
-      .querySelectorAll('details.message-menu[open], details.chat-actions[open]')
-      .forEach((menu) => closeMenu(menu));
-  }
+
   function positionMessageMenu(details: HTMLDetailsElement, point?: { x: number; y: number }) {
     if (!details.open) return;
     setCopiedMessageId(null);
@@ -1000,40 +621,7 @@ export default function App() {
     const anchorX = Math.max(0, Math.min(width, (point || own ? rect.left : rect.right) - left));
     menu.style.transformOrigin = `${anchorX}px ${above ? '100%' : '0'}`;
   }
-  function startReply(message: Message) {
-    if (sendingChats.current.has(message.chat_id)) return;
-    setEditing(null);
-    setReplies((previous) => ({ ...previous, [message.chat_id]: message }));
-    delete nonces.current[message.chat_id];
-    closeMenus();
-    textarea.current?.focus({ preventScroll: true });
-  }
-  function startEdit(message: Message) {
-    if (sendingChats.current.has(message.chat_id) || editRequest.current) return;
-    setEditing({ message, body: message.body });
-    setEmojiOpen(false);
-    closeMenus();
-    textarea.current?.focus({ preventScroll: true });
-  }
-  async function saveEdit() {
-    if (!edit || editRequest.current || (!edit.body.trim() && !edit.message.file)) return;
-    const target = edit;
-    editRequest.current = true;
-    setSavingEdit(true);
-    setError('');
-    try {
-      await api(`/chats/${target.message.chat_id}/messages/${target.message.id}`, 'PATCH', {
-        body: target.body.trim(),
-      });
-      setEditing((previous) => (previous?.message.id === target.message.id ? null : previous));
-      await Promise.all([loadMessages(target.message.chat_id), refreshChats()]);
-    } catch (error) {
-      report(error);
-    } finally {
-      editRequest.current = false;
-      setSavingEdit(false);
-    }
-  }
+
   async function copyMessage(message: Message) {
     try {
       await navigator.clipboard.writeText(message.body || message.file?.name || '');
@@ -1042,25 +630,7 @@ export default function App() {
       setError('Не удалось скопировать. Выделите текст сообщения и скопируйте вручную.');
     }
   }
-  async function attachFile(source: File, original = false) {
-    const id = activeId;
-    if (!id || edit || sending) return;
-    const file = original ? source : await compressImage(source);
-    if (file.size > 20 * 1024 * 1024) {
-      setError('Файл больше 20 МБ.');
-      return;
-    }
-    setAttachments((previous) => ({
-      ...previous,
-      [id]: { file, source: file === source ? undefined : source },
-    }));
-    setTransfers((previous) => {
-      const next = { ...previous };
-      delete next[id];
-      return next;
-    });
-    delete nonces.current[id];
-  }
+
   async function setChatPreference(
     chat: Chat,
     changes: { pinned?: boolean; muted?: boolean; archived?: boolean },
@@ -1074,7 +644,7 @@ export default function App() {
       if (changes.archived && activeRef.current === chat.id) {
         setActiveId(null);
         setInfoOpen(false);
-        setEditing(null);
+        composer.setEditing(null);
       }
     } catch (error) {
       report(error);
@@ -1082,170 +652,7 @@ export default function App() {
       setPreferenceBusy(false);
     }
   }
-  async function send(e?: FormEvent, silent = false) {
-    e?.preventDefault();
-    if (edit) {
-      await saveEdit();
-      return;
-    }
-    if (!activeId || (!draft.trim() && !attachment)) return;
-    if (!attachment) {
-      sendText(activeId, draft.trim(), replies[activeId], undefined, silent);
-      return;
-    }
-    if (sendingChats.current.has(activeId)) return;
-    const id = activeId,
-      text = draft.trim(),
-      originalDraft = draft,
-      fileDraft = attachments[id],
-      replyDraft = replies[id];
-    // Each chat owns its retry nonce and upload; changing chats cannot mix attachments.
-    const messageNonce = (nonces.current[id] ??= crypto.randomUUID());
-    sendingChats.current.add(id);
-    setSendingIds([...sendingChats.current]);
-    setError('');
-    let delivered = false;
-    try {
-      let file = fileDraft?.uploaded;
-      if (fileDraft && !file) {
-        const form = new FormData();
-        form.append('file', fileDraft.file);
-        setTransfers((previous) => ({ ...previous, [id]: { phase: 'uploading', progress: 0 } }));
-        file = await upload<Attachment>(`/chats/${id}/files`, form, (progress) => {
-          setTransfers((previous) => ({ ...previous, [id]: { phase: 'uploading', progress } }));
-        });
-        setAttachments((prev) =>
-          prev[id]?.file === fileDraft.file
-            ? { ...prev, [id]: { ...fileDraft, uploaded: file } }
-            : prev,
-        );
-      }
-      setTransfers((previous) => ({ ...previous, [id]: { phase: 'sending', progress: 100 } }));
-      await api(`/chats/${id}/messages`, 'POST', {
-        body: text,
-        nonce: messageNonce,
-        fileId: file?.id,
-        demoFile: demo ? file : undefined,
-        replyTo: replyDraft?.id,
-        silent: silent || undefined,
-      });
-      delivered = true;
-      setTransfers((previous) => {
-        const next = { ...previous };
-        delete next[id];
-        return next;
-      });
-      setDrafts((prev) => (prev[id] === originalDraft ? { ...prev, [id]: '' } : prev));
-      setReplies((previous) => {
-        if (previous[id]?.id !== replyDraft?.id) return previous;
-        const next = { ...previous };
-        delete next[id];
-        return next;
-      });
-      setAttachments((prev) => {
-        if (prev[id]?.file !== fileDraft?.file) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      if (nonces.current[id] === messageNonce) delete nonces.current[id];
-      if (activeRef.current === id) {
-        followBottom.current = true;
-        setAwayFromBottom(false);
-      }
-      await Promise.all([loadMessages(id), refreshChats()]);
-      if (activeRef.current === id && sectionRef.current === 'chats')
-        textarea.current?.focus({ preventScroll: true });
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 401) {
-        report(e);
-        return;
-      }
-      if (!delivered)
-        setTransfers((previous) => ({ ...previous, [id]: { phase: 'error', progress: 0 } }));
-      setError(
-        delivered
-          ? 'Сообщение отправлено. Переписка обновится после восстановления соединения.'
-          : `${activeRef.current === id ? '' : `Чат «${chats.find((chat) => chat.id === id)?.title || 'Переписка'}»: `}${(e as Error).message}`,
-      );
-    } finally {
-      sendingChats.current.delete(id);
-      setSendingIds([...sendingChats.current]);
-    }
-  }
-  /**
-   * Text goes out optimistically, as in Telegram: the bubble appears at once, the field clears and
-   * stays usable, and sends in one chat queue up so they arrive in order. The server's copy
-   * replaces the bubble by its nonce; a failed one stays with a retry button.
-   */
-  function sendText(id: string, text: string, replyTo?: Message, nonce?: string, silent = false) {
-    const messageNonce = nonce ?? nonces.current[id] ?? crypto.randomUUID();
-    delete nonces.current[id];
-    const local: Message = {
-      id: `local-${messageNonce}`,
-      chat_id: id,
-      sender_id: me!.id,
-      sender: me!,
-      body: text,
-      created_at: new Date().toISOString(),
-      nonce: messageNonce,
-      file: null,
-      reactions: [],
-      read_by: 0,
-      reply: replyTo
-        ? {
-            id: replyTo.id,
-            body: replyTo.body,
-            sender: { id: replyTo.sender.id, name: replyTo.sender.name },
-            file_name: replyTo.file?.name,
-          }
-        : null,
-      pending: true,
-      silent,
-    };
-    if (activeRef.current === id) {
-      followBottom.current = true;
-      setAwayFromBottom(false);
-      setNewMessageIds([local.id]);
-      setMessages((previous) => [
-        ...previous.filter((message) => message.nonce !== messageNonce),
-        local,
-      ]);
-    }
-    if (!nonce) {
-      setDrafts((previous) => ({ ...previous, [id]: '' }));
-      setReplies((previous) => {
-        const next = { ...previous };
-        delete next[id];
-        return next;
-      });
-    }
-    const post = () =>
-      api(`/chats/${id}/messages`, 'POST', {
-        body: text,
-        nonce: messageNonce,
-        replyTo: replyTo?.id,
-        silent: silent || undefined,
-      });
-    const queued = (textQueue.current[id] ?? Promise.resolve()).then(post);
-    textQueue.current[id] = queued.catch(() => {});
-    queued
-      .then(() => Promise.all([loadMessages(id), refreshChats()]))
-      .catch((error) => {
-        if (error instanceof ApiError && error.status === 401) {
-          report(error);
-          return;
-        }
-        // Keep the bubble with a retry button; the same nonce makes the retry safe.
-        setMessages((previous) =>
-          previous.map((message) =>
-            message.nonce === messageNonce && message.pending
-              ? { ...message, failed: true }
-              : message,
-          ),
-        );
-      });
-  }
+
   async function togglePin(message: Message) {
     closeMenus();
     const chat = chatsRef.current.find((item) => item.id === message.chat_id);
@@ -1257,8 +664,12 @@ export default function App() {
       report(error);
     }
   }
+
   /** Selected messages in the order they were written. */
-  const selectedMessages = selection ? messages.filter((message) => selection.has(message.id)) : [];
+  const selectedMessages = selection
+    ? conversation.messages.filter((message) => selection.has(message.id))
+    : [];
+
   async function copySelection() {
     try {
       await navigator.clipboard.writeText(
@@ -1272,14 +683,16 @@ export default function App() {
       setError('Не удалось скопировать. Выделите текст сообщения и скопируйте вручную.');
     }
   }
+
   async function react(message: Message, emoji: string) {
     try {
       await api(`/chats/${message.chat_id}/messages/${message.id}/reactions`, 'POST', { emoji });
-      await loadMessages(message.chat_id);
+      await conversation.loadMessages(message.chat_id);
     } catch (e) {
       report(e);
     }
   }
+
   async function toggleNelya(chat: Chat) {
     setWorking(true);
     try {
@@ -1291,6 +704,7 @@ export default function App() {
       setWorking(false);
     }
   }
+
   async function invite() {
     if (!activeId) return;
     try {
@@ -1301,85 +715,27 @@ export default function App() {
       report(e);
     }
   }
+
   async function logout() {
     try {
       if (!demo) await clearPushDevice().catch(() => {});
       if (!demo) await api('/auth/logout', 'POST');
-      draftSnapshot.current = null;
-      try {
-        if (me) localStorage.removeItem(`galinka-drafts:${me.id}`);
-      } catch {
-        /* Storage may be unavailable. */
-      }
+      composer.clearDraftsFor(me?.id);
       sessionStorage.removeItem('galinka-demo');
       location.href = '/app';
     } catch (e) {
       report(e);
     }
   }
-  /** Prepend one page of older history. Returns false when there is nothing older. */
-  function loadOlder() {
-    const id = activeRef.current;
-    const oldest = messagesRef.current.find((message) => !message.pending);
-    if (!id || !oldest) return Promise.resolve(false);
-    if (olderRequest.current?.id === id) return olderRequest.current.promise;
-    setPaging(true);
-    const epoch = requestEpoch.current;
-    const promise = api<Message[]>(`/chats/${id}/messages?before=${encodeURIComponent(oldest.id)}`)
-      .then((data) => {
-        if (activeRef.current !== id || epoch !== requestEpoch.current) return false;
-        followBottom.current = false;
-        setAwayFromBottom(true);
-        const el = scroller.current;
-        if (el) scrollRestore.current = { id, top: el.scrollTop, height: el.scrollHeight };
-        // Committed at once, so a caller looking for a message finds it in the DOM.
-        flushSync(() => {
-          setMessages((prev) => [
-            ...data.filter((m) => !prev.some((old) => old.id === m.id)),
-            ...prev,
-          ]);
-          setHasOlder(data.length === 60);
-        });
-        return data.length > 0;
-      })
-      .catch((e) => {
-        if (activeRef.current === id && epoch === requestEpoch.current) report(e);
-        return false;
-      })
-      .finally(() => {
-        if (olderRequest.current?.promise === promise) {
-          olderRequest.current = null;
-          setPaging(false);
-        }
-      });
-    olderRequest.current = { id, promise };
-    return promise;
-  }
-  /** Scroll to a message and light it up, loading older pages until it is on screen. */
-  async function showMessage(messageId: string) {
-    const id = activeRef.current;
-    for (let page = 0; page < 40 && id === activeRef.current; page++) {
-      const row = scroller.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
-      if (row) {
-        row.scrollIntoView({ block: 'center', behavior: motionAllowed() ? 'smooth' : 'auto' });
-        row.classList.remove('flash');
-        void row.offsetWidth;
-        row.classList.add('flash');
-        // The flash isolates the row; left on, it would trap the row's menu under its neighbours.
-        setTimeout(() => row.classList.remove('flash'), 1200);
-        return;
-      }
-      if (!(await loadOlder())) break;
-    }
-    if (id === activeRef.current) setError('Сообщение не найдено в истории.');
-  }
+
   const unread = chats
     .filter((chat) => !chat.muted && !chat.archived)
     .reduce((n, c) => n + c.unread, 0);
+
   const latestMessageActions = useRef<MessageActions>(null!);
   latestMessageActions.current = {
-    reply: startReply,
-    edit: startEdit,
+    reply: composer.startReply,
+    edit: composer.startEdit,
     copy: copyMessage,
     react,
     download: (file) => void downloadAttachment(file, demo).catch(report),
@@ -1408,23 +764,16 @@ export default function App() {
       setPerson(sender);
     },
     mention: (username) => {
-      const member = members.find((person) => person.username === username);
+      const member = conversation.members.find((person) => person.username === username);
       if (member) setPerson(member);
       else openLink(`/app?u=${encodeURIComponent(username)}`);
     },
-    retry: (message) => {
-      setMessages((previous) =>
-        previous.map((item) => (item.id === message.id ? { ...item, failed: false } : item)),
-      );
-      const original = message.reply
-        ? messagesRef.current.find((item) => item.id === message.reply!.id)
-        : undefined;
-      sendText(message.chat_id, message.body, original, message.nonce, message.silent);
-    },
+    retry: composer.retryMessage,
     discard: (message) =>
-      setMessages((previous) => previous.filter((item) => item.id !== message.id)),
-    jump: (id) => void showMessage(id),
+      conversation.setMessages((previous) => previous.filter((item) => item.id !== message.id)),
+    jump: (id) => void conversation.showMessage(id),
   };
+
   // Keep the timeline independent from composer keystrokes while callbacks see current state.
   const messageActions = useMemo<MessageActions>(
     () => ({
@@ -1446,6 +795,7 @@ export default function App() {
     }),
     [],
   );
+
   if (!ready)
     return (
       <div className="boot" role="status">
@@ -1472,13 +822,7 @@ export default function App() {
         )}
       </>
     );
-  async function refreshMembers() {
-    if (!active) return;
-    const id = active.id;
-    await refreshChats();
-    const people = await api<Person[]>(`/chats/${id}/members`);
-    if (activeRef.current === id) setMembers(people);
-  }
+
   const typingIn = (chat: Chat) => typingText(typing[chat.id], chat.kind === 'group');
   const subtitle = (chat: Chat) => {
     if (chat.kind === 'saved') return 'Заметки и файлы';
@@ -1489,7 +833,8 @@ export default function App() {
     // Others online in the open group, as in Telegram: "5 участников, 2 в сети".
     const online =
       chat.id === activeId
-        ? members.filter((person) => person.id !== me.id && person.seen === 'online').length
+        ? conversation.members.filter((person) => person.id !== me.id && person.seen === 'online')
+            .length
         : 0;
     return online ? `${total}, ${online} в сети` : total;
   };
@@ -1498,6 +843,7 @@ export default function App() {
     setSection(next);
     if (next === 'chats' && matchMedia(narrowLayout).matches) setActiveId(null);
   };
+
   return (
     <div
       ref={shell}
@@ -1578,10 +924,8 @@ export default function App() {
             onFilter={setFilter}
             selectedId={section === 'chats' ? activeId : null}
             meId={me.id}
-            drafts={drafts}
-            attachmentNames={Object.fromEntries(
-              Object.entries(attachments).map(([id, draft]) => [id, draft.file.name]),
-            )}
+            drafts={composer.drafts}
+            attachmentNames={composer.attachmentNames}
             typingIn={typingIn}
             loaded={initialized.current}
             onSelect={select}
@@ -1823,7 +1167,7 @@ export default function App() {
                 <button
                   type="button"
                   className="pinned-open"
-                  onClick={() => void showMessage(active.pinned_message!.id)}
+                  onClick={() => void conversation.showMessage(active.pinned_message!.id)}
                 >
                   <Pin size={16} />
                   <span>
@@ -1857,7 +1201,8 @@ export default function App() {
                 aria-label="Переписка"
                 // Desktop: drop a file anywhere on the conversation to attach it.
                 onDragOver={(event) => {
-                  if (!event.dataTransfer.types.includes('Files') || edit || sending) return;
+                  if (!event.dataTransfer.types.includes('Files') || composer.edit || composer.sending)
+                    return;
                   event.preventDefault();
                   setDropping(true);
                 }}
@@ -1869,57 +1214,18 @@ export default function App() {
                   event.preventDefault();
                   setDropping(false);
                   const file = event.dataTransfer.files[0];
-                  if (file) void attachFile(file);
+                  if (file) void composer.attachFile(file);
                 }}
               >
                 <div
                   className="messages"
-                  ref={scroller}
+                  ref={conversation.scroller}
                   {...gestures}
-                  onWheel={(event) => {
-                    jumpingToLatest.current = false;
-                    if (
-                      hasOlder &&
-                      !loading &&
-                      event.deltaY < 0 &&
-                      event.currentTarget.scrollTop <= 0
-                    )
-                      void loadOlder();
-                    // A floating message menu would stay put while its message scrolls away.
-                    document
-                      .querySelectorAll('details.message-menu[open]')
-                      .forEach((menu) => closeMenu(menu));
-                  }}
-                  onTouchStart={() => {
-                    jumpingToLatest.current = false;
-                  }}
-                  onScroll={() => {
-                    const el = scroller.current!;
-                    const upwards = el.scrollTop < lastScrollTop.current;
-                    lastScrollTop.current = el.scrollTop;
-                    // Our own jump to the bottom: content may have grown meanwhile (a photo
-                    // decoding), which must not read as the user scrolling up.
-                    if (autoScroll.current) {
-                      autoScroll.current = false;
-                      return;
-                    }
-                    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-                    if (jumpingToLatest.current && !atBottom) return;
-                    jumpingToLatest.current = false;
-                    followBottom.current = atBottom;
-                    const cached = activeId ? conversationCache.current.get(activeId) : undefined;
-                    if (cached) {
-                      cached.top = el.scrollTop;
-                      cached.following = atBottom;
-                    }
-                    setAwayFromBottom(!atBottom);
-                    if (upwards && el.scrollTop < 180 && hasOlder && !loading) void loadOlder();
-                    const latest = messages.at(-1);
-                    if (followBottom.current && activeId && latest)
-                      void markRead(activeId, latest.id);
-                  }}
+                  onWheel={conversation.onWheel}
+                  onTouchStart={conversation.onTouchStart}
+                  onScroll={conversation.onScroll}
                 >
-                  {loading ? (
+                  {conversation.loading ? (
                     // Placeholder bubbles in the shape of a conversation while it loads.
                     <div className="messages-loading" role="status" aria-label="Загрузка">
                       {skeletonBubbles.map(([own, width], index) => (
@@ -1928,426 +1234,60 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      {hasOlder && (
+                      {conversation.hasOlder && (
                         <button
                           className="older-button"
-                          onClick={() => void loadOlder()}
-                          disabled={paging}
+                          onClick={() => void conversation.loadOlder()}
+                          disabled={conversation.paging}
                         >
-                          {paging ? 'Загрузка…' : 'Более ранние сообщения'}
+                          {conversation.paging ? 'Загрузка…' : 'Более ранние сообщения'}
                         </button>
                       )}
-                      {!messages.length && (
+                      {!conversation.messages.length && (
                         <div className="conversation-empty">
                           <p>Сообщений пока нет</p>
                         </div>
                       )}
                       <MessageList
-                        messages={messages}
+                        key={active.id}
+                        messages={conversation.messages}
                         meId={me.id}
                         kind={active.kind}
                         moderator={active.kind === 'group' && active.owner_id === me.id}
-                        unreadFrom={unreadFrom}
+                        unreadFrom={conversation.unreadFrom}
                         pinnedId={active.pinned_message?.id}
                         canPin={active.kind !== 'group' || active.owner_id === me.id}
                         selection={selection}
-                        newMessageIds={newMessageIds}
+                        newMessageIds={conversation.newMessageIds}
                         copiedId={copiedMessageId}
-                        sending={sending}
-                        savingEdit={savingEdit}
+                        sending={composer.sending}
+                        savingEdit={composer.savingEdit}
+                        awayFromBottom={conversation.awayFromBottom}
                         actions={messageActions}
                         highlight={
                           searchOpen && messageQuery.trim().length >= 2 ? messageQuery : undefined
                         }
                       />
-                      <div ref={bottomRef} />
+                      <div ref={conversation.bottomRef} />
                     </>
                   )}
                 </div>
-                <div className="composer-wrap">
-                  {/* Always rendered so it can fade out as well as in. Inside the composer block, so it
-                    always sits above it, however tall the reply bar and draft make it. */}
-                  <button
-                    type="button"
-                    className={`jump-to-latest ${awayFromBottom ? 'shown' : ''}`}
-                    inert={!awayFromBottom}
-                    onClick={jumpToLatest}
-                    aria-label="К последним сообщениям"
-                  >
-                    <ArrowDown size={20} />
-                    {active.unread > 0 && <b key={active.unread}>{active.unread}</b>}
-                  </button>
-                  {contextBar.mounted && shownContext && (
-                    <div
-                      className={`composer-context ${shownContext.edit ? 'editing' : ''} ${contextBar.closing ? 'closing' : ''}`}
-                    >
-                      {shownContext.edit ? <Pencil size={18} /> : <Reply size={18} />}
-                      <div>
-                        <strong>
-                          {shownContext.edit ? 'Редактирование' : shownContext.reply!.sender.name}
-                        </strong>
-                        <p>
-                          {shownContext.edit
-                            ? shownContext.edit.message.body || shownContext.edit.message.file?.name
-                            : plainText(shownContext.reply!.body) ||
-                              (shownContext.reply!.file &&
-                                fileLabel(shownContext.reply!.file.name)) ||
-                              'Сообщение'}
-                        </p>
-                      </div>
-                      <IconButton
-                        label={edit ? 'Отменить редактирование' : 'Отменить ответ'}
-                        disabled={savingCurrentEdit || sending}
-                        onClick={() => {
-                          if (edit) setEditing(null);
-                          else if (activeId) {
-                            setReplies((previous) => {
-                              const next = { ...previous };
-                              delete next[activeId];
-                              return next;
-                            });
-                            delete nonces.current[activeId];
-                          }
-                        }}
-                      >
-                        <X size={18} />
-                      </IconButton>
-                    </div>
-                  )}
-                  {attachment && !edit && (
-                    <AttachmentPreview
-                      file={attachment}
-                      transfer={activeId ? transfers[activeId] : undefined}
-                      original={
-                        activeId && attachments[activeId]?.source && !transfers[activeId]
-                          ? attachments[activeId].source
-                          : undefined
-                      }
-                      onOriginal={() => {
-                        const source = activeId ? attachments[activeId]?.source : undefined;
-                        if (source) void attachFile(source, true);
-                      }}
-                      onRetry={() => void send()}
-                      onRemove={() => {
-                        if (!activeId) return;
-                        setAttachments((previous) => {
-                          const next = { ...previous };
-                          delete next[activeId];
-                          return next;
-                        });
-                        setTransfers((previous) => {
-                          const next = { ...previous };
-                          delete next[activeId];
-                          return next;
-                        });
-                        delete nonces.current[activeId];
-                      }}
-                    />
-                  )}
-                  <form className="composer" onSubmit={send}>
-                    {mentionPanel.mounted && (
-                      <div
-                        ref={mentionList}
-                        className="mention-options"
-                        role="group"
-                        aria-label="Упомянуть участника"
-                        data-closing={mentionPanel.closing || undefined}
-                        inert={mentionPanel.closing}
-                      >
-                        {shownMentionOptions.map((member, index) => (
-                          <button
-                            key={member.id}
-                            type="button"
-                            className={
-                              index === mentionIndex % shownMentionOptions.length ? 'selected' : ''
-                            }
-                            onPointerDown={(event) => event.preventDefault()}
-                            onClick={() => chooseMention(member)}
-                          >
-                            <Avatar person={member} size="small" />
-                            <span>
-                              {member.name} <small>@{member.username}</small>
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <input
-                      ref={fileInput}
-                      type="file"
-                      hidden
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) void attachFile(file);
-                        e.target.value = '';
-                      }}
-                    />
-                    <div className="composer-field">
-                      {sending || edit ? (
-                        <IconButton label="Прикрепить файл" disabled>
-                          <Paperclip size={21} />
-                        </IconButton>
-                      ) : (
-                        <details className="chat-actions attachment-menu">
-                          <summary
-                            className="icon-button"
-                            aria-label="Прикрепить файл"
-                            onClick={toggleMenu}
-                          >
-                            <Paperclip size={21} />
-                          </summary>
-                          <div className="chat-actions-menu">
-                            {(
-                              [
-                                [Images, 'Галерея', 'image/*,video/*'],
-                                [FileText, 'Файл', ''],
-                              ] as const
-                            ).map(([Icon, label, accept]) => {
-                              return (
-                                <button
-                                  type="button"
-                                  key={label}
-                                  onClick={(event) => {
-                                    const input = fileInput.current;
-                                    if (!input) return;
-                                    closeMenu(event.currentTarget.closest('details')!);
-                                    input.accept = accept;
-                                    input.click();
-                                  }}
-                                >
-                                  <Icon size={18} />
-                                  {label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </details>
-                      )}
-                      <textarea
-                        ref={textarea}
-                        enterKeyHint="enter"
-                        aria-label="Сообщение"
-                        placeholder={edit ? 'Изменить сообщение' : 'Сообщение'}
-                        rows={1}
-                        value={composerValue}
-                        maxLength={8000}
-                        readOnly={sending || savingCurrentEdit}
-                        aria-busy={sending || savingCurrentEdit}
-                        onChange={(e) => {
-                          changeDraft(e.target.value);
-                          setMentionCursor(e.target.selectionEnd);
-                          setMentionIndex(0);
-                        }}
-                        onSelect={(event) => setMentionCursor(event.currentTarget.selectionEnd)}
-                        onBlur={() => setMentionCursor(null)}
-                        onPaste={(e) => {
-                          const file = e.clipboardData.files[0];
-                          if (file && !edit) {
-                            e.preventDefault();
-                            void attachFile(file);
-                          }
-                        }}
-                        onKeyDown={(e) => {
-                          if (
-                            selectedMention &&
-                            !e.nativeEvent.isComposing &&
-                            e.nativeEvent.keyCode !== 229
-                          ) {
-                            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                              e.preventDefault();
-                              setMentionIndex(
-                                (index) =>
-                                  (index +
-                                    mentionOptions.length +
-                                    (e.key === 'ArrowDown' ? 1 : -1)) %
-                                  mentionOptions.length,
-                              );
-                              return;
-                            }
-                            if (
-                              (e.key === 'Enter' || e.key === 'Tab') &&
-                              !e.shiftKey &&
-                              !e.ctrlKey &&
-                              !e.metaKey
-                            ) {
-                              e.preventDefault();
-                              chooseMention(selectedMention);
-                              return;
-                            }
-                            if (e.key === 'Escape') {
-                              e.preventDefault();
-                              setMentionCursor(null);
-                              return;
-                            }
-                          }
-                          // Ctrl+B and Ctrl+I wrap the selection in bold or italic marks.
-                          const mark = e.code === 'KeyB' ? '**' : e.code === 'KeyI' ? '__' : '';
-                          const field = e.currentTarget;
-                          if (
-                            mark &&
-                            (e.ctrlKey || e.metaKey) &&
-                            !e.altKey &&
-                            !e.shiftKey &&
-                            field.selectionStart !== field.selectionEnd
-                          ) {
-                            e.preventDefault();
-                            const { selectionStart: from, selectionEnd: to } = field;
-                            const value =
-                              composerValue.slice(0, from) +
-                              mark +
-                              composerValue.slice(from, to) +
-                              mark +
-                              composerValue.slice(to);
-                            if (value.length > 8000) return;
-                            changeDraft(value);
-                            requestAnimationFrame(() =>
-                              field.setSelectionRange(from + mark.length, to + mark.length),
-                            );
-                            return;
-                          }
-                          // As in Telegram Desktop: ↑ in an empty field edits your last message.
-                          if (e.key === 'ArrowUp' && !composerValue && !edit && !attachment) {
-                            const last = [...messages]
-                              .reverse()
-                              .find((message) => message.sender_id === me.id && message.body);
-                            if (last) {
-                              e.preventDefault();
-                              startEdit(last);
-                              return;
-                            }
-                          }
-                          const enterSends = lookPrefs().enterSends;
-                          if (
-                            e.key === 'Enter' &&
-                            !e.shiftKey &&
-                            !e.nativeEvent.isComposing &&
-                            e.nativeEvent.keyCode !== 229 &&
-                            window.matchMedia('(pointer:fine)').matches &&
-                            (enterSends || e.ctrlKey || e.metaKey)
-                          ) {
-                            e.preventDefault();
-                            send();
-                          }
-                        }}
-                      />
-                      <div className="emoji-wrap">
-                        {
-                          <div
-                            className={`emoji-picker ${emojiOpen ? 'open' : ''}`}
-                            inert={!emojiOpen}
-                          >
-                            {['😊', '😂', '❤', '👍', '🙏', '🎉', '🔥', '😢'].map((emoji) => (
-                              <button
-                                type="button"
-                                key={emoji}
-                                onClick={() => {
-                                  changeDraft(composerValue + emoji);
-                                  setEmojiOpen(false);
-                                  textarea.current?.focus();
-                                }}
-                              >
-                                {emoji}
-                              </button>
-                            ))}
-                          </div>
-                        }
-                        <IconButton
-                          label="Добавить эмодзи"
-                          disabled={sending || savingCurrentEdit}
-                          onClick={() => setEmojiOpen((v) => !v)}
-                        >
-                          <Smile size={21} />
-                        </IconButton>
-                      </div>
-                      {!edit && !draft.trim() && !attachment && (
-                        <VideoNoteRecorder
-                          key={active.id}
-                          disabled={sending}
-                          onActive={() => sendTyping(active.id, 'video')}
-                          onRecorded={(file) => void attachFile(file)}
-                          onError={setError}
-                        />
-                      )}
-                    </div>
-                    {!edit && !draft.trim() && !attachment ? (
-                      <VoiceRecorder
-                        key={active.id}
-                        disabled={sending}
-                        onActive={() => sendTyping(active.id, 'voice')}
-                        onRecorded={(file) => void attachFile(file)}
-                        onError={setError}
-                      />
-                    ) : (
-                      <>
-                        {sendOptions && !edit && (
-                          <div className="send-options chat-actions-menu" role="menu">
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => {
-                                setSendOptions(false);
-                                void send(undefined, true);
-                              }}
-                            >
-                              <BellOff size={17} />
-                              Отправить без звука
-                            </button>
-                          </div>
-                        )}
-                        <button
-                          className="send-button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          // The click that ends a long press only opens the options.
-                          onClick={(e) => {
-                            if (sendOptions) e.preventDefault();
-                          }}
-                          // Right click or a long press offers sending without a notification.
-                          onContextMenu={(e) => {
-                            if (edit || e.currentTarget.disabled) return;
-                            e.preventDefault();
-                            setSendOptions(true);
-                          }}
-                          onPointerDown={(e) => {
-                            if (e.pointerType === 'mouse' || edit) return;
-                            const button = e.currentTarget;
-                            const timer = setTimeout(() => {
-                              navigator.vibrate?.(8);
-                              setSendOptions(true);
-                            }, 450);
-                            const stop = () => clearTimeout(timer);
-                            button.addEventListener('pointerup', stop, { once: true });
-                            button.addEventListener('pointercancel', stop, { once: true });
-                            button.addEventListener('pointerleave', stop, { once: true });
-                          }}
-                          aria-label={edit ? 'Сохранить изменения' : 'Отправить сообщение'}
-                          title={edit ? 'Сохранить изменения' : 'Отправить сообщение'}
-                          disabled={
-                            sending ||
-                            savingCurrentEdit ||
-                            (edit
-                              ? !edit.body.trim() && !edit.message.file
-                              : !draft.trim() && !attachment)
-                          }
-                        >
-                          {sending || savingCurrentEdit ? (
-                            <LoaderCircle size={20} className="spin" />
-                          ) : edit ? (
-                            <Check size={21} />
-                          ) : (
-                            <ArrowUp size={21} />
-                          )}
-                        </button>
-                      </>
-                    )}
-                  </form>
-                </div>
+                <Composer
+                  active={active}
+                  meId={me.id}
+                  messages={conversation.messages}
+                  awayFromBottom={conversation.awayFromBottom}
+                  onJumpToLatest={conversation.jumpToLatest}
+                  onTyping={(action) => sendTyping(active.id, action)}
+                  onError={setError}
+                  composer={composer}
+                />
               </section>
               {info.mounted && (
                 <ChatInfo
                   chat={active}
                   meId={me.id}
-                  members={members}
+                  members={conversation.members}
                   subtitle={subtitle(active)}
                   closing={info.closing}
                   muteBusy={preferenceBusy}
@@ -2382,9 +1322,7 @@ export default function App() {
             me={me}
             demo={demo}
             notifications={notifications}
-            hasDraft={
-              Object.keys(attachments).length > 0 || Boolean(editing) || sendingIds.length > 0
-            }
+            hasDraft={composer.hasPendingWork}
             onEditName={() => {
               setName(me.name);
               setModal('profile');
@@ -2415,7 +1353,7 @@ export default function App() {
             setForwarding(null);
             setSelection(null);
             await refreshChats();
-            if (id === activeRef.current) await loadMessages(id);
+            if (id === activeRef.current) await conversation.loadMessages(id);
             else select(id);
           }}
         />
@@ -2424,17 +1362,16 @@ export default function App() {
         <GroupSettings
           chat={active}
           me={me}
-          members={members}
+          members={conversation.members}
           onClose={() => setModal(null)}
           onOpenPerson={setPerson}
-          onUpdated={refreshMembers}
+          onUpdated={conversation.refreshMembers}
           onLeft={async () => {
             setModal(null);
             setActiveId(null);
-            setMessages([]);
-            setMembers([]);
+            conversation.resetConversation();
             setInfoOpen(false);
-            setEditing(null);
+            composer.setEditing(null);
             await refreshChats();
           }}
         />
@@ -2446,7 +1383,7 @@ export default function App() {
           me={me}
           chat={active}
           onClose={() => setPerson(null)}
-          onUpdated={refreshMembers}
+          onUpdated={conversation.refreshMembers}
           onMessage={async () => {
             const { id } = await api<{ id: string }>('/chats', 'POST', {
               kind: 'direct',
@@ -2552,7 +1489,9 @@ export default function App() {
           onClose={() => setModal(null)}
           onDeleted={(removed) => {
             setSelection(null);
-            setMessages((previous) => previous.filter((m) => !removed.includes(m.id)));
+            conversation.setMessages((previous) =>
+              previous.filter((m) => !removed.includes(m.id)),
+            );
             refreshChats().catch(report);
           }}
         />

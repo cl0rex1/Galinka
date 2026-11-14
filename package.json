@@ -13,6 +13,7 @@
     "check": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
     "build": "npm run check && vite build && node scripts/stamp-build.mjs && tsc -p server/tsconfig.json && node scripts/copy-schema.mjs",
     "start": "node --env-file-if-exists=.env dist-server/index.js",
+    "deploy": "sh scripts/deploy.sh",
     "test": "tsx --env-file-if-exists=.env --test tests/*.test.ts",
     "test:e2e": "playwright test",
     "setup": "node scripts/setup.mjs",

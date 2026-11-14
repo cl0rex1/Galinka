@@ -79,3 +79,39 @@ export type SearchHit = {
   sender_id: string | null;
   sender_name: string;
 };
+export type ClientErrorEntry = {
+  id: string;
+  user_id: string | null;
+  username: string | null;
+  user_name: string | null;
+  message: string;
+  stack: string;
+  url: string;
+  user_agent: string;
+  release: string;
+  created_at: string;
+};
+export type MonitoringData = {
+  health: {
+    ok: boolean;
+    listening: boolean;
+    startedAt: string;
+    uptimeSeconds: number;
+    memoryBytes: number;
+    version: string;
+    build: string;
+  };
+  metrics: {
+    requests: { total: number; ok: number; clientError: number; serverError: number };
+    activeStreams: number;
+    onlineUsers: number;
+    users: number;
+    chats: number;
+    messages: number;
+    files: number;
+    storageBytes: number;
+    pushQueue: number;
+    clientErrors: number;
+  };
+  errors: ClientErrorEntry[];
+};

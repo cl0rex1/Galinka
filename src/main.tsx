@@ -11,6 +11,8 @@ import './motion';
 import { Capacitor } from '@capacitor/core';
 import { UpdateProvider } from './updates';
 import { trackViewport } from './viewport';
+import { installErrorReporter } from './telemetry';
+installErrorReporter();
 const stopTrackingViewport = trackViewport();
 if (import.meta.hot) import.meta.hot.dispose(stopTrackingViewport);
 createRoot(document.getElementById('root')!).render(

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import {
+  Activity,
   ArrowLeft,
   LogOut,
   Plus,
@@ -10,6 +11,7 @@ import {
   Ticket,
 } from 'lucide-react';
 import { AdminInvites } from './AdminInvites';
+import { AdminMonitor } from './AdminMonitor';
 import { api, ApiError } from './api';
 import { Auth } from './Auth';
 import { Modal } from './ui';
@@ -20,7 +22,7 @@ import './admin.css';
 export default function Admin() {
   const [me, setMe] = useState<Person | null>(null),
     [ready, setReady] = useState(false);
-  const [tab, setTab] = useState<'users' | 'announcements' | 'invites'>('users');
+  const [tab, setTab] = useState<'users' | 'announcements' | 'invites' | 'monitoring'>('users');
   const [users, setUsers] = useState<Page<AdminUser>>({ items: [], total: 0, page: 1 });
   const [posts, setPosts] = useState<Page<Announcement>>({ items: [], total: 0, page: 1 });
   const [query, setQuery] = useState(''),
@@ -55,7 +57,7 @@ export default function Admin() {
     return () => current.abort();
   }, [fail]);
   const load = useCallback(async () => {
-    if (me?.role !== 'admin' || tab === 'invites') return;
+    if (me?.role !== 'admin' || tab === 'invites' || tab === 'monitoring') return;
     request.current?.abort();
     const current = new AbortController();
     request.current = current;
@@ -86,6 +88,10 @@ export default function Admin() {
     }
   }, [me?.id, me?.role, tab, page, query, fail]);
   useEffect(() => {
+    if (tab === 'invites' || tab === 'monitoring') {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     // Cancel the previous search immediately, then wait for typing to pause.
     const timer = setTimeout(() => void load(), query && tab === 'users' ? 250 : 0);
@@ -248,6 +254,17 @@ export default function Admin() {
               <Ticket size={19} />
               Приглашения
             </button>
+            <button
+              disabled={saving}
+              aria-current={tab === 'monitoring' ? 'page' : undefined}
+              onClick={() => {
+                setTab('monitoring');
+                setNotice('');
+              }}
+            >
+              <Activity size={19} />
+              Мониторинг
+            </button>
           </nav>
           <p>
             <span>Galinka {__APP_VERSION__}</span>
@@ -256,6 +273,8 @@ export default function Admin() {
         <main className="admin-main">
           {tab === 'invites' ? (
             <AdminInvites />
+          ) : tab === 'monitoring' ? (
+            <AdminMonitor />
           ) : (
             <>
               <div className="admin-title">

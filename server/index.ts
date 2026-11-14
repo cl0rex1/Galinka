@@ -9,6 +9,7 @@ import { readFile, mkdir, unlink, open } from 'node:fs/promises';
 import path from 'node:path';
 import { z, ZodError } from 'zod';
 import { digest, hashPassword, verifyPassword, readCookie } from './security.js';
+import { migrate } from './migrate.js';
 import { nelyaReply } from './nelya.js';
 import {
   AudioError,
@@ -48,19 +49,7 @@ if (production && !origin.startsWith('https://') && process.env.COOKIE_SECURE !=
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 20 });
 const directory = path.resolve(process.env.UPLOAD_DIR || 'uploads');
 await mkdir(directory, { recursive: true });
-const schema = await readFile(new URL('./schema.sql', import.meta.url), 'utf8');
-const migrate = await pool.connect();
-try {
-  await migrate.query('BEGIN');
-  await migrate.query('SELECT pg_advisory_xact_lock(648291)');
-  await migrate.query(schema);
-  await migrate.query('COMMIT');
-} catch (error) {
-  await migrate.query('ROLLBACK');
-  throw error;
-} finally {
-  migrate.release();
-}
+await migrate(pool);
 const app = express();
 const packageInfo = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const buildInfo = {
@@ -115,9 +104,18 @@ app.use(
     },
   }),
 );
+const startedAt = Date.now();
+const httpMetrics = { total: 0, ok: 0, clientError: 0, serverError: 0 };
+const metricsToken = process.env.METRICS_TOKEN || '';
 app.use(express.json({ limit: '32kb' }));
 app.use('/api', (_req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
+  res.on('finish', () => {
+    httpMetrics.total++;
+    if (res.statusCode >= 500) httpMetrics.serverError++;
+    else if (res.statusCode >= 400) httpMetrics.clientError++;
+    else httpMetrics.ok++;
+  });
   next();
 });
 app.use('/api', (req, res, next) => {
@@ -1399,7 +1397,11 @@ async function mediaType(filename: string, declaredType: string) {
     }
     // Same rule for video: declared as video and the container agrees.
     if (declaredType.toLowerCase().startsWith('video/')) {
-      if (bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp')
+      if (
+        bytes.length >= 12 &&
+        bytes.toString('ascii', 4, 8) === 'ftyp' &&
+        bytes.toString('ascii', 8, 12) !== 'M4A '
+      )
         return bytes.toString('ascii', 8, 10) === 'qt' ? 'video/quicktime' : 'video/mp4';
       if (
         bytes.subarray(0, 4).equals(Buffer.from([26, 69, 223, 163])) &&
@@ -1749,6 +1751,155 @@ async function listen() {
   for (const res of streams.keys()) res.write('data: {"type":"connected"}\n\n');
 }
 await listen();
+const clientErrorFields = z.object({
+  message: z.string().trim().min(1).max(1000),
+  stack: z.string().max(8000).default(''),
+  url: z.string().max(500).default(''),
+  release: z.string().max(80).default(''),
+});
+async function optionalUserId(req: Request) {
+  const raw = readCookie(req.headers.cookie);
+  if (!raw) return null;
+  const { rows } = await pool.query<{ user_id: string }>(
+    'SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>now() AND NOT u.blocked',
+    [digest(raw)],
+  );
+  return rows[0]?.user_id ?? null;
+}
+app.post('/api/client-errors', async (req, res) => {
+  const data = clientErrorFields.parse(req.body);
+  const userId = await optionalUserId(req).catch(() => null);
+  const userAgent = String(req.headers['user-agent'] || '').slice(0, 300);
+  await pool.query(
+    'INSERT INTO client_errors(id,user_id,message,stack,url,user_agent,release) VALUES($1,$2,$3,$4,$5,$6,$7)',
+    [randomUUID(), userId, data.message, data.stack, data.url, userAgent, data.release],
+  );
+  await pool.query(
+    'DELETE FROM client_errors WHERE id IN (SELECT id FROM client_errors ORDER BY created_at DESC OFFSET 500)',
+  );
+  res.status(201).json({ ok: true });
+});
+app.get('/api/admin/monitoring', auth, admin, async (_req, res) => {
+  const [counts, errorRows] = await Promise.all([
+    pool.query<{
+      users: number;
+      chats: number;
+      messages: number;
+      files: number;
+      storage_bytes: string;
+      push_queue: number;
+      client_errors: number;
+    }>(`SELECT
+      (SELECT count(*)::int FROM users) AS users,
+      (SELECT count(*)::int FROM chats) AS chats,
+      (SELECT count(*)::int FROM messages) AS messages,
+      (SELECT count(*)::int FROM files) AS files,
+      (SELECT COALESCE(sum(size),0)::bigint FROM files) AS storage_bytes,
+      (SELECT count(*)::int FROM push_jobs) AS push_queue,
+      (SELECT count(*)::int FROM client_errors) AS client_errors`),
+    pool.query(
+      `SELECT e.id,e.user_id,u.username,u.name AS user_name,e.message,e.stack,e.url,e.user_agent,e.release,e.created_at
+       FROM client_errors e LEFT JOIN users u ON u.id=e.user_id
+       ORDER BY e.created_at DESC LIMIT 50`,
+    ),
+  ]);
+  const row = counts.rows[0];
+  res.json({
+    health: {
+      ok: listening,
+      listening,
+      startedAt: new Date(startedAt).toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      memoryBytes: process.memoryUsage().rss,
+      version: buildInfo.version,
+      build: buildInfo.build,
+    },
+    metrics: {
+      requests: { ...httpMetrics },
+      activeStreams: streams.size,
+      onlineUsers: new Set([...streams.values()].map((s) => s.userId)).size,
+      users: row.users,
+      chats: row.chats,
+      messages: row.messages,
+      files: row.files,
+      storageBytes: Number(row.storage_bytes),
+      pushQueue: row.push_queue,
+      clientErrors: row.client_errors,
+    },
+    errors: errorRows.rows,
+  });
+});
+app.delete('/api/admin/client-errors', auth, admin, async (_req, res) => {
+  await pool.query('DELETE FROM client_errors');
+  res.json({ ok: true });
+});
+async function metricsAuth(req: Request, res: Response, next: NextFunction) {
+  const header = req.headers.authorization;
+  if (metricsToken && header?.startsWith('Bearer ')) {
+    const provided = header.slice(7);
+    if (timingSafeEqual(Buffer.from(digest(provided)), Buffer.from(digest(metricsToken)))) {
+      next();
+      return;
+    }
+    res.status(401).json({ error: 'Войдите снова.' });
+    return;
+  }
+  await auth(req, res, (err?: unknown) => {
+    if (err) return next(err);
+    try {
+      admin(req, res, next);
+    } catch (error) {
+      next(error);
+    }
+  });
+}
+app.get('/api/metrics', metricsAuth, async (_req, res) => {
+  let dbOk = true;
+  let pushQueue = 0;
+  let clientErrors = 0;
+  try {
+    const { rows } = await pool.query<{ push_queue: number; client_errors: number }>(
+      `SELECT (SELECT count(*)::int FROM push_jobs) AS push_queue,
+              (SELECT count(*)::int FROM client_errors) AS client_errors`,
+    );
+    pushQueue = rows[0]?.push_queue ?? 0;
+    clientErrors = rows[0]?.client_errors ?? 0;
+  } catch {
+    dbOk = false;
+  }
+  const onlineUsers = new Set([...streams.values()].map((s) => s.userId)).size;
+  const lines = [
+    '# HELP galinka_up Server and database availability (1 = ready).',
+    '# TYPE galinka_up gauge',
+    `galinka_up ${listening && dbOk ? 1 : 0}`,
+    '# HELP galinka_uptime_seconds Process uptime in seconds.',
+    '# TYPE galinka_uptime_seconds gauge',
+    `galinka_uptime_seconds ${Math.floor(process.uptime())}`,
+    '# HELP galinka_memory_rss_bytes Resident set size in bytes.',
+    '# TYPE galinka_memory_rss_bytes gauge',
+    `galinka_memory_rss_bytes ${process.memoryUsage().rss}`,
+    '# HELP galinka_http_requests_total Total API requests handled.',
+    '# TYPE galinka_http_requests_total counter',
+    `galinka_http_requests_total ${httpMetrics.total}`,
+    '# HELP galinka_http_errors_total Total API requests returning 4xx or 5xx.',
+    '# TYPE galinka_http_errors_total counter',
+    `galinka_http_errors_total ${httpMetrics.clientError + httpMetrics.serverError}`,
+    '# HELP galinka_sse_streams Active SSE connections.',
+    '# TYPE galinka_sse_streams gauge',
+    `galinka_sse_streams ${streams.size}`,
+    '# HELP galinka_online_users Unique users currently connected via SSE.',
+    '# TYPE galinka_online_users gauge',
+    `galinka_online_users ${onlineUsers}`,
+    '# HELP galinka_push_queue Pending background push jobs.',
+    '# TYPE galinka_push_queue gauge',
+    `galinka_push_queue ${pushQueue}`,
+    '# HELP galinka_client_errors_total Stored client error reports.',
+    '# TYPE galinka_client_errors_total gauge',
+    `galinka_client_errors_total ${clientErrors}`,
+  ];
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+  res.send(lines.join('\n') + '\n');
+});
 app.use('/api', (_req, res) => res.status(404).json({ error: 'Маршрут не найден.' }));
 const publicDir = path.resolve('dist');
 if (production) {
@@ -1834,6 +1985,7 @@ async function housekeeping() {
   await pool.query(
     "DELETE FROM signup_invites WHERE used_at IS NULL AND expires_at<now()-interval '30 days'",
   );
+  await pool.query("DELETE FROM client_errors WHERE created_at<now()-interval '30 days'");
   const { rows } = await pool.query(
     "DELETE FROM files f WHERE created_at<now()-interval '1 day' AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.file_id=f.id) RETURNING id",
   );

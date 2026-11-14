@@ -283,3 +283,76 @@ test('a failed message keeps its voice preview and retries the same upload and n
   await expect(page.locator('.message-row .voice-player')).toHaveCount(1);
   await expect(page.locator('.chat-item')).toContainText('Голосовое сообщение');
 });
+
+test('virtualizes conversations past 120 messages and reveals off-window search matches', async ({
+  page,
+}) => {
+  const me: Person = { id: 'virt-me', name: 'Саша', username: 'sasha', color: 0 };
+  const chat: Chat = {
+    id: 'virt-chat',
+    kind: 'group',
+    title: 'Большой чат',
+    owner_id: me.id,
+    nelya: false,
+    member_count: 1,
+    peer: null,
+    unread: 0,
+    created_at: new Date().toISOString(),
+    last_message: null,
+  };
+  const start = Date.now() - 200 * 60_000;
+  const messages: Message[] = Array.from({ length: 200 }, (_, i) => ({
+    id: `history-${i + 1}`,
+    chat_id: chat.id,
+    sender_id: me.id,
+    sender: me,
+    body: i === 4 ? 'Уникальный маркер ноль пять для поиска' : `Сообщение ${i + 1}`,
+    created_at: new Date(start + i * 60_000).toISOString(),
+    nonce: `nonce-${i + 1}`,
+    file: null,
+    reactions: [],
+  }));
+  chat.last_message = messages.at(-1)!;
+
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    const pathname = url.pathname;
+    if (pathname === '/api/me') return route.fulfill({ json: me });
+    if (pathname === '/api/chats') return route.fulfill({ json: [chat] });
+    if (pathname.endsWith('/members')) return route.fulfill({ json: [me] });
+    if (pathname.endsWith('/messages')) {
+      const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+      if (q) {
+        return route.fulfill({
+          json: messages.filter((m) => m.body.toLowerCase().includes(q)),
+        });
+      }
+      return route.fulfill({ json: messages });
+    }
+    if (pathname.endsWith('/events'))
+      return route.fulfill({ contentType: 'text/event-stream', body: ': connected\n\n' });
+    if (pathname.endsWith('/announcements'))
+      return route.fulfill({ json: { items: [], total: 0, page: 1 } });
+    return route.fulfill({ json: { ok: true, enabled: false, publicKey: null } });
+  });
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/app');
+  await expect(page.locator('.message-row').last()).toContainText('Сообщение 200');
+  const mounted = await page.locator('.message-row').count();
+  expect(mounted).toBeGreaterThanOrEqual(60);
+  expect(mounted).toBeLessThan(130);
+  await expect(page.locator('[data-message-id="history-5"]')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Поиск по сообщениям', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Поиск по сообщениям', exact: true }).fill('маркер ноль пять');
+  const target = page.locator('[data-message-id="history-5"]');
+  await expect(target).toBeVisible();
+  await expect(target).toContainText('Уникальный маркер ноль пять');
+  const inViewport = await target.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    const scrollerRect = el.closest('.messages')!.getBoundingClientRect();
+    return rect.bottom > scrollerRect.top && rect.top < scrollerRect.bottom;
+  });
+  expect(inViewport).toBe(true);
+});

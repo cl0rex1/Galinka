@@ -47,13 +47,6 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at timestamptz;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id uuid REFERENCES messages(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS messages_reply_to ON messages(reply_to_id) WHERE reply_to_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_chat_time ON messages(chat_id,created_at DESC,id DESC);
--- 0.13: trigram index for message search (ILIKE '%text%'; strpos/lower cannot use it).
--- The operator class is qualified with the extension's schema, which may be off search_path.
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-DO $$ BEGIN
-  EXECUTE format('CREATE INDEX IF NOT EXISTS messages_body_trgm ON messages USING gin (body %I.gin_trgm_ops)',
-    (SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='pg_trgm'));
-END $$;
 CREATE TABLE IF NOT EXISTS reactions (
  message_id uuid REFERENCES messages(id) ON DELETE CASCADE, user_id uuid REFERENCES users(id) ON DELETE CASCADE,
  emoji text NOT NULL CHECK(emoji IN ('❤','👍','😂','🔥')), PRIMARY KEY(message_id,user_id,emoji)
@@ -94,35 +87,3 @@ CREATE TABLE IF NOT EXISTS push_deliveries (
 
 -- Marks AAC/MP4 files validated by the audio normalization pipeline. Legacy originals remain untouched.
 ALTER TABLE files ADD COLUMN IF NOT EXISTS audio_ready boolean NOT NULL DEFAULT false;
-
--- 0.6: device list, sliding sessions and one-time sign-up invites.
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now();
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_seen_at timestamptz NOT NULL DEFAULT now();
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent text NOT NULL DEFAULT '';
-CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
-CREATE INDEX IF NOT EXISTS messages_file ON messages(file_id) WHERE file_id IS NOT NULL;
-CREATE TABLE IF NOT EXISTS signup_invites (
- token text PRIMARY KEY, created_by uuid REFERENCES users(id) ON DELETE SET NULL,
- note text NOT NULL DEFAULT '', created_at timestamptz NOT NULL DEFAULT now(),
- expires_at timestamptz NOT NULL, used_by uuid REFERENCES users(id) ON DELETE SET NULL,
- used_at timestamptz
-);
-
--- 0.12: presence, privacy, notification previews and avatars.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at timestamptz;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS show_last_seen boolean NOT NULL DEFAULT true;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS group_invites text NOT NULL DEFAULT 'all';
-ALTER TABLE users ADD COLUMN IF NOT EXISTS notify_preview text NOT NULL DEFAULT 'full';
-ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar text;
-ALTER TABLE chats ADD COLUMN IF NOT EXISTS avatar text;
-DO $$ BEGIN
-  ALTER TABLE users ADD CONSTRAINT users_group_invites CHECK (group_invites IN ('all','nobody'));
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-DO $$ BEGIN
-  ALTER TABLE users ADD CONSTRAINT users_notify_preview CHECK (notify_preview IN ('full','sender','none'));
-EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
--- 0.14: pinned message and forwarding. A forwarded attachment keeps its single files row,
--- which messages in other chats may reference; the row lives while any message uses it.
-ALTER TABLE chats ADD COLUMN IF NOT EXISTS pinned_message_id uuid REFERENCES messages(id) ON DELETE SET NULL;
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS forwarded_from text;
