@@ -90,7 +90,7 @@ test('video keeps its position and element when fullscreen rotates', async ({
   await expect(page.locator('.pending-file .video-inline button')).toHaveCount(1);
   await expect(page.getByRole('slider', { name: 'Позиция видео' })).toBeVisible();
   await expect(page.getByRole('slider', { name: 'Громкость видео' })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+  await page.getByRole('dialog', { name: /^Отправить/ }).getByRole('button', { name: 'Отправить', exact: true }).click();
   const video = page.locator('.video-player video');
   await expect(video).toHaveCount(1);
   await page.getByRole('button', { name: 'Воспроизвести видео', exact: true }).click();
@@ -145,7 +145,7 @@ test('photo viewer zooms and resets; dialogs survive a text selection dragged ou
       'base64',
     ),
   });
-  await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+  await page.getByRole('dialog', { name: /^Отправить/ }).getByRole('button', { name: 'Отправить', exact: true }).click();
   await page.getByRole('button', { name: 'Открыть фото zoom.png', exact: true }).click();
   const viewer = page.getByRole('dialog', { name: 'Просмотр фотографии', exact: true });
   await page.setViewportSize({ width: 320, height: 640 });

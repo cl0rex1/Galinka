@@ -1,35 +1,45 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
-import { Square, Video, X } from 'lucide-react';
+import { SwitchCamera, Square, Video, X } from 'lucide-react';
 import { audioConstraints, mediaPrefs, videoConstraints } from './media';
 
 const maxSeconds = 60;
 const maxBytes = 20 * 1024 * 1024;
 type Session = {
   stream: MediaStream;
+  /** Every camera track opened during the recording, all stopped at the end. */
+  tracks: MediaStreamTrack[];
   recorder?: MediaRecorder;
   chunks: Blob[];
   discard: boolean;
   stopMirror?: () => void;
+  /** Whether frames are drawn flipped (the front camera with mirroring on). */
+  flip?: { current: boolean };
   timer?: ReturnType<typeof setInterval>;
 };
 
-function mirrorCamera(video: HTMLVideoElement, source: MediaStream) {
+/**
+ * Draws the camera into a square canvas and records the canvas. The recording then survives a
+ * camera switch (only the <video> source changes) and can be mirrored frame by frame.
+ */
+function canvasCamera(video: HTMLVideoElement, source: MediaStream, flip: { current: boolean }) {
   const canvas = document.createElement('canvas');
-  const scale = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
-  canvas.width = Math.round(video.videoWidth * scale);
-  canvas.height = Math.round(video.videoHeight * scale);
+  canvas.width = canvas.height = Math.min(640, Math.max(video.videoWidth, video.videoHeight) || 480);
   const context = canvas.getContext('2d');
-  if (!context || !canvas.width || !canvas.height || !canvas.captureStream)
-    throw new DOMException('Camera mirroring unavailable', 'NotSupportedError');
-  context.translate(canvas.width, 0);
-  context.scale(-1, 1);
+  if (!context || !canvas.width || !canvas.captureStream)
+    throw new DOMException('Camera canvas unavailable', 'NotSupportedError');
   const capture = canvas.captureStream(30);
   const videoTrack = capture.getVideoTracks()[0];
   const stream = new MediaStream([videoTrack, ...source.getAudioTracks()]);
   let frame = 0;
   const draw = () => {
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const { videoWidth: w, videoHeight: h } = video;
+    if (w && h) {
+      // Cover the square: the middle of a landscape or portrait frame.
+      const side = Math.min(w, h);
+      context.setTransform(flip.current ? -1 : 1, 0, 0, 1, flip.current ? canvas.width : 0, 0);
+      context.drawImage(video, (w - side) / 2, (h - side) / 2, side, side, 0, 0, canvas.width, canvas.height);
+    }
     frame = requestAnimationFrame(draw);
   };
   try {
@@ -63,6 +73,9 @@ export function VideoNoteRecorder({
   const [phase, setPhase] = useState<'idle' | 'starting' | 'recording'>('idle');
   const [seconds, setSeconds] = useState(0);
   const [mirror, setMirror] = useState(false);
+  const [facing, setFacing] = useState<'user' | 'environment'>('user');
+  const [cameras, setCameras] = useState(0);
+  const [switching, setSwitching] = useState(false);
   const preview = useRef<HTMLVideoElement>(null);
   const session = useRef<Session | null>(null);
   const attempt = useRef(0);
@@ -75,6 +88,7 @@ export function VideoNoteRecorder({
       clearInterval(current.timer);
       current.stopMirror?.();
       current.stream.getTracks().forEach((track) => track.stop());
+      current.tracks.forEach((track) => track.stop());
     }
     session.current = null;
     setPhase('idle');
@@ -126,6 +140,8 @@ export function VideoNoteRecorder({
     const mirrored = mediaPrefs().mirror;
     flushSync(() => {
       setMirror(mirrored);
+      setFacing('user');
+      setCameras(0);
       setPhase('starting');
       setSeconds(0);
     });
@@ -138,18 +154,35 @@ export function VideoNoteRecorder({
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
-      const current: Session = { stream, chunks: [], discard: false };
+      const current: Session = { stream, tracks: [], chunks: [], discard: false };
       session.current = current;
       const camera = preview.current!;
       camera.srcObject = stream;
       let recording = stream;
-      if (mirrored) {
+      const canvasRecording = typeof HTMLCanvasElement.prototype.captureStream === 'function';
+      if (mirrored || canvasRecording) {
         await camera.play();
         if (id !== attempt.current) return;
-        const reflected = mirrorCamera(camera, stream);
-        current.stopMirror = reflected.stop;
-        recording = reflected.stream;
+        current.flip = { current: mirrored };
+        try {
+          const drawn = canvasCamera(camera, stream, current.flip);
+          current.stopMirror = drawn.stop;
+          recording = drawn.stream;
+        } catch (error) {
+          // Without a canvas the camera is recorded as is; only mirroring needs it.
+          if (mirrored) throw error;
+          current.flip = undefined;
+        }
       }
+      // The switch button appears only with a second camera and the canvas pipeline.
+      if (current.flip)
+        void navigator.mediaDevices
+          .enumerateDevices()
+          .then((devices) => {
+            if (session.current === current)
+              setCameras(devices.filter((device) => device.kind === 'videoinput').length);
+          })
+          .catch(() => {});
       // MP4 plays everywhere, Safari included; WebM is the fallback for Firefox.
       const types: (string | undefined)[] = [
         'video/mp4;codecs=avc1,mp4a.40.2',
@@ -227,6 +260,34 @@ export function VideoNoteRecorder({
     }
   }
 
+  /** Front and back camera while recording; the recording itself keeps going. */
+  async function switchCamera() {
+    const current = session.current;
+    const camera = preview.current;
+    if (!current?.flip || !camera || switching) return;
+    const next = facing === 'user' ? 'environment' : 'user';
+    setSwitching(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(next) });
+      if (session.current !== current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const old = camera.srcObject as MediaStream | null;
+      current.tracks.push(...stream.getTracks());
+      camera.srcObject = stream;
+      await camera.play().catch(() => {});
+      current.flip.current = next === 'user' && mirror;
+      // The first stream also carries the microphone: stop only its picture.
+      old?.getVideoTracks().forEach((track) => track.stop());
+      setFacing(next);
+    } catch {
+      callbacks.current.onError('Не удалось переключить камеру.');
+    } finally {
+      setSwitching(false);
+    }
+  }
+
   return (
     <>
       <button
@@ -245,7 +306,7 @@ export function VideoNoteRecorder({
             <div className="video-note-stage">
               <video
                 ref={preview}
-                className={mirror ? 'camera-mirrored' : undefined}
+                className={mirror && facing === 'user' ? 'camera-mirrored' : undefined}
                 autoPlay
                 muted
                 playsInline
@@ -270,6 +331,18 @@ export function VideoNoteRecorder({
                 <X size={22} />
               </button>
               <span className="recording-dot" />
+              {cameras > 1 && phase === 'recording' && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Сменить камеру"
+                  title="Сменить камеру"
+                  disabled={switching}
+                  onClick={() => void switchCamera()}
+                >
+                  <SwitchCamera size={20} />
+                </button>
+              )}
               <time className="recording-time">
                 {phase === 'recording'
                   ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`

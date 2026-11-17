@@ -19,7 +19,8 @@ import {
   X,
 } from 'lucide-react';
 import { lookPrefs } from './Appearance';
-import { AttachmentPreview } from './AttachmentPreview';
+import { AttachDialog } from './AttachDialog';
+import { AttachmentPreview, AttachmentStrip } from './AttachmentPreview';
 import { Avatar } from './Avatar';
 import { EmojiPicker } from './EmojiPicker';
 import { fileLabel } from './MediaAttachment';
@@ -65,6 +66,7 @@ export function Composer({
     draft,
     attachment,
     attachmentSource,
+    pendingFiles,
     transfer,
     sending,
     reply,
@@ -197,7 +199,33 @@ export function Composer({
           </IconButton>
         </div>
       )}
-      {attachment && !edit && (
+      {composer.reviewing && !edit && (
+        <AttachDialog
+          key={active.id}
+          files={pendingFiles.map((item) => item.file)}
+          caption={draft}
+          onCaption={composer.changeDraft}
+          onRemove={composer.removeAttachment}
+          onReplace={composer.replaceAttachment}
+          onAddMore={() => {
+            const input = fileInput.current;
+            if (!input) return;
+            input.accept = 'image/*,video/*';
+            input.click();
+          }}
+          onSend={() => void composer.send()}
+          onClose={composer.closeReview}
+        />
+      )}
+      {pendingFiles.length > 1 && !edit && (
+        <AttachmentStrip
+          files={pendingFiles.map((item) => item.file)}
+          transfer={transfer}
+          onRetry={() => void composer.send()}
+          onRemove={composer.removeAttachment}
+        />
+      )}
+      {pendingFiles.length === 1 && !edit && (
         <AttachmentPreview
           file={attachment}
           transfer={transfer}
@@ -206,7 +234,7 @@ export function Composer({
             if (attachmentSource) void composer.attachFile(attachmentSource, true);
           }}
           onRetry={() => void composer.send()}
-          onRemove={composer.removeAttachment}
+          onRemove={() => composer.removeAttachment(0)}
         />
       )}
       <form className="composer" onSubmit={(e) => void composer.send(e)}>
@@ -238,10 +266,11 @@ export function Composer({
         <input
           ref={fileInput}
           type="file"
+          multiple
           hidden
           onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) void composer.attachFile(file);
+            const files = [...(e.target.files ?? [])];
+            if (files.length) void composer.attachFiles(files);
             e.target.value = '';
           }}
         />
@@ -312,10 +341,10 @@ export function Composer({
             onSelect={(event) => setMentionCursor(event.currentTarget.selectionEnd)}
             onBlur={() => setMentionCursor(null)}
             onPaste={(e) => {
-              const file = e.clipboardData.files[0];
-              if (file && !edit) {
+              const files = [...e.clipboardData.files];
+              if (files.length && !edit) {
                 e.preventDefault();
-                void composer.attachFile(file);
+                void composer.attachFiles(files);
               }
             }}
             onKeyDown={(e) => {
@@ -443,7 +472,7 @@ export function Composer({
             key={active.id}
             disabled={sending}
             onActive={() => onTyping('voice')}
-            onRecorded={(file) => void composer.attachFile(file)}
+            onRecorded={(file, sendNow) => void composer.attachFile(file, false, sendNow)}
             onError={onError}
           />
         ) : (

@@ -27,7 +27,7 @@ import {
 
 import { Avatar } from './Avatar';
 import { MessageMenuBody } from './MessageMenu';
-import { fileLabel, MediaAttachment } from './MediaAttachment';
+import { fileLabel, isVideoNote, MediaAttachment } from './MediaAttachment';
 import { bareKind, mentionsUser, MessageText, plainText, SelfContext } from './MessageText';
 import { LinkPreviewCard } from './LinkPreview';
 import { GalleryContext } from './gallery';
@@ -54,6 +54,14 @@ const grouped = (left: Message | undefined, right: Message | undefined) =>
     Math.abs(Date.parse(left.created_at) - Date.parse(right.created_at)) < 300000,
   );
 
+/** A photo or video that belongs to an album (several sent at once). */
+const inAlbum = (m: Message | undefined) =>
+  Boolean(
+    m?.album_id && m.file && /^(image|video)\//.test(m.file.mime || '') && !isVideoNote(m.file),
+  );
+const sameAlbum = (left: Message | undefined, right: Message | undefined) =>
+  inAlbum(left) && inAlbum(right) && left!.album_id === right!.album_id;
+
 export type MessageActions = {
   reply: (message: Message) => void;
   edit: (message: Message) => void;
@@ -79,6 +87,8 @@ export type MessageActions = {
 };
 type RowProps = {
   message: Message;
+  /** The whole album when this message opens one; its text is the last message's. */
+  album?: Message[];
   own: boolean;
   /** True if the user may delete this message for everyone (or moderate in group). */
   canDeleteForAll: boolean;
@@ -112,6 +122,7 @@ const holdable = (target: EventTarget | null) => {
 
 const MessageRow = memo(function MessageRow({
   message: m,
+  album,
   own,
   canDeleteForAll,
   pinned,
@@ -133,6 +144,7 @@ const MessageRow = memo(function MessageRow({
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const held = useRef(false);
   const bot = !m.sender_id;
+  const text = album ? album[album.length - 1] : m;
   const bare = !m.file && !m.poll && !m.link_preview ? bareKind(m.body) : null;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuPoint = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -249,7 +261,7 @@ const MessageRow = memo(function MessageRow({
         )}
         <div className="message-content">
           <div
-            className={`bubble ${bare ? `bare bare-${bare}` : ''} ${!own && kind === 'group' && (m.mention_all || mentionsUser(m.body, self)) ? 'mentions-me' : ''}`}
+            className={`bubble ${bare ? `bare bare-${bare}` : ''} ${!own && kind === 'group' && (text.mention_all || mentionsUser(text.body, self)) ? 'mentions-me' : ''}`}
           >
             {!own && !continued && kind === 'group' && (
               <div className={`sender-name tone-text-${(m.sender.color ?? 2) % 6}`}>
@@ -288,13 +300,25 @@ const MessageRow = memo(function MessageRow({
                 </div>
               </blockquote>
             )}
-            {m.file && (
-              <MediaAttachment file={m.file} onDownload={() => actions.download(m.file!)} />
+            {album ? (
+              <div className={`album-grid n${album.length}`}>
+                {album.map((item) => (
+                  <MediaAttachment
+                    key={item.id}
+                    file={item.file!}
+                    onDownload={() => actions.download(item.file!)}
+                  />
+                ))}
+              </div>
+            ) : (
+              m.file && (
+                <MediaAttachment file={m.file} onDownload={() => actions.download(m.file!)} />
+              )
             )}
-            {m.body && !m.poll && (
-              <MessageText text={m.body} highlight={highlight} onMention={actions.mention} />
+            {text.body && !m.poll && (
+              <MessageText text={text.body} highlight={highlight} onMention={actions.mention} />
             )}
-            {m.link_preview && <LinkPreviewCard preview={m.link_preview} />}
+            {text.link_preview && <LinkPreviewCard preview={text.link_preview} />}
             {m.poll && (
               <div className="poll-card" role="group" aria-label={`Опрос: ${m.poll.question}`}>
                 <div className="poll-question">{m.poll.question}</div>
@@ -780,6 +804,16 @@ export const MessageList = memo(function MessageList({
             {day.items.map((index) => {
               const message = messages[index];
               const key = itemKey(message);
+              // An album is drawn once, by its first message; the rest are folded into it.
+              if (index > start && sameAlbum(messages[index - 1], message)) return null;
+              let album: Message[] | undefined;
+              if (inAlbum(message)) {
+                album = [message];
+                while (sameAlbum(album.at(-1), messages[index + album.length]))
+                  album.push(messages[index + album.length]);
+                if (album.length < 2) album = undefined;
+              }
+              const last = index + (album?.length ?? 1) - 1;
               return (
                 // Keyed by nonce: the server's copy replaces a just-sent bubble without a remount.
                 <Fragment key={key}>
@@ -790,6 +824,7 @@ export const MessageList = memo(function MessageList({
                   )}
                   <MessageRow
                     message={message}
+                    album={album}
                     itemKey={key}
                     own={message.sender_id === meId}
                     canDeleteForAll={message.sender_id === meId || Boolean(moderator)}
@@ -798,7 +833,7 @@ export const MessageList = memo(function MessageList({
                     selected={Boolean(selection?.has(message.id))}
                     kind={kind}
                     continued={grouped(messages[index - 1], message)}
-                    showAvatar={!grouped(message, messages[index + 1])}
+                    showAvatar={!grouped(messages[last], messages[last + 1])}
                     fresh={fresh.has(message.id)}
                     copied={copiedId === message.id}
                     sending={sending}

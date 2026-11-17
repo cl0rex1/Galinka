@@ -9,6 +9,75 @@ const formatSize = (bytes: number) =>
     ? `${Math.max(1, Math.round(bytes / 1024))} КБ`
     : `${(bytes / 1048576).toFixed(1).replace('.', ',')} МБ`;
 export type Transfer = { phase: 'uploading' | 'sending' | 'error'; progress: number };
+/** Several files waiting in the composer: a strip of thumbnails, each with its own remove button. */
+export function AttachmentStrip({
+  files,
+  transfer,
+  onRemove,
+  onRetry,
+}: {
+  files: File[];
+  transfer?: Transfer;
+  onRemove: (index: number) => void;
+  onRetry: () => void;
+}) {
+  const [urls, setUrls] = useState<string[]>([]);
+  useEffect(() => {
+    const next = files.map((file) => URL.createObjectURL(file));
+    setUrls(next);
+    return () => next.forEach((url) => URL.revokeObjectURL(url));
+  }, [files.map((file) => `${file.name}:${file.size}:${file.lastModified}`).join('|')]);
+  const busy = transfer?.phase === 'uploading' || transfer?.phase === 'sending';
+  const total = files.reduce((sum, file) => sum + file.size, 0);
+  return (
+    <div className={`pending-strip ${transfer?.phase === 'error' ? 'has-error' : ''}`}>
+      <ul>
+        {files.map((file, index) => (
+          <li key={`${index}:${file.name}:${file.size}`}>
+            {file.type.startsWith('image/') && urls[index] ? (
+              <img src={urls[index]} alt={file.name} />
+            ) : file.type.startsWith('video/') && urls[index] ? (
+              <video src={`${urls[index]}#t=0.1`} muted playsInline preload="metadata" />
+            ) : (
+              <span className="pending-strip-file" title={file.name}>
+                <FileText size={22} />
+                <small>{fileLabel(file.name)}</small>
+              </span>
+            )}
+            <button
+              type="button"
+              className="pending-strip-remove"
+              aria-label={`Убрать файл ${file.name}`}
+              disabled={busy}
+              onClick={() => onRemove(index)}
+            >
+              <X size={14} />
+            </button>
+          </li>
+        ))}
+      </ul>
+      <span className="pending-file-status" role="status">
+        {busy && <LoaderCircle size={13} className="spin" />}
+        {transfer?.phase === 'error'
+          ? 'Не отправлено'
+          : transfer?.phase === 'sending'
+            ? 'Отправка…'
+            : transfer?.phase === 'uploading'
+              ? `Загрузка ${transfer.progress}%`
+              : `Файлов: ${files.length} · ${formatSize(total)}`}
+        {transfer?.phase === 'error' && (
+          <button type="button" className="text-button" onClick={onRetry}>
+            Повторить
+          </button>
+        )}
+      </span>
+      {transfer?.phase === 'uploading' && (
+        <progress aria-label="Загрузка вложений" value={transfer.progress} max={100} />
+      )}
+    </div>
+  );
+}
+
 export function AttachmentPreview({
   file,
   transfer,

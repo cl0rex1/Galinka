@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
@@ -23,6 +24,7 @@ import { GalleryContext, type GalleryPhoto } from './gallery';
 import { AudioPlayer } from './AudioPlayer';
 import { motionAllowed } from './ui';
 import { VideoPlayer } from './VideoPlayer';
+import { clearNowPlaying, playNext, setNowPlaying } from './nowPlaying';
 
 const size = (bytes: number) =>
   bytes < 1048576
@@ -48,6 +50,22 @@ export const isAudioFile = (name: string, mime?: string) =>
   /^audio\/(webm|ogg|mp4|mpeg|wav|x-wav|flac|aac)$/.test(mime || '') ||
   ((!mime || mime === 'application/octet-stream') && /\.(mp3|wav|flac|aac)$/i.test(name));
 
+/**
+ * Where a photo of known size lands in a bubble: within 380×400, at least 140 wide (a very tall
+ * picture is then cropped), never wider than the bubble.
+ */
+export function placeholderSize(file: Attachment) {
+  if (!file.width || !file.height) return {};
+  const scale = Math.min(1, 380 / file.width, 400 / file.height);
+  const width = Math.max(140, Math.round(file.width * scale));
+  // Variables, not width/height: an album cell overrides them with its own grid size.
+  return {
+    width: file.width,
+    height: file.height,
+    style: { '--shown-width': `${width}px`, '--ratio': `${file.width} / ${file.height}` } as CSSProperties,
+  };
+}
+
 export function MediaAttachment({
   file,
   onDownload,
@@ -57,6 +75,7 @@ export function MediaAttachment({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const gallery = useContext(GalleryContext);
   const inGallery = gallery?.photos.some((photo) => photo.file.id === file.id);
   const photos: GalleryPhoto[] = inGallery
@@ -89,17 +108,25 @@ export function MediaAttachment({
           size={file.size}
           mime={file.mime}
           onDownload={onDownload}
+          waveform={file.waveform}
+          sequence={file.name.startsWith('Голосовое-')}
         />
       </div>
     );
   if (video && url)
     return isVideoNote(file) ? (
-      <div className="media-attachment video-note-attachment">
+      <div className="media-attachment video-note-attachment" data-sequence-item>
         <VideoNote src={url} onError={() => setFailed(true)} />
       </div>
     ) : (
       <div className="media-attachment video-attachment">
-        <VideoPlayer src={url} name={file.name} onError={() => setFailed(true)} />
+        <VideoPlayer
+          src={url}
+          name={file.name}
+          poster={file.thumb ?? undefined}
+          ratio={file.width && file.height ? file.width / file.height : undefined}
+          onError={() => setFailed(true)}
+        />
       </div>
     );
   if (!image || !url)
@@ -117,11 +144,24 @@ export function MediaAttachment({
     <div className="media-attachment image-attachment">
       <button
         type="button"
-        className="image-preview"
+        className={`image-preview ${loaded ? 'loaded' : ''}`}
         onClick={() => setExpanded(true)}
         aria-label={`Открыть фото ${file.name}`}
+        style={file.thumb ? ({ '--thumb': `url("${file.thumb}")` } as CSSProperties) : undefined}
       >
-        <img src={url} alt={file.name} loading="lazy" onError={() => setFailed(true)} />
+        <img
+          src={url}
+          alt={file.name}
+          loading="lazy"
+          // The known size reserves the picture's place, so the feed does not jump on load.
+          {...placeholderSize(file)}
+          // Already decoded (from the cache) before React listened: show it at once.
+          ref={(element) => {
+            if (!loaded && element?.complete && element.naturalWidth) setLoaded(true);
+          }}
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+        />
       </button>
       {expanded && (
         <PhotoViewer
@@ -456,6 +496,12 @@ function PhotoViewer({
 /** Round video message: a still until tapped, then plays with sound inside a progress ring. */
 function VideoNote({ src, onError }: { src: string; onError: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const element = video.current;
+    return () => {
+      if (element) clearNowPlaying(element);
+    };
+  }, []);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState({ current: 0, duration: 0 });
   // Recorder output often has no duration in its header; seeking to the end reveals it.
@@ -488,6 +534,7 @@ function VideoNote({ src, onError }: { src: string; onError: () => void }) {
     <button
       type="button"
       className={`video-note ${playing ? 'playing' : ''}`}
+      data-sequence
       onClick={toggle}
       aria-label={playing ? 'Пауза' : 'Воспроизвести кружок'}
     >
@@ -497,12 +544,17 @@ function VideoNote({ src, onError }: { src: string; onError: () => void }) {
         playsInline
         preload="metadata"
         onLoadedMetadata={measure}
-        onPlay={() => setPlaying(true)}
+        onPlay={(event) => {
+          setPlaying(true);
+          setNowPlaying({ element: event.currentTarget, label: 'Кружок' });
+        }}
         onPause={() => setPlaying(false)}
-        onEnded={() => {
+        onEnded={(event) => {
+          const element = event.currentTarget;
           setPlaying(false);
           setTime((previous) => ({ ...previous, current: 0 }));
-          if (video.current) video.current.currentTime = 0;
+          element.currentTime = 0;
+          if (!playNext(element)) clearNowPlaying(element);
         }}
         onTimeUpdate={(event) => {
           // Paused updates come from seeking (measuring the length, rewinding at the end).

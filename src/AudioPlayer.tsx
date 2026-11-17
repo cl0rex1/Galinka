@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, LoaderCircle, RotateCcw, Download } from 'lucide-react';
+import { clearNowPlaying, playNext, setNowPlaying } from './nowPlaying';
 
 const maxBytes = 20 * 1024 * 1024;
 const playbackEvent = 'galinka:voice-play';
@@ -21,6 +22,8 @@ export function AudioPlayer({
   mime,
   compact = false,
   onDownload,
+  waveform,
+  sequence = false,
 }: {
   src: string;
   name?: string;
@@ -28,6 +31,10 @@ export function AudioPlayer({
   mime?: string;
   compact?: boolean;
   onDownload?: () => void;
+  /** Loudness bars (0..31) drawn instead of a plain line. */
+  waveform?: number[] | null;
+  /** A voice message in the feed: the next one plays after it, the mini-player shows it. */
+  sequence?: boolean;
 }) {
   const audio = useRef<HTMLAudioElement>(null);
   const resource = useRef<{
@@ -73,6 +80,7 @@ export function AudioPlayer({
       current.controller?.abort();
       current.intent++;
       element.pause();
+      clearNowPlaying(element);
       element.removeAttribute('src');
       element.load();
       if (current.owned && current.url) URL.revokeObjectURL(current.url);
@@ -221,6 +229,7 @@ export function AudioPlayer({
       className={`voice-player ${compact ? 'voice-player-compact' : ''}`}
       data-state={phase}
       aria-label={name}
+      data-sequence-item={sequence || undefined}
     >
       <audio
         ref={audio}
@@ -230,6 +239,8 @@ export function AudioPlayer({
         onDurationChange={updateDuration}
         onPlay={() => {
           if (audio.current?.paused) return;
+          if (sequence && audio.current)
+            setNowPlaying({ element: audio.current, label: 'Голосовое сообщение' });
           setPhase('playing');
           setError('');
           setNeedsTap(false);
@@ -239,7 +250,10 @@ export function AudioPlayer({
         onEnded={() => {
           setPhase('ready');
           setPosition(0);
-          if (audio.current) audio.current.currentTime = 0;
+          const element = audio.current;
+          if (!element) return;
+          element.currentTime = 0;
+          if (!sequence || !playNext(element)) clearNowPlaying(element);
         }}
         onError={() => {
           if (audio.current?.getAttribute('src')) {
@@ -252,6 +266,7 @@ export function AudioPlayer({
         <button
           type="button"
           className="voice-play"
+          data-sequence={sequence || undefined}
           aria-label={label}
           onClick={() => void toggle()}
         >
@@ -265,7 +280,22 @@ export function AudioPlayer({
             <Play size={22} />
           )}
         </button>
-        <div className="voice-player-track">
+        <div className={`voice-player-track ${waveform?.length ? 'has-wave' : ''}`}>
+          {!!waveform?.length && (
+            <span className="voice-wave" aria-hidden="true">
+              {waveform.map((value, index) => (
+                <i
+                  key={index}
+                  className={
+                    duration && (index + 0.5) / waveform.length <= position / duration
+                      ? 'played'
+                      : undefined
+                  }
+                  style={{ height: `${Math.max(10, (value / 31) * 100)}%` }}
+                />
+              ))}
+            </span>
+          )}
           <input
             className="voice-timeline"
             type="range"

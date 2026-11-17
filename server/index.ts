@@ -3,13 +3,24 @@ import { rateLimit } from 'express-rate-limit';
 import helmet from 'helmet';
 import multer from 'multer';
 import { Pool, Client, type PoolClient } from 'pg';
-import { randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { readFile, mkdir, unlink, open, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createWriteStream, existsSync } from 'node:fs';
+import { readFile, mkdir, unlink, open, writeFile, rename, stat, truncate } from 'node:fs/promises';
 import path from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { z, ZodError } from 'zod';
 import { digest, hashPassword, verifyPassword, readCookie } from './security.js';
 import { migrate } from './migrate.js';
+import {
+  maxUploadBytes,
+  mediaMetaSchema,
+  needsVideoWork,
+  startMediaWorker,
+  visualMeta,
+  voiceWaveform,
+  type MediaMeta,
+} from './media.js';
 import { nelyaReply } from './nelya.js';
 import {
   PreviewError,
@@ -899,7 +910,7 @@ app.get('/api/chats', auth, async (req, res) => {
  LEFT JOIN LATERAL (SELECT u.id,u.name,u.username,u.color,u.avatar,u.last_seen_at,u.show_last_seen FROM members mm JOIN users u ON u.id=mm.user_id
    WHERE c.kind='direct' AND mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) peer ON true
  LEFT JOIN LATERAL (SELECT lm.body,lm.created_at,lm.sender_id,lm.file_id,
-   CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file
+   CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
    FROM messages lm LEFT JOIN files f ON f.id=lm.file_id WHERE lm.chat_id=c.id AND lm.deleted_at IS NULL AND (lm.expires_at IS NULL OR lm.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=lm.id AND hm.user_id=$1)
    ORDER BY lm.created_at DESC,lm.id DESC LIMIT 1) last ON true
  WHERE m.user_id=$1 ORDER BY m.pinned DESC,COALESCE(last.created_at,c.created_at) DESC,c.id`,
@@ -962,7 +973,13 @@ app.patch('/api/chats/:id', auth, async (req, res) => {
       nelya: z.boolean().optional(),
       title: z.string().trim().min(1).max(70).optional(),
       ownerId: uuid.optional(),
-      autoDeleteSeconds: z.number().int().min(0).max(365 * 86400).nullable().optional(),
+      autoDeleteSeconds: z
+        .number()
+        .int()
+        .min(0)
+        .max(365 * 86400)
+        .nullable()
+        .optional(),
     })
     .strict()
     .refine((value) => Object.keys(value).length > 0)
@@ -1026,7 +1043,10 @@ app.patch('/api/chats/:id/preferences', auth, async (req, res) => {
   res.json({ ok: true });
 });
 app.put('/api/chats/:id/draft', auth, async (req, res) => {
-  const { draft } = z.object({ draft: z.string().max(8000) }).strict().parse(req.body);
+  const { draft } = z
+    .object({ draft: z.string().max(8000) })
+    .strict()
+    .parse(req.body);
   const chat = await member(String(req.params.id), user(req).id);
   await pool.query(
     'UPDATE members SET draft=$1,draft_updated_at=clock_timestamp() WHERE chat_id=$2 AND user_id=$3',
@@ -1285,12 +1305,17 @@ const pollSelectSQL = `CASE WHEN p.id IS NULL THEN NULL ELSE json_build_object(
 ) END AS poll`;
 
 /** @все or @all as a word of its own; the client highlights by the same rule. */
+/** The nonce of the n-th message of an album, stable across retries of the same request. */
+const derivedNonce = (nonce: string, index: number) => {
+  const hex = createHash('sha256').update(`${nonce}:${index}`).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
 const MENTION_ALL = /(^|[^\p{L}\p{N}_@])@(все|all)(?![\p{L}\p{N}_])/iu;
-const visibleMessageWhere =`m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$2)`;
+const visibleMessageWhere = `m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=m.id AND hm.user_id=$2)`;
 
-const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.expires_at,m.link_preview,m.nonce,m.forwarded_from,m.mention_all,
+const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.expires_at,m.link_preview,m.nonce,m.forwarded_from,m.mention_all,m.album_id,
  CASE WHEN u.id IS NULL THEN json_build_object('id','nelya','name','Неля','username','nelya','color',5) ELSE json_build_object('id',u.id,'name',u.name,'username',u.username,'color',u.color) END AS sender,
- CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file,
+ CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file,
  CASE WHEN replied.id IS NULL THEN NULL ELSE json_build_object('id',replied.id,'body',replied.body,'sender',json_build_object('id',COALESCE(reply_user.id::text,'nelya'),'name',COALESCE(reply_user.name,'Неля')),'file_name',reply_file.name) END AS reply,
  ${pollSelectSQL},
  (SELECT count(*)::int FROM members reader WHERE reader.chat_id=m.chat_id AND reader.user_id IS DISTINCT FROM m.sender_id AND reader.receipt_at>=m.created_at) AS read_by,
@@ -1371,7 +1396,7 @@ app.get('/api/search', auth, async (req, res) => {
   const from = filters.from === 'me' ? user(req).id : filters.from;
   const { rows } = await pool.query(
     `SELECT m.id,m.chat_id,m.body,m.created_at,m.sender_id,COALESCE(u.name,'Неля') AS sender_name,
-       CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime) END AS file
+       CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
      FROM messages m JOIN members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=$1
      LEFT JOIN users u ON u.id=m.sender_id LEFT JOIN files f ON f.id=m.file_id
      WHERE m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now())
@@ -1391,11 +1416,40 @@ app.get('/api/search', auth, async (req, res) => {
   );
   res.json(rows);
 });
+/** The chat profile's "Медиа, файлы, ссылки, голосовые": one kind at a time, newest first. */
+app.get('/api/chats/:id/media', auth, async (req, res) => {
+  const query = z
+    .object({
+      type: z.enum(['media', 'file', 'voice', 'link']),
+      /** The `cursor` of the last item of the previous page. */
+      before: z.string().max(40).optional(),
+    })
+    .parse(req.query);
+  const chat = await member(String(req.params.id), user(req).id);
+  const kind =
+    query.type === 'media'
+      ? `(${searchKinds.photo} OR ${searchKinds.video})`
+      : searchKinds[query.type];
+  const { rows } = await pool.query(
+    `SELECT m.id,m.created_at,m.created_at::text AS cursor,m.body,m.link_preview,COALESCE(u.name,'Неля') AS sender_name,
+       CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
+     FROM messages m LEFT JOIN users u ON u.id=m.sender_id LEFT JOIN files f ON f.id=m.file_id
+     WHERE m.chat_id=$1 AND ${visibleMessageWhere} AND ${kind}
+     AND ($3::timestamptz IS NULL OR m.created_at<$3)
+     ORDER BY m.created_at DESC,m.id DESC LIMIT 61`,
+    [chat.id, user(req).id, query.before ?? null],
+  );
+  res.json({ items: rows.slice(0, 60), more: rows.length > 60 });
+});
 app.post('/api/chats/:id/messages', auth, async (req, res) => {
   const data = z
     .object({
       body: z.string().trim().max(8000).default(''),
       fileId: uuid.optional(),
+      /** Several attachments at once: one message each, the text goes with the last. */
+      fileIds: z.array(uuid).min(1).max(10).optional(),
+      /** Photos and videos sent together are drawn as one album. */
+      album: z.boolean().optional(),
       nonce: uuid,
       replyTo: uuid.optional(),
       /** Delivered without a notification. */
@@ -1403,7 +1457,8 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       skipPreview: z.boolean().optional(),
     })
     .parse(req.body);
-  requireValue(data.body || data.fileId, 400, 'Напишите сообщение или выберите файл.');
+  const fileIds = [...new Set(data.fileIds ?? (data.fileId ? [data.fileId] : []))];
+  requireValue(data.body || fileIds.length, 400, 'Напишите сообщение или выберите файл.');
   const linkPreview = data.skipPreview ? null : await instantLinkPreview(data.body);
   let created = false;
   const id = await transaction(async (db) => {
@@ -1429,12 +1484,12 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       );
       requireValue(target.rowCount, 400, 'Сообщение для ответа не найдено в этом чате.');
     }
-    if (data.fileId) {
+    if (fileIds.length) {
       const { rows } = await db.query(
-        'SELECT id FROM files WHERE id=$1 AND chat_id=$2 AND user_id=$3',
-        [data.fileId, chat.id, user(req).id],
+        'SELECT id FROM files WHERE id=ANY($1) AND chat_id=$2 AND user_id=$3',
+        [fileIds, chat.id, user(req).id],
       );
-      requireValue(rows[0], 400, 'Файл недоступен.');
+      requireValue(rows.length === fileIds.length, 400, 'Файл недоступен.');
     }
     const expiresAt = chat.auto_delete_seconds
       ? new Date(Date.now() + Number(chat.auto_delete_seconds) * 1000)
@@ -1450,33 +1505,41 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
       );
       requireValue(!recent.rowCount, 429, 'Упомянуть всех можно раз в 10 минут.');
     }
-    const { rows } = await db.query(
-      'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id,link_preview,expires_at,mention_all) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(sender_id,nonce) DO NOTHING RETURNING id',
-      [
-        randomUUID(),
-        chat.id,
-        user(req).id,
-        data.body,
-        data.fileId,
-        data.nonce,
-        data.replyTo,
-        linkPreview ? JSON.stringify(linkPreview) : null,
-        expiresAt,
-        mentionAll,
-      ],
-    );
+    // An album is one message per file, written together: the first carries the reply, the
+    // last the text. Each gets its own nonce, derived from the request's, so a retry is safe.
+    const albumId = data.album && fileIds.length > 1 ? randomUUID() : null;
+    const slots = fileIds.length ? fileIds : [null];
+    const ids: string[] = [];
+    for (const [index, fileId] of slots.entries()) {
+      const last = index === slots.length - 1;
+      const { rows } = await db.query(
+        'INSERT INTO messages(id,chat_id,sender_id,body,file_id,nonce,reply_to_id,link_preview,expires_at,mention_all,album_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(sender_id,nonce) DO NOTHING RETURNING id',
+        [
+          randomUUID(),
+          chat.id,
+          user(req).id,
+          last ? data.body : '',
+          fileId,
+          index ? derivedNonce(data.nonce, index) : data.nonce,
+          index ? null : data.replyTo,
+          last && linkPreview ? JSON.stringify(linkPreview) : null,
+          expiresAt,
+          last && mentionAll,
+          albumId,
+        ],
+      );
+      if (rows[0]) ids.push(rows[0].id);
+    }
+    const rows = ids.slice(-1).map((id) => ({ id }));
     if (rows[0]) {
       created = true;
       await queuePush(db, chat.kind, rows[0].id, data.silent);
       const reply = chat.nelya ? nelyaReply(data.body) : null;
       if (reply)
-        await db.query('INSERT INTO messages(id,chat_id,body,nonce,expires_at) VALUES($1,$2,$3,$4,$5)', [
-          randomUUID(),
-          chat.id,
-          reply,
-          randomUUID(),
-          expiresAt,
-        ]);
+        await db.query(
+          'INSERT INTO messages(id,chat_id,body,nonce,expires_at) VALUES($1,$2,$3,$4,$5)',
+          [randomUUID(), chat.id, reply, randomUUID(), expiresAt],
+        );
       await notify(db, chat.id, undefined, undefined, {
         event: 'message.created',
         messageId: rows[0].id,
@@ -1820,7 +1883,14 @@ app.post('/api/chats/:id/tiktok', externalLimit, auth, async (req, res) => {
       }
       const { rows: fileRows } = await db.query(
         'INSERT INTO files(id,chat_id,user_id,name,size,mime,audio_ready) VALUES($1,$2,$3,$4,$5,$6,false) RETURNING id,name,size,mime',
-        [fileId, chat.id, user(req).id, downloaded.filename, downloaded.buffer.length, downloaded.mime],
+        [
+          fileId,
+          chat.id,
+          user(req).id,
+          downloaded.filename,
+          downloaded.buffer.length,
+          downloaded.mime,
+        ],
       );
       const messageId = randomUUID();
       const expiresAt = chat.auto_delete_seconds
@@ -1953,13 +2023,10 @@ async function deliverScheduledRow(
   else await queuePush(db, chat.kind, messageId, row.silent);
   const reply = chat.nelya ? nelyaReply(row.body) : null;
   if (reply)
-    await db.query('INSERT INTO messages(id,chat_id,body,nonce,expires_at) VALUES($1,$2,$3,$4,$5)', [
-      randomUUID(),
-      chat.id,
-      reply,
-      randomUUID(),
-      expiresAt,
-    ]);
+    await db.query(
+      'INSERT INTO messages(id,chat_id,body,nonce,expires_at) VALUES($1,$2,$3,$4,$5)',
+      [randomUUID(), chat.id, reply, randomUUID(), expiresAt],
+    );
   await notify(db, row.chat_id, undefined, undefined, {
     event: 'message.created',
     messageId,
@@ -2066,7 +2133,12 @@ app.post('/api/chats/:id/scheduled/:scheduleId/send', auth, async (req, res) => 
     return deliverScheduledRow(db, rows[0], false);
   });
   if (delivered?.needsPreview)
-    attachLinkPreview(delivered.row.chat_id, delivered.messageId, delivered.row.sender_id, delivered.row.body);
+    attachLinkPreview(
+      delivered.row.chat_id,
+      delivered.messageId,
+      delivered.row.sender_id,
+      delivered.row.body,
+    );
   res.status(201).json({ id: delivered?.messageId ?? null });
 });
 app.post('/api/chats/:id/polls', auth, async (req, res) => {
@@ -2087,13 +2159,25 @@ app.post('/api/chats/:id/polls', auth, async (req, res) => {
       [user(req).id, data.nonce],
     );
     if (existing.rows[0]) {
-      requireValue(existing.rows[0].chat_id === chat.id, 409, 'Идентификатор сообщения уже использован.');
+      requireValue(
+        existing.rows[0].chat_id === chat.id,
+        409,
+        'Идентификатор сообщения уже использован.',
+      );
       return { id: existing.rows[0].id as string, pollId: existing.rows[0].poll_id as string };
     }
     const pollId = randomUUID();
     await db.query(
       'INSERT INTO polls(id,chat_id,creator_id,question,options,multiple,anonymous) VALUES($1,$2,$3,$4,$5,$6,$7)',
-      [pollId, chat.id, user(req).id, data.question, JSON.stringify(data.options), data.multiple, data.anonymous],
+      [
+        pollId,
+        chat.id,
+        user(req).id,
+        data.question,
+        JSON.stringify(data.options),
+        data.multiple,
+        data.anonymous,
+      ],
     );
     const expiresAt = chat.auto_delete_seconds
       ? new Date(Date.now() + Number(chat.auto_delete_seconds) * 1000)
@@ -2133,7 +2217,10 @@ app.post('/api/chats/:id/polls/:pollId/vote', auth, async (req, res) => {
       400,
       'Некорректный выбор ответа.',
     );
-    await db.query('DELETE FROM poll_votes WHERE poll_id=$1 AND user_id=$2', [rows[0].id, user(req).id]);
+    await db.query('DELETE FROM poll_votes WHERE poll_id=$1 AND user_id=$2', [
+      rows[0].id,
+      user(req).id,
+    ]);
     for (const idx of selected) {
       await db.query('INSERT INTO poll_votes(poll_id,option_index,user_id) VALUES($1,$2,$3)', [
         rows[0].id,
@@ -2158,7 +2245,8 @@ app.post('/api/chats/:id/polls/:pollId/close', auth, async (req, res) => {
     );
     requireValue(rows[0], 404, 'Опрос не найден.');
     requireValue(
-      rows[0].creator_id === user(req).id || (chat.kind === 'group' && chat.owner_id === user(req).id),
+      rows[0].creator_id === user(req).id ||
+        (chat.kind === 'group' && chat.owner_id === user(req).id),
       403,
       'Завершить опрос может автор или владелец группы.',
     );
@@ -2194,7 +2282,7 @@ const upload = multer({
     destination: directory,
     filename: (_req, _file, cb) => cb(null, randomUUID()),
   }),
-  limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 0 },
+  limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 3, fieldSize: 4096 },
 });
 const inlineMediaTypes = new Set([
   'image/png',
@@ -2288,52 +2376,221 @@ app.post(
   async (req, res) => {
     requireValue(req.file, 400, 'Выберите файл.');
     const file = req.file!;
-    try {
-      let mime = await mediaType(file.path, file.mimetype);
-      let name =
-        Buffer.from(file.originalname, 'latin1')
-          .toString('utf8')
-          .replace(/[\x00-\x1f\x7f/\\]/g, '_')
-          .slice(0, 180) || 'Файл';
-      const normalized = await normalizeUploadedAudio(file.path, mime);
-      if (normalized) {
-        mime = 'audio/mp4';
-        name = name.replace(/\.[^.]+$/, '') + '.m4a';
-        file.size = normalized.size;
-      }
-      const record = await transaction(async (db) => {
-        await lockedMember(String(req.params.id), user(req).id, db);
-        const account = await db.query('SELECT id,blocked FROM users WHERE id=$1 FOR UPDATE', [
-          user(req).id,
-        ]);
-        requireValue(account.rows[0] && !account.rows[0].blocked, 401, 'Войдите в Galinka снова.');
-        const session = await db.query(
-          'SELECT token FROM sessions WHERE token=$1 AND user_id=$2 AND expires_at>now() FOR SHARE',
-          [(req as AuthedRequest).sessionToken, user(req).id],
-        );
-        requireValue(session.rowCount, 401, 'Войдите в Galinka снова.');
-        const usage = await db.query(
-          'SELECT COALESCE(sum(size),0)::bigint AS total FROM files WHERE user_id=$1',
-          [user(req).id],
-        );
-        requireValue(
-          Number(usage.rows[0].total) + file.size <= 500 * 1024 * 1024,
-          413,
-          'Лимит файлов аккаунта — 500 МБ. Свяжитесь с владельцем сервера.',
-        );
-        const { rows } = await db.query(
-          'INSERT INTO files(id,chat_id,user_id,name,size,mime,audio_ready) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,name,size,mime',
-          [file.filename, req.params.id, user(req).id, name, file.size, mime, Boolean(normalized)],
-        );
-        return rows[0];
-      });
-      res.status(201).json(record);
-    } catch (error) {
-      await unlink(file.path).catch(() => {});
-      throw error;
-    }
+    const meta = mediaMetaSchema.safeParse(req.body ?? {});
+    const record = await storeUploadedFile(req, String(req.params.id), {
+      path: file.path,
+      id: file.filename,
+      size: file.size,
+      name: Buffer.from(file.originalname, 'latin1').toString('utf8'),
+      declared: file.mimetype,
+      meta: meta.success ? meta.data : {},
+    });
+    res.status(201).json(record);
   },
 );
+const fileName = (value: string) =>
+  value.replace(/[\x00-\x1f\x7f/\\]/g, '_').slice(0, 180) || 'Файл';
+/**
+ * Turns an uploaded file on disk into an attachment: checks what it really is, makes voice
+ * playable everywhere (and draws its waveform), counts it against the account limit and queues
+ * WebM or big videos for conversion. Removes the file on any failure.
+ */
+async function storeUploadedFile(
+  req: Request,
+  chatId: string,
+  file: { path: string; id: string; size: number; name: string; declared: string; meta: MediaMeta },
+) {
+  try {
+    let mime = await mediaType(file.path, file.declared);
+    let name = fileName(file.name);
+    let size = file.size;
+    // Longer recordings are kept as sent; the normalizer reads at most 20 MB.
+    const normalized =
+      size <= 20 * 1024 * 1024 ? await normalizeUploadedAudio(file.path, mime) : null;
+    let waveform: number[] | null = null;
+    if (normalized) {
+      mime = 'audio/mp4';
+      name = name.replace(/\.[^.]+$/, '') + '.m4a';
+      size = normalized.size;
+      waveform = await voiceWaveform(file.path);
+    }
+    const visual = visualMeta(mime, file.meta);
+    return await transaction(async (db) => {
+      await lockedMember(chatId, user(req).id, db);
+      const account = await db.query('SELECT id,blocked FROM users WHERE id=$1 FOR UPDATE', [
+        user(req).id,
+      ]);
+      requireValue(account.rows[0] && !account.rows[0].blocked, 401, 'Войдите в Galinka снова.');
+      const session = await db.query(
+        'SELECT token FROM sessions WHERE token=$1 AND user_id=$2 AND expires_at>now() FOR SHARE',
+        [(req as AuthedRequest).sessionToken, user(req).id],
+      );
+      requireValue(session.rowCount, 401, 'Войдите в Galinka снова.');
+      const usage = await db.query(
+        'SELECT COALESCE(sum(size),0)::bigint AS total FROM files WHERE user_id=$1',
+        [user(req).id],
+      );
+      requireValue(
+        Number(usage.rows[0].total) + size <= 500 * 1024 * 1024,
+        413,
+        'Лимит файлов аккаунта — 500 МБ. Свяжитесь с владельцем сервера.',
+      );
+      const { rows } = await db.query(
+        `INSERT INTO files(id,chat_id,user_id,name,size,mime,audio_ready,width,height,thumb,waveform)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id,name,size,mime,width,height,thumb,waveform`,
+        [
+          file.id,
+          chatId,
+          user(req).id,
+          name,
+          size,
+          mime,
+          Boolean(normalized),
+          visual.width,
+          visual.height,
+          visual.thumb,
+          waveform,
+        ],
+      );
+      if (needsVideoWork(mime, size))
+        await db.query('INSERT INTO media_jobs(file_id) VALUES($1) ON CONFLICT DO NOTHING', [
+          file.id,
+        ]);
+      return rows[0];
+    });
+  } catch (error) {
+    await unlink(file.path).catch(() => {});
+    throw error;
+  }
+}
+
+// Resumable uploads for files up to 100 MB: create, send parts from the offset the server
+// reports, finish. A broken connection resumes from what arrived; parts expire after a day.
+const uploadPart = (id: string) => path.join(directory, `upload-${id}.part`);
+const writingUploads = new Set<string>();
+app.post('/api/chats/:id/uploads', auth, async (req, res) => {
+  await member(String(req.params.id), user(req).id);
+  const data = z
+    .object({
+      name: z.string().min(1).max(500),
+      type: z.string().max(200).default(''),
+      size: z.number().int().min(1).max(maxUploadBytes),
+    })
+    .and(mediaMetaSchema)
+    .safeParse(req.body);
+  requireValue(data.success, 400, 'Файл больше 100 МБ или описан неверно.');
+  const upload = data.data!;
+  const usage = await pool.query(
+    `SELECT (SELECT COALESCE(sum(size),0) FROM files WHERE user_id=$1)::bigint AS total,
+       (SELECT count(*) FROM uploads WHERE user_id=$1)::int AS open`,
+    [user(req).id],
+  );
+  requireValue(
+    Number(usage.rows[0].total) + upload.size <= 500 * 1024 * 1024,
+    413,
+    'Лимит файлов аккаунта — 500 МБ. Свяжитесь с владельцем сервера.',
+  );
+  requireValue(usage.rows[0].open < 20, 429, 'Слишком много незаконченных загрузок.');
+  const id = randomUUID();
+  await pool.query(
+    'INSERT INTO uploads(id,chat_id,user_id,name,mime,size,width,height,thumb) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [
+      id,
+      req.params.id,
+      user(req).id,
+      fileName(upload.name),
+      upload.type,
+      upload.size,
+      upload.width ?? null,
+      upload.height ?? null,
+      upload.thumb ?? null,
+    ],
+  );
+  await writeFile(uploadPart(id), '');
+  res.status(201).json({ id, offset: 0 });
+});
+async function ownUpload(req: Request) {
+  const { rows } = await pool.query('SELECT * FROM uploads WHERE id=$1 AND user_id=$2', [
+    uuid.parse(req.params.id),
+    user(req).id,
+  ]);
+  requireValue(rows[0], 404, 'Загрузка не найдена. Начните её заново.');
+  return rows[0];
+}
+const receivedBytes = async (id: string) =>
+  (await stat(uploadPart(id)).catch(() => null))?.size ?? 0;
+app.get('/api/uploads/:id', auth, async (req, res) => {
+  const row = await ownUpload(req);
+  res.json({ id: row.id, offset: await receivedBytes(row.id), size: row.size });
+});
+app.put('/api/uploads/:id', auth, async (req, res) => {
+  const row = await ownUpload(req);
+  // ponytail: an in-process lock; route one upload to one replica if several ever run.
+  requireValue(!writingUploads.has(row.id), 409, 'Эта часть уже загружается.');
+  writingUploads.add(row.id);
+  try {
+    const offset = await receivedBytes(row.id);
+    if (Number(req.query.offset) !== offset) {
+      res.status(409).json({ error: 'Загрузка продолжится с другого места.', offset });
+      return;
+    }
+    let received = 0;
+    const room = row.size - offset;
+    const limit = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        received += chunk.length;
+        callback(received > room ? new HttpError(413, 'Файл больше, чем заявлено.') : null, chunk);
+      },
+    });
+    try {
+      await pipeline(req, limit, createWriteStream(uploadPart(row.id), { flags: 'a' }));
+    } catch (error) {
+      // What arrived intact stays for the resume; nothing past the declared size is kept.
+      if (received > room) await truncate(uploadPart(row.id), offset).catch(() => {});
+      throw error instanceof HttpError ? error : new HttpError(400, 'Соединение прервалось.');
+    }
+    res.json({ offset: offset + received });
+  } finally {
+    writingUploads.delete(row.id);
+  }
+});
+app.post('/api/uploads/:id/finish', auth, async (req, res) => {
+  // A finish repeated after a lost response returns the file already stored.
+  const done = await pool.query(
+    'SELECT id,name,size,mime,width,height,thumb,waveform FROM files WHERE id=$1 AND user_id=$2',
+    [uuid.parse(req.params.id), user(req).id],
+  );
+  if (done.rows[0]) {
+    res.status(201).json(done.rows[0]);
+    return;
+  }
+  const row = await ownUpload(req);
+  requireValue(!writingUploads.has(row.id), 409, 'Загрузка ещё идёт.');
+  requireValue((await receivedBytes(row.id)) === row.size, 409, 'Файл загружен не полностью.');
+  await pool.query('DELETE FROM uploads WHERE id=$1', [row.id]);
+  // The upload id becomes the file id.
+  const target = path.join(directory, row.id);
+  await rename(uploadPart(row.id), target);
+  const record = await storeUploadedFile(req, row.chat_id, {
+    path: target,
+    id: row.id,
+    size: row.size,
+    name: row.name,
+    declared: row.mime,
+    meta: {
+      width: row.width ?? undefined,
+      height: row.height ?? undefined,
+      thumb: row.thumb ?? undefined,
+    },
+  });
+  res.status(201).json(record);
+});
+app.delete('/api/uploads/:id', auth, async (req, res) => {
+  const row = await ownUpload(req);
+  await pool.query('DELETE FROM uploads WHERE id=$1', [row.id]);
+  await unlink(uploadPart(row.id)).catch(() => {});
+  res.json({ ok: true });
+});
 // Profile and group photos. The client crops a square and sends a small JPEG or WebP; the
 // server checks the file really is an image and serves it only to signed-in users.
 const avatarUpload = multer({
@@ -2837,6 +3094,18 @@ const server = app.listen(Number(process.env.PORT) || 3001, '0.0.0.0', () =>
   console.log(`Galinka API on http://localhost:${process.env.PORT || 3001}`),
 );
 const stopPush = startPushWorker(pool);
+// A converted video keeps its id; open chats refresh every message that shows it.
+const stopMedia = startMediaWorker(pool, directory, async (fileId) => {
+  const { rows } = await pool.query('SELECT id,chat_id,sender_id FROM messages WHERE file_id=$1', [
+    fileId,
+  ]);
+  for (const row of rows)
+    await notify(pool, row.chat_id, undefined, undefined, {
+      event: 'message.updated',
+      messageId: row.id,
+      senderId: row.sender_id,
+    });
+});
 server.requestTimeout = 120_000;
 async function deliverDueScheduledMessages() {
   if (stopping) return;
@@ -2886,6 +3155,7 @@ const expireTimer = setInterval(() => {
 expireTimer.unref();
 async function stop() {
   stopPush();
+  stopMedia();
   clearInterval(scheduleTimer);
   clearInterval(expireTimer);
   stopping = true;
@@ -2913,6 +3183,10 @@ async function housekeeping() {
      AND NOT EXISTS(SELECT 1 FROM scheduled_messages sm WHERE sm.file_id=f.id) RETURNING id`,
   );
   await removeStoredFiles(rows.map((row) => row.id as string));
+  const { rows: stale } = await pool.query(
+    "DELETE FROM uploads WHERE created_at<now()-interval '1 day' RETURNING id",
+  );
+  for (const row of stale) await unlink(uploadPart(row.id)).catch(() => {});
 }
 const cleanup = setInterval(() => housekeeping().catch(console.error), 3600_000);
 cleanup.unref();

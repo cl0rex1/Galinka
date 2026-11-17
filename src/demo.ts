@@ -1,4 +1,5 @@
 import type {
+  Attachment,
   Person,
   Chat,
   Message,
@@ -625,8 +626,34 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         chat.last_message = m;
         result = { id: m.id, pollId };
       }
+    } else if (parts[2] === 'media' && method === 'GET') {
+      const type = params.get('type');
+      const kinds: Record<string, (m: Message) => boolean> = {
+        media: (m) =>
+          /^(image|video)\//.test(m.file?.mime || '') && !m.file!.name.startsWith('Кружок'),
+        file: (m) =>
+          Boolean(m.file) &&
+          !/^(image|video)\//.test(m.file!.mime || '') &&
+          !m.file!.name.startsWith('Голосовое-'),
+        voice: (m) => Boolean(m.file && /^(Голосовое-|Кружок)/.test(m.file.name)),
+        link: (m) => /https?:\/\//.test(m.body),
+      };
+      const items = state.messages
+        .filter((m) => m.chat_id === chat.id && !state.hidden.includes(m.id) && kinds[type ?? '']?.(m))
+        .reverse()
+        .map((m) => ({
+          id: m.id,
+          created_at: m.created_at,
+          cursor: m.created_at,
+          body: m.body,
+          link_preview: m.link_preview ?? null,
+          sender_name: m.sender.name,
+          file: m.file,
+        }));
+      result = { items: items.slice(0, 60), more: items.length > 60 };
     } else if (parts[2] === 'files') {
-      const f = (body as FormData).get('file') as File;
+      const form = body as FormData;
+      const f = form.get('file') as File;
       const id = crypto.randomUUID();
       demoFiles.set(id, URL.createObjectURL(f));
       result = {
@@ -634,6 +661,9 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         name: f.name,
         size: f.size,
         mime: f.type.split(';')[0] || 'application/octet-stream',
+        width: Number(form.get('width')) || null,
+        height: Number(form.get('height')) || null,
+        thumb: (form.get('thumb') as string | null) ?? null,
       };
     } else if (parts[2] === 'messages') {
       const through = params.get('through');
@@ -781,7 +811,7 @@ export async function demoRequest(url: string, method: string, body: unknown): P
             : null,
           link_preview: foundUrl ? demoPreviewFor(foundUrl) : null,
           nonce: data.nonce,
-          file: data.fileId ? data.demoFile : null,
+          file: data.demoFiles?.[0] ?? null,
           reactions: [],
           edited_at: null,
           read_by: 0,
@@ -794,9 +824,28 @@ export async function demoRequest(url: string, method: string, body: unknown): P
               }
             : null,
         };
-        state.messages.push(m);
-        chat.last_message = m;
-        result = { id: m.id };
+        // Several attachments: one message each, the text on the last, as the server does.
+        const extra: Message[] = [];
+        if (Array.isArray(data.demoFiles) && data.demoFiles.length > 1) {
+          const files = data.demoFiles as Attachment[];
+          const albumId = data.album ? crypto.randomUUID() : null;
+          const caption = { body: m.body, link_preview: m.link_preview };
+          Object.assign(m, { file: files[0], body: '', link_preview: null, album_id: albumId });
+          files.slice(1).forEach((file, index) =>
+            extra.push({
+              ...m,
+              id: crypto.randomUUID(),
+              nonce: crypto.randomUUID(),
+              file,
+              reply: null,
+              ...(index === files.length - 2 ? caption : {}),
+            }),
+          );
+        }
+        state.messages.push(m, ...extra);
+        const tail = extra.at(-1) ?? m;
+        chat.last_message = tail;
+        result = { id: tail.id };
         if (chat.nelya && /^@неля/iu.test(data.body)) {
           let text =
             'Я Неля! Попробуйте «@неля монетка», «@неля идея» или «@неля выбери чай | кофе».';

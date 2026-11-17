@@ -1,5 +1,6 @@
 import { Bell, BellOff, QrCode, Search, Users, X } from 'lucide-react';
 import { Avatar, seenText } from './Avatar';
+import { ChatMedia } from './ChatMedia';
 import { ProfileHero } from './ProfileHero';
 import { CHAT_SOUNDS, playTone } from './sounds';
 import { IconButton } from './ui';
@@ -18,6 +19,7 @@ export function ChatInfo({
   onMute,
   onSound,
   onSearch,
+  onOpenMessage,
   onInvite,
   onManage,
   onPerson,
@@ -34,6 +36,8 @@ export function ChatInfo({
   onMute: () => void;
   onSound: (sound: NonNullable<Chat['sound']>) => void;
   onSearch: () => void;
+  /** Show this message in the conversation. */
+  onOpenMessage: (messageId: string) => void;
   onInvite: () => void;
   onManage: () => void;
   onPerson: (person: Person) => void;
@@ -77,6 +81,7 @@ export function ChatInfo({
           </>
         )}
       </div>
+      <ChatMedia key={chat.id} chatId={chat.id} onOpen={onOpenMessage} />
       {chat.kind !== 'saved' && (
         <div className="info-section">
           <h4>

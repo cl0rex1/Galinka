@@ -2056,27 +2056,60 @@ form.stack > :not(:last-child, .fold),
 .image-preview:hover img {
   filter: brightness(0.95);
 }
+/* 0.16: a photo of known size holds its place; its blurred preview shows until it loads. */
+.image-preview img[width] {
+  width: var(--shown-width);
+  height: auto;
+  aspect-ratio: var(--ratio);
+}
+.image-preview::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--thumb, var(--color-paper-2)) center / cover no-repeat;
+  filter: blur(14px);
+  transform: scale(1.15);
+  transition: opacity var(--dur-fast);
+  pointer-events: none;
+}
+.image-preview img {
+  position: relative;
+}
+.image-preview:not(.loaded) img {
+  opacity: 0;
+}
+.image-preview.loaded::before {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .image-preview img {
+    transition:
+      filter var(--dur-fast),
+      opacity 0.2s ease;
+  }
+}
 .image-preview > span {
   display: none;
 }
-.image-attachment + .message-text {
+.image-attachment + .message-text,
+.album-grid + .message-text {
   display: block;
   margin-top: 6px;
 }
 /* Photo without a caption: no frame, no tail, time on the picture. */
-.bubble:has(> .image-attachment):not(:has(.message-text, .sender-name, .message-quote)) {
+.bubble:has(> :is(.image-attachment, .album-grid)):not(:has(.message-text, .sender-name, .message-quote)) {
   padding: 0;
   background: transparent;
   box-shadow: none;
 }
-.bubble:has(> .image-attachment):not(:has(.message-text, .sender-name, .message-quote))::before {
+.bubble:has(> :is(.image-attachment, .album-grid)):not(:has(.message-text, .sender-name, .message-quote))::before {
   display: none;
 }
-.bubble:has(> .image-attachment):not(:has(.message-text, .sender-name, .message-quote))
+.bubble:has(> :is(.image-attachment, .album-grid)):not(:has(.message-text, .sender-name, .message-quote))
   .image-preview {
   border-radius: inherit;
 }
-.bubble:has(> .image-attachment):not(:has(.message-text, .sender-name, .message-quote))
+.bubble:has(> :is(.image-attachment, .album-grid)):not(:has(.message-text, .sender-name, .message-quote))
   .message-time {
   position: absolute;
   right: 8px;
@@ -2087,17 +2120,17 @@ form.stack > :not(:last-child, .fold),
   color: #fff;
   background: rgb(0 0 0 / 45%);
 }
-.bubble:has(> .image-attachment):not(:has(.message-text, .sender-name, .message-quote))
+.bubble:has(> :is(.image-attachment, .album-grid)):not(:has(.message-text, .sender-name, .message-quote))
   .read-receipt {
   color: #fff;
 }
-.bubble:has(> .image-attachment) > :is(.sender-name, .message-quote) {
+.bubble:has(> :is(.image-attachment, .album-grid)) > :is(.sender-name, .message-quote) {
   margin: 4px 7px 5px 8px;
 }
-.bubble:has(> .image-attachment):has(.message-text, .sender-name, .message-quote) {
+.bubble:has(> :is(.image-attachment, .album-grid)):has(.message-text, .sender-name, .message-quote) {
   padding: 3px 3px 7px;
 }
-.bubble:has(> .image-attachment):has(.message-text) .image-preview {
+.bubble:has(> :is(.image-attachment, .album-grid)):has(.message-text) .image-preview {
   border-radius: 15px 15px 6px 6px;
 }
 .bubble:has(> .image-attachment):has(.sender-name, .message-quote) .image-preview {
@@ -2935,6 +2968,40 @@ form.stack > :not(:last-child, .fold),
   background: transparent;
   accent-color: var(--color-accent);
 }
+/* 0.16: the loudness of a voice message; the range input stays on top for seeking. */
+.voice-player-track.has-wave {
+  position: relative;
+}
+.voice-wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+}
+.voice-wave i {
+  flex: 1 1 0;
+  max-width: 3px;
+  min-width: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.35;
+}
+.voice-wave i.played {
+  opacity: 1;
+  background: var(--color-accent);
+}
+.own .voice-wave i.played {
+  background: currentColor;
+}
+.voice-player-track.has-wave .voice-timeline {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 22px;
+  min-height: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
 .voice-player-meta {
   display: flex;
   justify-content: space-between;
@@ -3436,6 +3503,35 @@ form.stack > :not(:last-child, .fold),
 .voice-finish {
   min-height: 40px;
   border-radius: var(--radius-pill);
+}
+/* 0.16: hold to record, pause, and the microphone's loudness while recording. */
+.voice-button {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.recording-dot.paused {
+  animation: none;
+  opacity: 0.4;
+}
+.recording-wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  flex: 0 1 112px;
+  min-width: 0;
+  overflow: hidden;
+}
+.recording-wave i {
+  flex: 0 0 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+}
+.voice-recording.holding {
+  box-shadow:
+    var(--bubble-shadow),
+    0 0 0 2px var(--color-recording);
 }
 
 /* ========== Chat info ========== */
@@ -5232,6 +5328,53 @@ html[data-motion='reduced'] *::after {
 .danger-icon {
   color: var(--color-error);
 }
+/* 0.16: what plays now (voice or round video), above the chat. */
+.mini-player {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--color-rule);
+  background: var(--color-surface);
+  animation: bar-in var(--dur-menu) var(--ease-out);
+}
+.mini-player-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 4px;
+  text-align: left;
+}
+.mini-player-title span {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+.mini-player progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  width: 100%;
+  height: 2px;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  accent-color: var(--color-accent);
+}
+.mini-player progress::-webkit-progress-bar {
+  background: transparent;
+}
+.mini-player progress::-webkit-progress-value {
+  background: var(--color-accent);
+}
+.mini-player progress::-moz-progress-bar {
+  background: var(--color-accent);
+}
 .pinned-bar {
   position: relative;
   z-index: 2;
@@ -6364,4 +6507,452 @@ div.message-text {
 .search-date input {
   width: 100%;
   min-width: 0;
+}
+
+/* ========== Albums (0.16): several photos and videos in one bubble ========== */
+.album-grid {
+  display: grid;
+  gap: 2px;
+  grid-template-columns: repeat(2, 1fr);
+  width: min(380px, 70vw);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.album-grid.n3 > :first-child {
+  grid-column: 1 / -1;
+}
+/* Five and more: three to a row on a six-column grid, the odd ones out wider on top. */
+.album-grid:is(.n5, .n6, .n7, .n8, .n9, .n10) {
+  grid-template-columns: repeat(6, 1fr);
+}
+.album-grid:is(.n5, .n6, .n7, .n8, .n9, .n10) > * {
+  grid-column: span 2;
+}
+.album-grid:is(.n5, .n8) > :nth-child(-n + 2) {
+  grid-column: span 3;
+}
+.album-grid:is(.n7, .n10) > :first-child {
+  grid-column: 1 / -1;
+  aspect-ratio: 2 / 1;
+}
+.album-grid > * {
+  min-width: 0;
+  aspect-ratio: 1;
+}
+.album-grid.n3 > :first-child {
+  aspect-ratio: 2 / 1;
+}
+.album-grid .media-attachment,
+.album-grid .image-preview,
+.album-grid .video-player {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border-radius: 0;
+}
+.album-grid .image-preview img,
+.album-grid video {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  min-width: 0;
+  object-fit: cover;
+}
+.album-grid .file-attachment {
+  height: 100%;
+}
+
+/* The composer's strip of files waiting to be sent. */
+.pending-strip {
+  display: grid;
+  gap: 6px;
+  margin-right: 54px;
+  padding: 8px 8px 8px 12px;
+  border-radius: 16px;
+  background: var(--color-surface);
+  box-shadow: var(--bubble-shadow);
+  animation: rise var(--dur-menu) var(--ease-out);
+}
+.pending-strip ul {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 2px;
+  list-style: none;
+  overflow-x: auto;
+}
+.pending-strip li {
+  position: relative;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgb(0 0 0 / 6%);
+}
+.pending-strip img,
+.pending-strip video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pending-strip-file {
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+  text-align: center;
+}
+.pending-strip-file small {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pending-strip-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(0 0 0 / 55%);
+  cursor: pointer;
+}
+.pending-strip.has-error {
+  outline: 1px solid var(--color-error);
+}
+
+/* ========== Chat media (0.16): photos, files, links and voice in the chat profile ========== */
+.media-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+  overflow-x: auto;
+}
+.media-tabs button {
+  flex: none;
+  padding: 5px 11px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--color-muted);
+  background: transparent;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.media-tabs button[aria-selected="true"] {
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+}
+.media-grid {
+  display: grid;
+  gap: 2px;
+  grid-template-columns: repeat(3, 1fr);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.media-grid button {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  background: rgb(0 0 0 / 6%);
+  cursor: pointer;
+}
+.media-grid img,
+.media-grid video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.media-grid button > svg {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 3px;
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(0 0 0 / 50%);
+}
+.media-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.media-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.media-list li > svg {
+  flex: none;
+  margin: 0 8px;
+  color: var(--color-muted);
+}
+.media-row {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 4px;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.media-row > svg {
+  flex: none;
+  color: var(--color-muted);
+}
+.media-list li > span,
+.media-row > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+}
+.media-list strong,
+.media-list a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-list small,
+.media-empty {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+/* ========== 0.16: send window for photos and videos, photo editor ========== */
+.attach-dialog form {
+  display: grid;
+  gap: 12px;
+}
+.attach-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.attach-dialog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: min(52vh, 420px);
+  overflow: auto;
+  border-radius: 12px;
+}
+.attach-dialog-grid.n1 {
+  grid-template-columns: 1fr;
+}
+.attach-dialog-grid li {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: var(--color-paper-2);
+}
+.attach-dialog-grid.n1 li {
+  aspect-ratio: auto;
+  max-height: min(52vh, 420px);
+}
+.attach-dialog-grid :is(img, video) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.attach-dialog-grid.n1 :is(img, video) {
+  max-height: min(52vh, 420px);
+  object-fit: contain;
+}
+.attach-dialog-grid .pending-strip-file {
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
+.attach-dialog-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+}
+.attach-dialog-actions .icon-button {
+  width: 30px;
+  height: 30px;
+  min-height: 0;
+  color: #fff;
+  background: rgb(0 0 0 / 55%);
+}
+.attach-dialog-caption {
+  width: 100%;
+  min-height: 44px;
+  max-height: 160px;
+  resize: vertical;
+}
+.attach-dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.attach-dialog-foot .primary {
+  margin-left: auto;
+}
+
+.image-editor {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  color: #fff;
+  background: rgb(8 8 9 / 96%);
+}
+.image-editor[open] {
+  display: flex;
+  flex-direction: column;
+}
+.image-editor-head,
+.image-editor-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.image-editor-head strong {
+  flex: 1;
+}
+.image-editor-tools {
+  justify-content: center;
+  flex-wrap: wrap;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+.image-editor .icon-button {
+  color: #fff;
+}
+.image-editor .icon-button.active {
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+}
+.image-editor .text-button {
+  color: #fff;
+}
+.image-editor-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  padding: 14px 18px;
+}
+.image-editor-canvas {
+  position: relative;
+  touch-action: none;
+}
+.image-editor-canvas canvas {
+  display: block;
+}
+.image-editor-canvas canvas.drawing {
+  cursor: crosshair;
+}
+.image-editor-crop {
+  position: absolute;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 55%);
+  outline: 1px solid rgb(255 255 255 / 85%);
+  cursor: move;
+  touch-action: none;
+}
+.crop-handle {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin: -11px;
+  border: 3px solid #fff;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 25%);
+}
+.crop-handle.nw {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+.crop-handle.ne {
+  right: 0;
+  top: 0;
+  cursor: nesw-resize;
+}
+.crop-handle.sw {
+  left: 0;
+  bottom: 0;
+  cursor: nesw-resize;
+}
+.crop-handle.se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+.crop-handle:is(.n, .s) {
+  left: 50%;
+  width: 28px;
+  height: 10px;
+  margin: -5px -14px;
+  cursor: ns-resize;
+}
+.crop-handle.n {
+  top: 0;
+}
+.crop-handle.s {
+  bottom: 0;
+}
+.crop-handle:is(.w, .e) {
+  top: 50%;
+  width: 10px;
+  height: 28px;
+  margin: -14px -5px;
+  cursor: ew-resize;
+}
+.crop-handle.w {
+  left: 0;
+}
+.crop-handle.e {
+  right: 0;
+}
+.image-editor-colors {
+  display: flex;
+  gap: 6px;
+}
+.image-editor-colors button {
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid rgb(255 255 255 / 40%);
+}
+.image-editor-colors button.selected {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--color-accent);
 }

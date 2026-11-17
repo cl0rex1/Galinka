@@ -40,11 +40,17 @@ export function VideoPlayer({
   name,
   onError,
   compact = false,
+  poster,
+  ratio,
 }: {
   src: string;
   name: string;
   onError?: () => void;
   compact?: boolean;
+  /** Blurred preview shown until the first frame loads. */
+  poster?: string;
+  /** width / height, so the bubble keeps its size before the video loads. */
+  ratio?: number;
 }) {
   const slot = useRef<HTMLDivElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -271,6 +277,17 @@ export function VideoPlayer({
           <video
             ref={video}
             src={src}
+            // A background, not `poster`: Chrome would keep a poster over the first frame.
+            style={
+              fullscreen
+                ? undefined
+                : {
+                    ...(ratio ? { aspectRatio: ratio } : {}),
+                    ...(poster
+                      ? { background: `url("${poster}") center / cover no-repeat` }
+                      : {}),
+                  }
+            }
             playsInline
             preload="metadata"
             aria-label={`Видео ${name}`}

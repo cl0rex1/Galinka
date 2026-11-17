@@ -20,7 +20,18 @@ export type Announcement = {
   updated_at: string;
 };
 export type Page<T> = { items: T[]; total: number; page: number };
-export type Attachment = { id: string; name: string; size: number; mime?: string };
+export type Attachment = {
+  id: string;
+  name: string;
+  size: number;
+  mime?: string;
+  /** Photos and videos: size and a tiny blurred preview, so the feed does not jump. */
+  width?: number | null;
+  height?: number | null;
+  thumb?: string | null;
+  /** Voice messages: 48 loudness bars, 0..31. */
+  waveform?: number[] | null;
+};
 export type LinkPreview = {
   url: string;
   site: string;
@@ -76,6 +87,8 @@ export type Message = {
   sender_id: string | null;
   sender: Person;
   body: string;
+  /** Photos and videos sent together share an album id and are drawn as one grid. */
+  album_id?: string | null;
   created_at: string;
   edited_at?: string | null;
   expires_at?: string | null;

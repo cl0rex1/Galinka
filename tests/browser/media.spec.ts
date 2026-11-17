@@ -51,7 +51,7 @@ test('photo attachment opens full-screen and keeps touch controls inside a narro
       'base64',
     ),
   });
-  await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+  await page.getByRole('dialog', { name: /^Отправить/ }).getByRole('button', { name: 'Отправить', exact: true }).click();
   const image = page.locator('.image-preview img');
   await expect(image).toBeVisible();
   await expect

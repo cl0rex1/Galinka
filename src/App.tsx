@@ -32,6 +32,7 @@ import {
 import { useConversationGestures } from './gestures';
 import { Avatar, seenText } from './Avatar';
 import { MessageList, type MessageActions } from './MessageList';
+import { MiniPlayer } from './MiniPlayer';
 import { fileLabel } from './MediaAttachment';
 import { plainText } from './MessageText';
 import { Announcements } from './Announcements';
@@ -1378,6 +1379,7 @@ export default function App() {
                 )}
               </div>
             )}
+            <MiniPlayer />
             <div className="conversation-layout">
               <section
                 className={`conversation ${dropping ? 'dropping' : ''}`}
@@ -1400,8 +1402,8 @@ export default function App() {
                 onDrop={(event) => {
                   event.preventDefault();
                   setDropping(false);
-                  const file = event.dataTransfer.files[0];
-                  if (file) void composer.attachFile(file);
+                  const files = [...event.dataTransfer.files];
+                  if (files.length) void composer.attachFiles(files);
                 }}
               >
                 <div
@@ -1493,6 +1495,10 @@ export default function App() {
                   onSearch={() => {
                     if (window.innerWidth <= 1180) setInfoOpen(false);
                     setSearchOpen(true);
+                  }}
+                  onOpenMessage={(id) => {
+                    if (window.innerWidth <= 1180) setInfoOpen(false);
+                    void conversation.showMessage(id);
                   }}
                   onInvite={invite}
                   onManage={() => setModal('group')}

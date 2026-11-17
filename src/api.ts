@@ -74,9 +74,9 @@ export async function api<T>(
 /** Upload a file with real byte progress; keep the browser's multipart boundary. */
 export async function upload<T>(
   url: string,
-  body: FormData,
+  body: FormData | Blob,
   onProgress: (percent: number) => void,
-  options: RequestOptions = {},
+  options: RequestOptions & { method?: 'POST' | 'PUT' } = {},
 ): Promise<T> {
   if (options.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError');
   onProgress(0);
@@ -102,8 +102,9 @@ export async function upload<T>(
       }
     };
     const cancel = () => request.abort();
-    request.open('POST', `${API_BASE}${url}`);
+    request.open(options.method ?? 'POST', `${API_BASE}${url}`);
     request.withCredentials = true;
+    if (body instanceof Blob) request.setRequestHeader('Content-Type', 'application/octet-stream');
     request.timeout = options.timeoutMs ?? 120_000;
     request.upload.onprogress = (event) => {
       if (!settled && event.lengthComputable && event.total > 0)
@@ -155,4 +156,70 @@ export async function upload<T>(
       fail(new ApiError('Не удалось начать загрузку файла. Повторите попытку.', 0));
     }
   });
+}
+
+// Small enough to arrive within the two-minute request limit on a slow phone connection.
+const PART = 2 * 1024 * 1024;
+/**
+ * Sends a big file in 2 MB parts. After a dropped connection it asks the server how much
+ * arrived and goes on from there; `resume.id` keeps the upload between attempts, so the
+ * "Повторить" button also continues instead of starting over.
+ */
+export async function uploadInParts<T>(
+  chatId: string,
+  file: File,
+  meta: object,
+  onProgress: (percent: number) => void,
+  resume: { id?: string },
+): Promise<T> {
+  let offset = 0;
+  if (resume.id) {
+    try {
+      offset = (await api<{ offset: number }>(`/uploads/${resume.id}`)).offset;
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 404)) throw error;
+      resume.id = undefined; // Expired or finished elsewhere: start again.
+    }
+  }
+  if (!resume.id) {
+    resume.id = (
+      await api<{ id: string }>(`/chats/${chatId}/uploads`, 'POST', {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        ...meta,
+      })
+    ).id;
+    offset = 0;
+  }
+  const id = resume.id;
+  onProgress(Math.floor((offset / file.size) * 100));
+  for (let failures = 0, known = true; !known || offset < file.size; ) {
+    const part = file.slice(offset, offset + PART);
+    const start = offset;
+    try {
+      if (!known) {
+        offset = (await api<{ offset: number }>(`/uploads/${id}`)).offset;
+        known = true;
+        continue;
+      }
+      offset = (
+        await upload<{ offset: number }>(
+          `/uploads/${id}?offset=${start}`,
+          part,
+          (percent) =>
+            onProgress(Math.floor(((start + (part.size * percent) / 100) / file.size) * 100)),
+          { method: 'PUT' },
+        )
+      ).offset;
+      failures = 0;
+    } catch (error) {
+      const network = error instanceof ApiError && error.status === 0;
+      const moved = error instanceof ApiError && error.status === 409;
+      if ((!network && !moved) || ++failures > 5) throw error;
+      if (network) await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** failures));
+      known = false;
+    }
+  }
+  return api<T>(`/uploads/${id}/finish`, 'POST', undefined, { timeoutMs: 120_000 });
 }

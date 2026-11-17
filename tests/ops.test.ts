@@ -54,13 +54,14 @@ test(
         '007-messages-014.sql',
         '008-push-native-actions.sql',
         '009-notifications-015.sql',
+        '010-albums-016.sql',
       ]);
       const second = await migrate(tempPool);
       assert.deepEqual(second, []);
       const { rows: migs } = await tempPool.query<{ version: string }>(
         'SELECT version FROM schema_migrations ORDER BY version',
       );
-      assert.equal(migs.length, 9);
+      assert.equal(migs.length, 10);
       const { rows: tables } = await tempPool.query<{ exists: boolean }>(
         "SELECT to_regclass('public.client_errors') IS NOT NULL AS exists",
       );

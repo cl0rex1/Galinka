@@ -9,8 +9,8 @@ import {
   type MutableRefObject,
   type SetStateAction,
 } from 'react';
-import { api, ApiError, upload } from './api';
-import { compressImage } from './image';
+import { api, ApiError, upload, uploadInParts } from './api';
+import { compressImage, measureMedia } from './image';
 import type { Transfer } from './AttachmentPreview';
 import type { Attachment, Chat, LinkPreview, Message, Person } from './types';
 import type { TypingAction } from './useSync';
@@ -34,6 +34,22 @@ function isTikTokLink(rawUrl: string): boolean {
     return false;
   }
 }
+
+/**
+ * A file waiting to be sent; `source` is the uncompressed original of a shrunk photo, `resume`
+ * the server's id of a big upload in progress, so a retry continues it.
+ */
+type PendingFile = { file: File; source?: File; uploaded?: Attachment; resume?: { id?: string } };
+const MAX_FILES = 10;
+const MAX_BYTES = 100 * 1024 * 1024;
+/** Bigger files go in resumable parts. */
+const SMALL_FILE = 4 * 1024 * 1024;
+/** A recorded voice message, a circle or an audio file is sent alone, with its player. */
+const recorded = (file: File) =>
+  /^(Голосовое-|Кружок)/.test(file.name) || file.type.startsWith('audio/');
+/** Photos and videos sent together are drawn as one album. */
+const albumable = (file: { name: string; mime?: string }) =>
+  /^(image|video)\//.test(file.mime || '') && !file.name.startsWith('Кружок');
 
 type ComposerOptions = {
   me: Person | null;
@@ -83,9 +99,7 @@ export function useComposer({
     [savingEdit, setSavingEdit] = useState(false),
     [sendingIds, setSendingIds] = useState<string[]>([]),
     [transfers, setTransfers] = useState<Record<string, Transfer>>({}),
-    [attachments, setAttachments] = useState<
-      Record<string, { file: File; source?: File; uploaded?: Attachment }>
-    >({}),
+    [attachments, setAttachments] = useState<Record<string, PendingFile[]>>({}),
     [mentionCursor, setMentionCursor] = useState<number | null>(null),
     [mentionIndex, setMentionIndex] = useState(0),
     [emojiOpen, setEmojiOpen] = useState(false),
@@ -93,7 +107,11 @@ export function useComposer({
     [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null),
     [dismissedPreviewUrl, setDismissedPreviewUrl] = useState<string | null>(null),
     [dismissedTikTok, setDismissedTikTok] = useState<Record<string, boolean>>({}),
-    [downloadingTikTok, setDownloadingTikTok] = useState(false);
+    [downloadingTikTok, setDownloadingTikTok] = useState(false),
+    /** The chat whose photos and videos are shown in the send window (caption, editor). */
+    [reviewing, setReviewing] = useState<string | null>(null);
+  /** A voice message recorded by holding the button goes out as soon as it is attached. */
+  const autoSend = useRef<string | null>(null);
 
   const draftSnapshot = useRef<{ id: string; drafts: Record<string, string> } | null>(null);
   if (me) draftSnapshot.current = { id: me.id, drafts };
@@ -113,8 +131,9 @@ export function useComposer({
     editRequest = useRef(false);
 
   const draft = activeId ? drafts[activeId] || '' : '',
-    attachment = activeId ? attachments[activeId]?.file : undefined,
-    attachmentSource = activeId ? attachments[activeId]?.source : undefined,
+    pendingFiles = activeId ? (attachments[activeId] ?? []) : [],
+    attachment = pendingFiles[0]?.file,
+    attachmentSource = pendingFiles.length === 1 ? pendingFiles[0].source : undefined,
     transfer = activeId ? transfers[activeId] : undefined,
     sending = activeId ? sendingIds.includes(activeId) : false,
     reply = activeId ? replies[activeId] : undefined,
@@ -375,18 +394,31 @@ export function useComposer({
     }
   }
 
-  async function attachFile(source: File, original = false) {
+  /**
+   * Adds a file to the message; `original` swaps a shrunk photo for its full-size source.
+   * `sendNow`: a voice message recorded by holding the button.
+   */
+  async function attachFile(source: File, original = false, sendNow = false) {
     const id = activeId;
     if (!id || edit || sending) return;
+    if (sendNow) autoSend.current = id;
+    else if (!original && albumable({ name: source.name, mime: source.type })) setReviewing(id);
     const file = original ? source : await compressImage(source);
-    if (file.size > 20 * 1024 * 1024) {
-      onError('Файл больше 20 МБ.');
+    if (file.size > MAX_BYTES) {
+      onError('Файл больше 100 МБ.');
       return;
     }
-    setAttachments((previous) => ({
-      ...previous,
-      [id]: { file, source: file === source ? undefined : source },
-    }));
+    const item: PendingFile = { file, source: file === source ? undefined : source };
+    const list = attachments[id] ?? [];
+    if (!original && list.length >= MAX_FILES && !recorded(file)) {
+      onError('В одном сообщении не больше 10 файлов.');
+      return;
+    }
+    setAttachments((previous) => {
+      const current = previous[id] ?? [];
+      const alone = original || recorded(file) || current.some((entry) => recorded(entry.file));
+      return { ...previous, [id]: alone ? [item] : [...current, item].slice(0, MAX_FILES) };
+    });
     setTransfers((previous) => {
       const next = { ...previous };
       delete next[id];
@@ -395,19 +427,46 @@ export function useComposer({
     delete nonces.current[id];
   }
 
-  function removeAttachment() {
+  async function attachFiles(files: File[]) {
+    for (const file of files.slice(0, MAX_FILES)) await attachFile(file);
+  }
+
+  /** An edited photo takes the place of the one it was made from. */
+  function replaceAttachment(index: number, file: File) {
+    const id = activeId;
+    if (!id) return;
+    setAttachments((previous) => {
+      const list = previous[id];
+      if (!list?.[index]) return previous;
+      return { ...previous, [id]: list.map((item, i) => (i === index ? { file } : item)) };
+    });
+    delete nonces.current[id];
+  }
+
+  // Sends a held-to-record voice message once it is in the composer.
+  useEffect(() => {
+    if (!activeId || autoSend.current !== activeId || !pendingFiles.length) return;
+    autoSend.current = null;
+    void send();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingFiles]);
+
+  function removeAttachment(index = 0) {
     if (!activeId) return;
+    const id = activeId;
     setAttachments((previous) => {
       const next = { ...previous };
-      delete next[activeId];
+      const rest = (next[id] ?? []).filter((_, position) => position !== index);
+      if (rest.length) next[id] = rest;
+      else delete next[id];
       return next;
     });
     setTransfers((previous) => {
       const next = { ...previous };
-      delete next[activeId];
+      delete next[id];
       return next;
     });
-    delete nonces.current[activeId];
+    delete nonces.current[id];
   }
 
   function cancelContext() {
@@ -523,10 +582,11 @@ export function useComposer({
       return;
     }
     if (sendingChats.current.has(activeId)) return;
+    setReviewing(null);
     const id = activeId,
       text = draft.trim(),
       originalDraft = draft,
-      fileDraft = attachments[id],
+      fileDrafts = attachments[id] ?? [],
       replyDraft = replies[id];
     // Each chat owns its retry nonce and upload; changing chats cannot mix attachments.
     const messageNonce = (nonces.current[id] ??= crypto.randomUUID());
@@ -535,27 +595,49 @@ export function useComposer({
     onError('');
     let delivered = false;
     try {
-      let file = fileDraft?.uploaded;
-      if (fileDraft && !file) {
-        const form = new FormData();
-        form.append('file', fileDraft.file);
-        setTransfers((previous) => ({ ...previous, [id]: { phase: 'uploading', progress: 0 } }));
-        file = await upload<Attachment>(`/chats/${id}/files`, form, (progress) => {
-          setTransfers((previous) => ({ ...previous, [id]: { phase: 'uploading', progress } }));
-        });
-        setAttachments((prev) =>
-          prev[id]?.file === fileDraft.file
-            ? { ...prev, [id]: { ...fileDraft, uploaded: file } }
-            : prev,
-        );
+      const files: Attachment[] = [];
+      for (const [index, item] of fileDrafts.entries()) {
+        let file = item.uploaded;
+        if (!file) {
+          const overall = (progress: number) =>
+            Math.round((index * 100 + progress) / fileDrafts.length);
+          const report = (progress: number) =>
+            setTransfers((previous) => ({
+              ...previous,
+              [id]: { phase: 'uploading', progress: overall(progress) },
+            }));
+          report(0);
+          // Size and a blurred preview let the feed hold the picture's place while it loads.
+          const meta = (await measureMedia(item.file)) ?? {};
+          if (item.file.size > SMALL_FILE && !demo) {
+            item.resume ??= {};
+            file = await uploadInParts<Attachment>(id, item.file, meta, report, item.resume);
+          } else {
+            const form = new FormData();
+            for (const [key, value] of Object.entries(meta))
+              if (value !== undefined) form.append(key, String(value));
+            form.append('file', item.file);
+            file = await upload<Attachment>(`/chats/${id}/files`, form, report);
+          }
+          const uploaded = file;
+          // Keep what is already uploaded, so a retry sends only the rest.
+          setAttachments((prev) =>
+            prev[id]?.[index]?.file === item.file
+              ? { ...prev, [id]: prev[id].map((entry, i) => (i === index ? { ...entry, uploaded } : entry)) }
+              : prev,
+          );
+        }
+        files.push(file);
       }
       const skipPreview = Boolean(detectedUrl && dismissedPreviewUrl === detectedUrl);
       setTransfers((previous) => ({ ...previous, [id]: { phase: 'sending', progress: 100 } }));
       await api(`/chats/${id}/messages`, 'POST', {
         body: text,
         nonce: messageNonce,
-        fileId: file?.id,
-        demoFile: demo ? file : undefined,
+        fileId: files.length === 1 ? files[0].id : undefined,
+        fileIds: files.length > 1 ? files.map((file) => file.id) : undefined,
+        album: files.length > 1 && files.every(albumable) ? true : undefined,
+        demoFiles: demo ? files : undefined,
         replyTo: replyDraft?.id,
         silent: silent || undefined,
         skipPreview: skipPreview || undefined,
@@ -577,7 +659,7 @@ export function useComposer({
         return next;
       });
       setAttachments((prev) => {
-        if (prev[id]?.file !== fileDraft?.file) return prev;
+        if (prev[id]?.[0]?.file !== fileDrafts[0]?.file) return prev;
         const next = { ...prev };
         delete next[id];
         return next;
@@ -685,6 +767,7 @@ export function useComposer({
     draft,
     attachment,
     attachmentSource,
+    pendingFiles,
     transfer,
     sending,
     sendingIds,
@@ -721,9 +804,12 @@ export function useComposer({
     hasPendingWork:
       Object.keys(attachments).length > 0 || Boolean(editing) || sendingIds.length > 0,
     attachmentNames: Object.fromEntries(
-      Object.entries(attachments).map(([id, item]) => [id, item.file.name]),
+      Object.entries(attachments).map(([id, items]) => [
+        id,
+        items.length > 1 ? `Вложений: ${items.length}` : items[0].file.name,
+      ]),
     ),
-    layoutKey: `${reply?.id ?? ''}:${edit?.message.id ?? ''}:${attachment ? '1' : '0'}:${linkPreview ? '1' : '0'}:${tiktokUrl ? '1' : '0'}`,
+    layoutKey: `${reply?.id ?? ''}:${edit?.message.id ?? ''}:${pendingFiles.length}:${linkPreview ? '1' : '0'}:${tiktokUrl ? '1' : '0'}`,
     loadDraftsFor,
     clearDraftsFor,
     resetComposer,
@@ -732,7 +818,16 @@ export function useComposer({
     startReply,
     startEdit,
     attachFile,
+    attachFiles,
     removeAttachment,
+    replaceAttachment,
+    reviewing: Boolean(
+      activeId &&
+        reviewing === activeId &&
+        pendingFiles.length &&
+        !pendingFiles.some((item) => recorded(item.file)),
+    ),
+    closeReview: () => setReviewing(null),
     cancelContext,
     send,
     retryMessage,
