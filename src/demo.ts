@@ -455,8 +455,11 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         : null;
     } else if (parts[2] === 'forward') {
       const sources = state.messages.filter((m) => data.messageIds.includes(m.id));
+      const albums = new Map<string, string>();
       result = {
         ids: sources.map((source, index) => {
+          if (source.album_id && !albums.has(source.album_id))
+            albums.set(source.album_id, crypto.randomUUID());
           const copy: Message = {
             ...structuredClone(source),
             id: crypto.randomUUID(),
@@ -472,6 +475,7 @@ export async function demoRequest(url: string, method: string, body: unknown): P
             reply: null,
             edited_at: null,
             read_by: 0,
+            album_id: source.album_id ? albums.get(source.album_id) : null,
             forwarded_from: source.forwarded_from || source.sender.name,
           };
           state.messages.push(copy);
@@ -668,6 +672,12 @@ export async function demoRequest(url: string, method: string, body: unknown): P
     } else if (parts[2] === 'messages') {
       const through = params.get('through');
       const since = params.get('since');
+      const albumStart = (list: Message[], index: number) => {
+        const id = list[index]?.album_id;
+        if (params.get('completeAlbums') === '1' && id)
+          while (index > 0 && list[index - 1].album_id === id) index--;
+        return index;
+      };
       if (method === 'GET' && parts.length === 3 && (through || since)) {
         // From a message or a moment up to `before`, with a little older context.
         const inChat = state.messages.filter(
@@ -680,15 +690,14 @@ export async function demoRequest(url: string, method: string, body: unknown): P
           ? inChat.findIndex((m) => m.id === through)
           : inChat.findIndex((m) => m.created_at >= since!);
         if (start < 0) start = end;
-        const from = Math.max(0, start - 20);
+        const from = albumStart(inChat, Math.max(0, start - 20));
         result = {
           messages: inChat.slice(from, end < 0 ? inChat.length : end),
           hasOlder: from > 0,
           complete: true,
         };
-      } else if (method === 'GET' && parts.length === 3)
-        result = state.messages
-          .filter(
+      } else if (method === 'GET' && parts.length === 3) {
+        const visible = state.messages.filter(
             (m) =>
               m.chat_id === chat.id &&
               !state.hidden.includes(m.id) &&
@@ -696,9 +705,9 @@ export async function demoRequest(url: string, method: string, body: unknown): P
               (!params.get('before') ||
                 state.messages.indexOf(m) <
                   state.messages.findIndex((v) => v.id === params.get('before'))),
-          )
-          .slice(-60);
-      else if (parts[4] === 'edits' && method === 'GET') {
+        );
+        result = visible.slice(albumStart(visible, Math.max(0, visible.length - 60)));
+      } else if (parts[4] === 'edits' && method === 'GET') {
         const target = state.messages.find((m) => m.id === parts[3] && m.chat_id === chat.id);
         result = { current: target?.body || '', edits: state.edits[parts[3]] || [] };
       } else if (parts[4] === 'details' && method === 'GET') {

@@ -850,6 +850,14 @@ export default function App() {
     .filter((chat) => !chat.muted && !chat.archived)
     .reduce((n, c) => n + c.unread, 0);
 
+  function messageIds(message: Message) {
+    return message.album_id
+      ? conversation.messages
+          .filter((item) => item.album_id === message.album_id)
+          .map((item) => item.id)
+      : [message.id];
+  }
+
   const latestMessageActions = useRef<MessageActions>(null!);
   latestMessageActions.current = {
     reply: composer.startReply,
@@ -859,21 +867,25 @@ export default function App() {
     download: (file) => void downloadAttachment(file, demo).catch(report),
     menu: positionMessageMenu,
     remove: (message) => {
-      setDeleteIds([message.id]);
+      setDeleteIds(messageIds(message));
       closeMenus();
       setModal('delete');
     },
     pin: (message) => void togglePin(message),
     forward: (message) => {
       closeMenus();
-      setForwarding([message.id]);
+      setForwarding(messageIds(message));
     },
     select: (message) => {
       closeMenus();
       setSelection((previous) => {
         const next = new Set(previous);
-        if (previous?.has(message.id)) next.delete(message.id);
-        else next.add(message.id);
+        const ids = messageIds(message);
+        const remove = ids.every((id) => next.has(id));
+        for (const id of ids) {
+          if (remove) next.delete(id);
+          else next.add(id);
+        }
         return next.size ? next : null;
       });
     },

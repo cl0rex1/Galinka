@@ -1,6 +1,24 @@
 name: Build and test
-on: [push, pull_request]
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
 jobs:
+  voice-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t galinka-voice-test .
+      - name: Recognize a Russian voice message offline in the production image
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp \
+            -v "$PWD/tests/fixtures/voice-ru.webm:/test.webm:ro" \
+            --entrypoint sh galinka-voice-test -ec '
+              ffmpeg -v error -i /test.webm -ac 1 -ar 16000 -c:a pcm_s16le /tmp/test.wav
+              whisper-cli -m "$WHISPER_MODEL" -l auto -t 2 -ng -np -nt -sns -otxt -of /tmp/result -f /tmp/test.wav
+              grep -F "хорошая погода" /tmp/result.txt
+            '
   check:
     runs-on: ubuntu-latest
     services:

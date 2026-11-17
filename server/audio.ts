@@ -13,6 +13,45 @@ const audioTypes = new Map([
   ['audio/mp4', 'mov'],
 ]);
 export const isRecordedAudio = (mime: string) => audioTypes.has(mime);
+/** Decode a voice note, including legacy MediaRecorder uploads, for local speech recognition. */
+export async function writeVoiceWav(source: string, mime: string, target: string) {
+  const format = audioTypes.get(mime);
+  if (!format) throw new AudioError(422, 'Неподдерживаемый формат голосового.');
+  await command(
+    'ffmpeg',
+    [
+      '-nostdin',
+      '-v',
+      'error',
+      '-max_alloc',
+      '67108864',
+      '-threads',
+      '1',
+      '-protocol_whitelist',
+      'file,pipe',
+      '-f',
+      format,
+      '-i',
+      source,
+      '-map',
+      '0:a:0',
+      '-t',
+      String(maxSeconds + 1),
+      '-c:a',
+      'pcm_s16le',
+      '-ac',
+      '1',
+      '-ar',
+      '16000',
+      '-map_metadata',
+      '-1',
+      target,
+    ],
+    45_000,
+  );
+  if ((await stat(target)).size > maxSeconds * 32000 + 128)
+    throw new AudioError(422, 'Голосовое слишком длинное. Максимум — 5 минут.');
+}
 export class AudioError extends Error {
   constructor(
     public status: number,

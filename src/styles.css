@@ -3037,6 +3037,17 @@ form.stack > :not(:last-child, .fold),
 .voice-player-compact {
   width: 100%;
 }
+.voice-transcript button {
+  padding: 4px 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.voice-transcript p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
 
 /* ========== Composer: rounded field and a separate round send button ========== */
 .composer-wrap {
@@ -6544,14 +6555,14 @@ div.message-text {
 }
 .album-grid .media-attachment,
 .album-grid .image-preview,
-.album-grid .video-player {
+.album-grid .video-player:not(:modal) {
   width: 100%;
   height: 100%;
   margin: 0;
   border-radius: 0;
 }
 .album-grid .image-preview img,
-.album-grid video {
+.album-grid .video-player:not(:modal) video {
   width: 100%;
   height: 100%;
   max-width: none;

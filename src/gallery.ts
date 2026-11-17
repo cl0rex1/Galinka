@@ -1,15 +1,18 @@
 import { createContext } from 'react';
 import type { Attachment, Person } from './types';
 
-export type GalleryPhoto = {
+export type GalleryItem = {
+  id: string;
   file: Attachment;
   sender: Pick<Person, 'id' | 'name' | 'color' | 'avatar' | 'username'>;
   at: string;
   caption?: string;
 };
 
-/** Photos of the open chat in order, so the viewer can step through them as in Telegram. */
+export type GallerySteps = { previous?: () => void; next?: () => void };
+
+/** Gallery entries are messages: a forwarded photo can appear twice under the same file id. */
 export const GalleryContext = createContext<{
-  photos: GalleryPhoto[];
-  download: (file: Attachment) => void;
+  open: (id: string) => void;
+  steps: (id: string) => GallerySteps;
 } | null>(null);

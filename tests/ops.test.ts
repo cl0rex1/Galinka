@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -44,24 +44,19 @@ test(
       await adminPool.query(`CREATE DATABASE "${tempDbName}"`);
       tempPool = new Pool({ connectionString: targetUrl.toString() });
       const first = await migrate(tempPool);
-      assert.deepEqual(first, [
-        '001-base.sql',
-        '002-devices-and-signup-invites.sql',
-        '003-presence-privacy-avatars.sql',
-        '004-search-trgm.sql',
-        '005-pins-and-forwarding.sql',
-        '006-client-errors.sql',
-        '007-messages-014.sql',
-        '008-push-native-actions.sql',
-        '009-notifications-015.sql',
-        '010-albums-016.sql',
-      ]);
+      const expected = (await readdir(new URL('../server/migrations/', import.meta.url)))
+        .filter((name) => name.endsWith('.sql'))
+        .sort();
+      assert.deepEqual(first, expected);
       const second = await migrate(tempPool);
       assert.deepEqual(second, []);
       const { rows: migs } = await tempPool.query<{ version: string }>(
         'SELECT version FROM schema_migrations ORDER BY version',
       );
-      assert.equal(migs.length, 10);
+      assert.deepEqual(
+        migs.map((row) => row.version),
+        expected,
+      );
       const { rows: tables } = await tempPool.query<{ exists: boolean }>(
         "SELECT to_regclass('public.client_errors') IS NOT NULL AS exists",
       );

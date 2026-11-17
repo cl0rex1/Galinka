@@ -76,7 +76,11 @@ export function ChatMedia({
   }
   useEffect(() => {
     setMore(false);
+    setLoaded({ kind: tab, items: [] });
     void load(tab);
+    return () => {
+      ++current.current;
+    };
   }, [chatId, tab]);
 
   return (
@@ -106,12 +110,16 @@ export function ChatMedia({
             >
               {item.file!.mime?.startsWith('video/') ? (
                 <>
-                  <video
-                    src={`${fileUrl(item.file!.id)}#t=0.1`}
-                    preload="metadata"
-                    muted
-                    playsInline
-                  />
+                  {item.file!.thumb ? (
+                    <img src={item.file!.thumb} alt="" loading="lazy" />
+                  ) : (
+                    <video
+                      src={`${fileUrl(item.file!.id)}#t=0.1`}
+                      preload="metadata"
+                      muted
+                      playsInline
+                    />
+                  )}
                   <Play size={18} aria-hidden="true" />
                 </>
               ) : (
@@ -160,7 +168,9 @@ export function ChatMedia({
                     <FileText size={20} />
                   )}
                   <span>
-                    <strong>{tab === 'voice' ? fileLabel(item.file!.name) : item.file!.name}</strong>
+                    <strong>
+                      {tab === 'voice' ? fileLabel(item.file!.name) : item.file!.name}
+                    </strong>
                     <small>
                       {tab === 'file' && `${size(item.file!.size)} · `}
                       {item.sender_name} · {day.format(new Date(item.created_at))}
@@ -176,12 +186,16 @@ export function ChatMedia({
       {failed && (
         <p className="media-empty" role="alert">
           Не удалось загрузить.{' '}
-          <button type="button" className="text-button" onClick={() => void load(tab)}>
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => void load(tab, items.at(-1)?.cursor)}
+          >
             Повторить
           </button>
         </p>
       )}
-      {more && !loading && (
+      {more && !loading && !failed && (
         <button
           type="button"
           className="text-button"

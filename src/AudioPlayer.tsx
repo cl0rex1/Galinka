@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, LoaderCircle, RotateCcw, Download } from 'lucide-react';
-import { clearNowPlaying, playNext, setNowPlaying } from './nowPlaying';
+import {
+  claimPlayback,
+  clearNowPlaying,
+  playbackEvent,
+  playNext,
+  setNowPlaying,
+} from './nowPlaying';
 
-const maxBytes = 20 * 1024 * 1024;
-const playbackEvent = 'galinka:voice-play';
+const maxBytes = 100 * 1024 * 1024;
 const durationLabel = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 function savedSpeed() {
@@ -124,7 +129,10 @@ export function AudioPlayer({
       if (!/^audio\/(mp4|webm|ogg|mpeg|wav|x-wav|flac|aac)$/.test(contentType))
         throw Error('Сервер вернул неподдерживаемый аудиофайл. Его можно скачать отдельно.');
       const length = Number(response.headers.get('content-length')) || size || 0;
-      if (length > maxBytes) throw Error('Голосовое превышает допустимые 20 МБ.');
+      if (length > maxBytes) {
+        await response.body?.cancel();
+        throw Error('Аудиофайл превышает допустимые 100 МБ.');
+      }
       const reader = response.body?.getReader();
       let blob: Blob;
       if (reader) {
@@ -136,7 +144,7 @@ export function AudioPlayer({
           received += value.byteLength;
           if (received > maxBytes) {
             await reader.cancel();
-            throw Error('Голосовое превышает допустимые 20 МБ.');
+            throw Error('Аудиофайл превышает допустимые 100 МБ.');
           }
           chunks.push(
             value.buffer.slice(
@@ -196,7 +204,7 @@ export function AudioPlayer({
     const intent = ++current.intent;
     // Select exclusively before fetching. A slow earlier download must never
     // interrupt a voice that the listener selected more recently.
-    window.dispatchEvent(new CustomEvent(playbackEvent, { detail: element }));
+    claimPlayback(element);
     if ((!current.url || phase === 'error') && !(await load(current))) return;
     if (resource.current !== current || current.intent !== intent) return;
     try {

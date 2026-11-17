@@ -12,17 +12,26 @@ backup() {
   stamp=$(date -u +%Y-%m-%dT%H%MZ)
   tmp="$BACKUP_DIR/.partial-$stamp"
   mkdir -p "$tmp"
-  # Database first: every file it references already exists when the archive starts.
-  pg_dump -Fc -f "$tmp/galinka.dump"
-  tar czf "$tmp/uploads.tar.gz" -C "$UPLOAD_DIR" .
-
-  # Restore check: the dump loads into a scratch database and the archive reads back.
-  dropdb --if-exists "$CHECK_DB"
-  createdb "$CHECK_DB"
-  pg_restore --no-owner --exit-on-error -d "$CHECK_DB" "$tmp/galinka.dump"
-  messages=$(psql -d "$CHECK_DB" -Atc 'SELECT count(*) FROM messages')
-  dropdb "$CHECK_DB"
-  tar tzf "$tmp/uploads.tar.gz" >/dev/null
+  for attempt in 1 2; do
+    pg_dump -Fc -f "$tmp/galinka.dump"
+    if tar czf "$tmp/uploads.tar.gz" -C "$UPLOAD_DIR" .; then
+      dropdb --if-exists "$CHECK_DB"
+      createdb "$CHECK_DB"
+      pg_restore --no-owner --exit-on-error -d "$CHECK_DB" "$tmp/galinka.dump"
+      messages=$(psql -d "$CHECK_DB" -Atc 'SELECT count(*) FROM messages')
+      # Both old UUID paths and converted .mp4 paths must match the restored
+      # rows. A file can change or disappear between pg_dump and tar.
+      psql -d "$CHECK_DB" -Atc "SELECT './'||id||CASE WHEN to_jsonb(f)->>'converted_video'='true' THEN '.mp4' ELSE '' END FROM files f" > "$tmp/expected"
+      dropdb "$CHECK_DB"
+      tar tzf "$tmp/uploads.tar.gz" > "$tmp/archived"
+      if awk '{sub(/\r$/, "")} FILENAME == ARGV[1] {want[$0]=1; next} {delete want[$0]} END {for (f in want) exit 1}' "$tmp/expected" "$tmp/archived"; then
+        rm -f "$tmp/expected" "$tmp/archived"
+        break
+      fi
+    fi
+    [ "$attempt" = 1 ] || return 1
+    echo "Upload files changed during backup; taking a fresh snapshot." >&2
+  done
 
   mv "$tmp" "$BACKUP_DIR/$stamp"
   echo "$(date -u +%FT%TZ) backup $stamp ok: $messages messages, $(du -sh "$BACKUP_DIR/$stamp" | cut -f1)"

@@ -34,15 +34,23 @@ test('typing skips timeline React work and drafts still survive an immediate rel
     };
     (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
   });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/?demo=1');
   await expect(page.locator('.message-row')).not.toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => (window as any).timelineSamples.length))
     .toBeGreaterThan(0);
-  await page.evaluate(() => {
+  const input = page.getByRole('textbox', { name: 'Сообщение', exact: true });
+  await input.focus();
+  // Opening the chat, loading its fonts and focusing the composer can each move the viewport.
+  // Start profiling after those layout updates, so the samples measure typing.
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise<void>((done) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => done())),
+    );
     (window as any).timelineSamples.length = 0;
   });
-  const input = page.getByRole('textbox', { name: 'Сообщение', exact: true });
   const text = 'Черновик без повторной отрисовки переписки';
   await input.pressSequentially(text, { delay: 10 });
   const samples: { rendered: boolean; reusedProps: boolean; duration: number }[] =
@@ -345,7 +353,9 @@ test('virtualizes conversations past 120 messages and reveals off-window search 
   await expect(page.locator('[data-message-id="history-5"]')).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Поиск по сообщениям', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Поиск по сообщениям', exact: true }).fill('маркер ноль пять');
+  await page
+    .getByRole('textbox', { name: 'Поиск по сообщениям', exact: true })
+    .fill('маркер ноль пять');
   const target = page.locator('[data-message-id="history-5"]');
   await expect(target).toBeVisible();
   await expect(target).toContainText('Уникальный маркер ноль пять');

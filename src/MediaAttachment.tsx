@@ -20,11 +20,18 @@ import { API_BASE, isDemo } from './api';
 import { getDemoFileUrl } from './demo';
 import type { Attachment, Person } from './types';
 import { Avatar } from './Avatar';
-import { GalleryContext, type GalleryPhoto } from './gallery';
+import { GalleryContext, type GalleryItem, type GallerySteps } from './gallery';
 import { AudioPlayer } from './AudioPlayer';
+import { VoiceTranscript } from './VoiceTranscript';
 import { motionAllowed } from './ui';
 import { VideoPlayer } from './VideoPlayer';
-import { clearNowPlaying, playNext, setNowPlaying } from './nowPlaying';
+import {
+  claimPlayback,
+  clearNowPlaying,
+  playbackEvent,
+  playNext,
+  setNowPlaying,
+} from './nowPlaying';
 
 const size = (bytes: number) =>
   bytes < 1048576
@@ -62,34 +69,27 @@ export function placeholderSize(file: Attachment) {
   return {
     width: file.width,
     height: file.height,
-    style: { '--shown-width': `${width}px`, '--ratio': `${file.width} / ${file.height}` } as CSSProperties,
+    style: {
+      '--shown-width': `${width}px`,
+      '--ratio': `${file.width} / ${file.height}`,
+    } as CSSProperties,
   };
 }
 
 export function MediaAttachment({
+  messageId,
   file,
   onDownload,
 }: {
+  messageId: string;
   file: Attachment;
   onDownload: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string>();
   const [loaded, setLoaded] = useState(false);
   const gallery = useContext(GalleryContext);
-  const inGallery = gallery?.photos.some((photo) => photo.file.id === file.id);
-  const photos: GalleryPhoto[] = inGallery
-    ? gallery!.photos
-    : [
-        {
-          file,
-          sender: { id: '', name: fileLabel(file.name), color: 2, username: '' },
-          at: new Date().toISOString(),
-        },
-      ];
-  const url = isDemo()
-    ? getDemoFileUrl(file.id)
-    : `${API_BASE}/files/${encodeURIComponent(file.id)}?inline=1`;
+  const url = fileUrl(file);
+  const failed = Boolean(url && failedUrl === url);
   const mime = file.mime || '';
   const image = /^image\/(png|jpeg|gif|webp)$/.test(mime) && url && !failed;
   const audio = isAudioFile(file.name, mime) && url;
@@ -111,21 +111,25 @@ export function MediaAttachment({
           waveform={file.waveform}
           sequence={file.name.startsWith('Голосовое-')}
         />
+        {file.name.startsWith('Голосовое-') &&
+          /^audio\/(mp4|webm|ogg)$/.test(mime) &&
+          !isDemo() && <VoiceTranscript key={file.id} fileId={file.id} />}
       </div>
     );
   if (video && url)
     return isVideoNote(file) ? (
       <div className="media-attachment video-note-attachment" data-sequence-item>
-        <VideoNote src={url} onError={() => setFailed(true)} />
+        <VideoNote src={url} onError={() => setFailedUrl(url)} />
       </div>
     ) : (
       <div className="media-attachment video-attachment">
         <VideoPlayer
           src={url}
           name={file.name}
+          steps={gallery?.steps(messageId)}
           poster={file.thumb ?? undefined}
           ratio={file.width && file.height ? file.width / file.height : undefined}
-          onError={() => setFailed(true)}
+          onError={() => setFailedUrl(url)}
         />
       </div>
     );
@@ -145,7 +149,7 @@ export function MediaAttachment({
       <button
         type="button"
         className={`image-preview ${loaded ? 'loaded' : ''}`}
-        onClick={() => setExpanded(true)}
+        onClick={() => gallery?.open(messageId)}
         aria-label={`Открыть фото ${file.name}`}
         style={file.thumb ? ({ '--thumb': `url("${file.thumb}")` } as CSSProperties) : undefined}
       >
@@ -160,22 +164,9 @@ export function MediaAttachment({
             if (!loaded && element?.complete && element.naturalWidth) setLoaded(true);
           }}
           onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
+          onError={() => setFailedUrl(url)}
         />
       </button>
-      {expanded && (
-        <PhotoViewer
-          photos={photos}
-          start={Math.max(
-            0,
-            photos.findIndex((photo) => photo.file.id === file.id),
-          )}
-          onDownload={(target) =>
-            target.id === file.id ? onDownload() : gallery?.download(target)
-          }
-          onClose={() => setExpanded(false)}
-        />
-      )}
     </div>
   );
 }
@@ -187,7 +178,34 @@ const viewerDate = new Intl.DateTimeFormat('ru', {
   minute: '2-digit',
 });
 const fileUrl = (file: Attachment) =>
-  isDemo() ? getDemoFileUrl(file.id) : `${API_BASE}/files/${encodeURIComponent(file.id)}?inline=1`;
+  isDemo()
+    ? getDemoFileUrl(file.id)
+    : `${API_BASE}/files/${encodeURIComponent(file.id)}?inline=1${file.mime?.startsWith('video/') ? `&v=${file.size}-${encodeURIComponent(file.mime)}` : ''}`;
+
+type ViewerProps = {
+  item: GalleryItem;
+  index: number;
+  count: number;
+  steps: GallerySteps;
+  onDownload: (file: Attachment) => void;
+  onClose: () => void;
+};
+
+export function GalleryViewer(props: ViewerProps) {
+  const file = props.item.file;
+  const url = fileUrl(file);
+  if (file.mime?.startsWith('video/') && url)
+    return (
+      <VideoPlayer
+        key={props.item.id}
+        src={url}
+        name={file.name}
+        steps={props.steps}
+        onDismiss={props.onClose}
+      />
+    );
+  return <PhotoViewer {...props} />;
+}
 
 /**
  * Full-screen photo, as in Telegram: who sent it and when on top, the caption below, arrows and
@@ -195,17 +213,7 @@ const fileUrl = (file: Attachment) =>
  * around the pointer; dragging pans a zoomed photo; at normal size a vertical drag or a click
  * beside the photo closes the viewer.
  */
-function PhotoViewer({
-  photos,
-  start,
-  onDownload,
-  onClose,
-}: {
-  photos: GalleryPhoto[];
-  start: number;
-  onDownload: (file: Attachment) => void;
-  onClose: () => void;
-}) {
+function PhotoViewer({ item: photo, index, count, steps, onDownload, onClose }: ViewerProps) {
   const dialog = useRef<HTMLDialogElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const picture = useRef<HTMLImageElement>(null);
@@ -213,10 +221,8 @@ function PhotoViewer({
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const gesture = useRef({ distance: 0, scale: 1, dragX: 0, dragY: 0, moved: false, axis: '' });
   const lastTap = useRef(0);
-  const [index, setIndex] = useState(start);
   const [scale, setScale] = useState(1);
   const [closing, setClosing] = useState(false);
-  const photo = photos[index];
   const zoomed = scale > 1.01;
 
   useEffect(() => {
@@ -230,15 +236,12 @@ function PhotoViewer({
     gesture.current.dragX = 0;
     apply(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index]);
+  }, [photo.id]);
   const close = () => {
     if (closing) return;
     setClosing(true);
     setTimeout(onClose, motionAllowed() ? 180 : 0);
   };
-  const step = (by: number) =>
-    setIndex((current) => Math.min(photos.length - 1, Math.max(0, current + by)));
-
   // Write the transform straight to the image; React does not re-render on every move.
   function apply(animated: boolean) {
     const img = picture.current;
@@ -341,8 +344,8 @@ function PhotoViewer({
       close();
       return;
     }
-    if (dragX < -80 && index < photos.length - 1) return step(1);
-    if (dragX > 80 && index > 0) return step(-1);
+    if (dragX < -80 && steps.next) return steps.next();
+    if (dragX > 80 && steps.previous) return steps.previous();
     apply(true);
     if (g.moved) return;
     if (!zoomed && !onPicture(event.clientX, event.clientY)) {
@@ -359,7 +362,6 @@ function PhotoViewer({
     }
   }
 
-  if (!photo) return null;
   return (
     <dialog
       ref={dialog}
@@ -374,8 +376,8 @@ function PhotoViewer({
         if (event.key === '+' || event.key === '=') zoomAt(view.current.scale * 1.5);
         else if (event.key === '-') zoomAt(view.current.scale / 1.5);
         else if (event.key === '0') zoomAt(1);
-        else if (event.key === 'ArrowLeft') step(-1);
-        else if (event.key === 'ArrowRight') step(1);
+        else if (event.key === 'ArrowLeft') steps.previous?.();
+        else if (event.key === 'ArrowRight') steps.next?.();
       }}
     >
       <div className="media-dialog-head">
@@ -429,22 +431,22 @@ function PhotoViewer({
           draggable={false}
         />
       </div>
-      {index > 0 && (
+      {steps.previous && (
         <button
           type="button"
           className="media-nav prev"
-          aria-label="Предыдущая фотография"
-          onClick={() => step(-1)}
+          aria-label="Предыдущее вложение"
+          onClick={steps.previous}
         >
           <ChevronLeft size={30} />
         </button>
       )}
-      {index < photos.length - 1 && (
+      {steps.next && (
         <button
           type="button"
           className="media-nav next"
-          aria-label="Следующая фотография"
-          onClick={() => step(1)}
+          aria-label="Следующее вложение"
+          onClick={steps.next}
         >
           <ChevronRight size={30} />
         </button>
@@ -452,9 +454,9 @@ function PhotoViewer({
       <div className="media-dialog-foot">
         {photo.caption && <p className="media-caption">{photo.caption}</p>}
         <div className="media-toolbar">
-          {photos.length > 1 && (
+          {count > 1 && (
             <span className="media-counter">
-              {index + 1} из {photos.length}
+              {index + 1} из {count}
             </span>
           )}
           <div className="media-zoom">
@@ -497,9 +499,14 @@ function PhotoViewer({
 function VideoNote({ src, onError }: { src: string; onError: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   useEffect(() => {
-    const element = video.current;
+    const element = video.current!;
+    const pauseOther = (event: Event) => {
+      if ((event as CustomEvent).detail !== element) element.pause();
+    };
+    window.addEventListener(playbackEvent, pauseOther);
     return () => {
-      if (element) clearNowPlaying(element);
+      window.removeEventListener(playbackEvent, pauseOther);
+      clearNowPlaying(element);
     };
   }, []);
   const [playing, setPlaying] = useState(false);
@@ -522,12 +529,10 @@ function VideoNote({ src, onError }: { src: string; onError: () => void }) {
   }
   function toggle() {
     const element = video.current!;
-    // Only one round video plays at a time, like voice messages.
-    document.querySelectorAll<HTMLVideoElement>('.video-note video').forEach((other) => {
-      if (other !== element) other.pause();
-    });
-    if (element.paused) void element.play().catch(() => setPlaying(false));
-    else element.pause();
+    if (element.paused) {
+      claimPlayback(element);
+      void element.play().catch(() => setPlaying(false));
+    } else element.pause();
   }
   const progress = time.duration ? time.current / time.duration : 0;
   return (

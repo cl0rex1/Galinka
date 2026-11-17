@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Pause, Play, X } from 'lucide-react';
-import { setNowPlaying, useNowPlaying } from './nowPlaying';
+import { claimPlayback, setNowPlaying, useNowPlaying } from './nowPlaying';
 
 const clock = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
@@ -26,7 +26,12 @@ export function MiniPlayer() {
         type="button"
         className="icon-button"
         aria-label={element.paused ? 'Продолжить' : 'Пауза'}
-        onClick={() => (element.paused ? void element.play().catch(() => {}) : element.pause())}
+        onClick={() => {
+          if (element.paused) {
+            claimPlayback(element);
+            void element.play().catch(() => {});
+          } else element.pause();
+        }}
       >
         {element.paused ? <Play size={18} /> : <Pause size={18} />}
       </button>

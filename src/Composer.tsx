@@ -231,7 +231,7 @@ export function Composer({
           transfer={transfer}
           original={attachmentSource && !transfer ? attachmentSource : undefined}
           onOriginal={() => {
-            if (attachmentSource) void composer.attachFile(attachmentSource, true);
+            if (attachmentSource) void composer.attachFiles([attachmentSource], true);
           }}
           onRetry={() => void composer.send()}
           onRemove={() => composer.removeAttachment(0)}
@@ -462,7 +462,7 @@ export function Composer({
               key={active.id}
               disabled={sending}
               onActive={() => onTyping('video')}
-              onRecorded={(file) => void composer.attachFile(file)}
+              onRecorded={(file) => void composer.attachFiles([file])}
               onError={onError}
             />
           )}
@@ -472,7 +472,7 @@ export function Composer({
             key={active.id}
             disabled={sending}
             onActive={() => onTyping('voice')}
-            onRecorded={(file, sendNow) => void composer.attachFile(file, false, sendNow)}
+            onRecorded={(file, sendNow) => void composer.attachFiles([file], false, sendNow)}
             onError={onError}
           />
         ) : (

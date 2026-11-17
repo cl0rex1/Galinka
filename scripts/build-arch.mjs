@@ -1,9 +1,11 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   cpSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
+  createReadStream,
   createWriteStream,
   readdirSync,
   statSync,
@@ -71,3 +73,9 @@ await pipeline(
   createWriteStream(output),
 );
 console.log(`Arch package: ${output} (uses the system electron44)`);
+const hash = createHash('sha256');
+for await (const chunk of createReadStream(output)) hash.update(chunk);
+const recipe = readFileSync('packaging/arch/PKGBUILD.in', 'utf8')
+  .replace('@VERSION@', version)
+  .replace('@SHA256@', hash.digest('hex'));
+writeFileSync('release/PKGBUILD', recipe);

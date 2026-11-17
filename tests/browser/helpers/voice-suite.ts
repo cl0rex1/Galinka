@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 
-async function voiceChat(page: Page) {
+export async function voiceChat(page: Page, recorded = false) {
   const self = { id: 'voice-self', username: 'listener', name: 'Слушатель', color: 0 };
   const sender = { id: 'voice-sender', username: 'sender', name: 'Друг', color: 1 };
   const chat = {
@@ -26,7 +26,12 @@ async function voiceChat(page: Page) {
     created_at: new Date(Date.now() - 10000 + i * 1000).toISOString(),
     nonce: id,
     reactions: [],
-    file: { id, name: `${id}.m4a`, mime: 'audio/mp4', size: 16000 },
+    file: {
+      id,
+      name: `${recorded && i === 0 ? 'Голосовое-' : ''}${id}.m4a`,
+      mime: 'audio/mp4',
+      size: 16000,
+    },
   }));
   await page.route('**/api/**', (route) => {
     const url = new URL(route.request().url());
@@ -61,6 +66,33 @@ async function playsFromClick(player: ReturnType<Page['locator']>) {
 
 export function voiceTests() {
   test.use({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
+  test('transcribes a recording on request and lets the listener hide or reopen the text', async ({
+    page,
+  }) => {
+    const methods: string[] = [];
+    await page.route('**/api/files/slow/transcription', (route) => {
+      methods.push(route.request().method());
+      return route.fulfill({
+        json:
+          methods.length === 1
+            ? { state: 'pending' }
+            : { state: 'ready', text: 'Сегодня хорошая погода.' },
+      });
+    });
+    await voiceChat(page, true);
+    const action = page.getByRole('button', { name: 'Расшифровать', exact: true });
+    await expect(action).toHaveCount(1);
+    expect(methods).toEqual([]);
+    await action.click();
+    await expect(page.getByRole('button', { name: 'Расшифровываем…' })).toBeDisabled();
+    const words = page.getByText('Сегодня хорошая погода.', { exact: true });
+    await expect(words).toBeVisible();
+    await page.getByRole('button', { name: 'Скрыть текст' }).click();
+    await expect(words).toHaveCount(0);
+    await page.getByRole('button', { name: 'Показать текст' }).click();
+    await expect(words).toBeVisible();
+    expect(methods).toEqual(['POST', 'GET']);
+  });
   test('loads privately on demand, recovers from a network error and seeks after a trusted tap', async ({
     page,
     context,

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { copyFile, mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
@@ -28,6 +28,7 @@ test(
           INVITE_CODE: invite,
           APP_ORIGIN: base,
           UPLOAD_DIR: directory,
+          WHISPER_MODEL: process.env.TEST_WHISPER_MODEL || path.join(directory, 'missing-model.bin'),
           NODE_ENV: 'test',
           PUSH_ENABLED: 'false',
           WEB_PUSH_PUBLIC_KEY: '',
@@ -82,15 +83,16 @@ test(
       const apiPrefix = await fetch(base + '/messenger/version', { headers: { Origin: base } });
       assert.equal(apiPrefix.status, 200);
       assert.equal(apiPrefix.headers.get('access-control-allow-origin'), base);
-      const preflight = await fetch(base + '/messenger/chats', {
+      const preflight = await fetch(base + '/messenger/uploads/' + randomUUID(), {
         method: 'OPTIONS',
         headers: {
           Origin: base,
-          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Method': 'PUT',
           'Access-Control-Request-Headers': 'Content-Type',
         },
       });
       assert.equal(preflight.status, 204);
+      assert.ok(preflight.headers.get('access-control-allow-methods')?.split(',').includes('PUT'));
       const blockedPreflight = await fetch(base + '/messenger/chats', {
         method: 'OPTIONS',
         headers: { Origin: 'https://evil.example' },
@@ -353,6 +355,65 @@ test(
         (await request(`/files/${audio.data.id}?inline=1`, 'GET', undefined, eve.cookie)).status,
         404,
       );
+      // An old, unnormalized voice note can be transcribed by either member.
+      const voiceId = randomUUID();
+      const voicePath = path.join(directory, voiceId);
+      await copyFile('tests/fixtures/voice-ru.webm', voicePath);
+      await db.query(
+        "INSERT INTO files(id,chat_id,user_id,name,size,mime) VALUES($1,$2,$3,'Голосовое-тест.webm',$4,'audio/webm')",
+        [voiceId, id, alice.data.id, (await stat(voicePath)).size],
+      );
+      const transcript = (cookie: string, method = 'POST') =>
+        request(
+          `/files/${voiceId}/transcription`,
+          method,
+          undefined,
+          cookie,
+          'http://localhost:3009',
+        );
+      assert.equal((await transcript(bob.cookie)).status, 404, 'unsent voice');
+      const voiceMessage = await request(
+        `/chats/${id}/messages`,
+        'POST',
+        { body: '', fileId: voiceId, nonce: randomUUID() },
+        alice.cookie,
+      );
+      assert.equal(voiceMessage.status, 201);
+      assert.equal((await transcript(eve.cookie)).status, 404);
+      const starts = await Promise.all([transcript(alice.cookie), transcript(bob.cookie)]);
+      assert.ok(starts.every((r) => r.status === 202));
+      let result = await transcript(bob.cookie, 'GET');
+      const deadline = Date.now() + 30_000;
+      while (result.status === 202 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        result = await transcript(bob.cookie, 'GET');
+      }
+      if (process.env.TEST_WHISPER_MODEL) {
+        assert.equal(result.status, 200, JSON.stringify(result.data));
+        assert.match(result.data.text, /хорошая погода/iu);
+      } else {
+        assert.equal(result.status, 422, 'engine failure becomes a retryable error');
+        assert.equal((await transcript(bob.cookie)).status, 202);
+        await db.query(
+          "UPDATE voice_transcripts SET state='ready',transcript='готовый текст' WHERE file_id=$1",
+          [voiceId],
+        );
+      }
+      await rm(voicePath);
+      assert.equal((await transcript(bob.cookie)).data.state, 'ready', 'uses cached text');
+      await db.query('INSERT INTO hidden_messages(message_id,user_id) VALUES($1,$2)', [
+        voiceMessage.data.id,
+        bob.data.id,
+      ]);
+      assert.equal((await transcript(bob.cookie, 'GET')).status, 404, 'hidden on this account');
+      assert.equal((await transcript(alice.cookie, 'GET')).status, 200);
+      await db.query('DELETE FROM messages WHERE id=$1', [voiceMessage.data.id]);
+      await db.query('DELETE FROM files WHERE id=$1', [voiceId]);
+      assert.equal(
+        (await db.query('SELECT 1 FROM voice_transcripts WHERE file_id=$1', [voiceId])).rowCount,
+        0,
+      );
+
       const invitation = await request(`/chats/${id}/invite`, 'POST', {}, alice.cookie);
       assert.equal(invitation.status, 200);
       const token = new URL(invitation.data.url).searchParams.get('join');

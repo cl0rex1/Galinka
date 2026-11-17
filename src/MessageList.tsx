@@ -27,7 +27,7 @@ import {
 
 import { Avatar } from './Avatar';
 import { MessageMenuBody } from './MessageMenu';
-import { fileLabel, isVideoNote, MediaAttachment } from './MediaAttachment';
+import { fileLabel, isVideoNote, MediaAttachment, GalleryViewer } from './MediaAttachment';
 import { bareKind, mentionsUser, MessageText, plainText, SelfContext } from './MessageText';
 import { LinkPreviewCard } from './LinkPreview';
 import { GalleryContext } from './gallery';
@@ -144,7 +144,7 @@ const MessageRow = memo(function MessageRow({
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const held = useRef(false);
   const bot = !m.sender_id;
-  const text = album ? album[album.length - 1] : m;
+  const reply = album ? album[0].reply : m.reply;
   const bare = !m.file && !m.poll && !m.link_preview ? bareKind(m.body) : null;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuPoint = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -189,6 +189,7 @@ const MessageRow = memo(function MessageRow({
     <div className="message-group-item" data-item-key={rowKey}>
       <article
         data-message-id={m.id}
+        data-album-messages={album?.map((item) => item.id).join(' ')}
         className={`message-row ${fresh ? 'is-new' : ''} ${own ? 'own' : ''} ${bot ? 'bot' : ''} ${continued ? 'continued' : ''} ${showAvatar ? 'last' : ''} ${selected ? 'selected' : ''}`}
         aria-selected={selecting ? selected : undefined}
         onPointerDown={pointerDown}
@@ -261,7 +262,7 @@ const MessageRow = memo(function MessageRow({
         )}
         <div className="message-content">
           <div
-            className={`bubble ${bare ? `bare bare-${bare}` : ''} ${!own && kind === 'group' && (text.mention_all || mentionsUser(text.body, self)) ? 'mentions-me' : ''}`}
+            className={`bubble ${bare ? `bare bare-${bare}` : ''} ${!own && kind === 'group' && (m.mention_all || mentionsUser(m.body, self)) ? 'mentions-me' : ''}`}
           >
             {!own && !continued && kind === 'group' && (
               <div className={`sender-name tone-text-${(m.sender.color ?? 2) % 6}`}>
@@ -275,26 +276,26 @@ const MessageRow = memo(function MessageRow({
                 Переслано от <strong>{m.forwarded_from}</strong>
               </div>
             )}
-            {m.reply && (
+            {reply && (
               <blockquote
                 className="message-quote"
                 role="button"
                 tabIndex={0}
-                aria-label={`Перейти к сообщению ${m.reply.sender.name}`}
-                onClick={() => actions.jump(m.reply!.id)}
+                aria-label={`Перейти к сообщению ${reply.sender.name}`}
+                onClick={() => actions.jump(reply.id)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
-                    actions.jump(m.reply!.id);
+                    actions.jump(reply.id);
                   }
                 }}
               >
                 <Reply size={14} />
                 <div>
-                  <strong>{m.reply.sender.name}</strong>
+                  <strong>{reply.sender.name}</strong>
                   <span>
-                    {plainText(m.reply.body) ||
-                      (m.reply.file_name && fileLabel(m.reply.file_name)) ||
+                    {plainText(reply.body) ||
+                      (reply.file_name && fileLabel(reply.file_name)) ||
                       'Сообщение'}
                   </span>
                 </div>
@@ -305,6 +306,7 @@ const MessageRow = memo(function MessageRow({
                 {album.map((item) => (
                   <MediaAttachment
                     key={item.id}
+                    messageId={item.id}
                     file={item.file!}
                     onDownload={() => actions.download(item.file!)}
                   />
@@ -312,13 +314,17 @@ const MessageRow = memo(function MessageRow({
               </div>
             ) : (
               m.file && (
-                <MediaAttachment file={m.file} onDownload={() => actions.download(m.file!)} />
+                <MediaAttachment
+                  messageId={m.id}
+                  file={m.file}
+                  onDownload={() => actions.download(m.file!)}
+                />
               )
             )}
-            {text.body && !m.poll && (
-              <MessageText text={text.body} highlight={highlight} onMention={actions.mention} />
+            {m.body && !m.poll && (
+              <MessageText text={m.body} highlight={highlight} onMention={actions.mention} />
             )}
-            {text.link_preview && <LinkPreviewCard preview={text.link_preview} />}
+            {m.link_preview && <LinkPreviewCard preview={m.link_preview} />}
             {m.poll && (
               <div className="poll-card" role="group" aria-label={`Опрос: ${m.poll.question}`}>
                 <div className="poll-question">{m.poll.question}</div>
@@ -564,7 +570,7 @@ function computeRange(
 }
 
 export const MessageList = memo(function MessageList({
-  messages,
+  messages: timeline,
   meId,
   meUsername = '',
   kind,
@@ -602,29 +608,66 @@ export const MessageList = memo(function MessageList({
   actions: MessageActions;
   highlight?: string;
 }) {
+  // Virtualise what is drawn: an album has one measured row, anchored by its caption.
+  const { messages, albums, rowIndex } = useMemo(() => {
+    const messages: Message[] = [];
+    const albums = new Map<string, Message[]>();
+    const rowIndex = new Map<string, number>();
+    for (let i = 0; i < timeline.length;) {
+      const start = i++;
+      while (i < timeline.length && sameAlbum(timeline[i - 1], timeline[i])) i++;
+      const caption = timeline[i - 1];
+      if (i - start > 1) albums.set(caption.id, timeline.slice(start, i));
+      for (let j = start; j < i; j++) rowIndex.set(timeline[j].id, messages.length);
+      messages.push(caption);
+    }
+    return { messages, albums, rowIndex };
+  }, [timeline]);
   const listRef = useRef<HTMLDivElement>(null);
-  const gallery = useMemo(
-    () => ({
-      photos: messages
-        .filter(
-          (m) => !m.pending && m.file && /^image\/(png|jpeg|gif|webp)$/.test(m.file.mime || ''),
-        )
-        .map((m) => ({
-          file: m.file!,
-          sender: m.sender,
-          at: m.created_at,
-          caption: plainText(m.body).trim() || undefined,
-        })),
-      download: (file: Attachment) => actions.download(file),
-    }),
-    [messages, actions],
-  );
+  const [openedMedia, setOpenedMedia] = useState<string | null>(null);
+  const gallery = useMemo(() => {
+    const items = timeline
+      .filter(
+        (m) =>
+          !m.pending &&
+          m.file &&
+          !isVideoNote(m.file) &&
+          /^(image\/(png|jpeg|gif|webp)|video\/(mp4|webm|quicktime))$/.test(m.file.mime || ''),
+      )
+      .map((m) => ({
+        id: m.id,
+        file: m.file!,
+        sender: m.sender,
+        at: m.created_at,
+        caption: plainText(m.body).trim() || undefined,
+      }));
+    const indexes = new Map(items.map((item, index) => [item.id, index]));
+    return {
+      items,
+      indexes,
+      open: setOpenedMedia,
+      steps(id: string) {
+        const index = indexes.get(id);
+        return {
+          previous:
+            index !== undefined && index > 0
+              ? () => setOpenedMedia(items[index - 1].id)
+              : undefined,
+          next:
+            index !== undefined && index + 1 < items.length
+              ? () => setOpenedMedia(items[index + 1].id)
+              : undefined,
+        };
+      },
+    };
+  }, [timeline]);
+  const openedIndex = openedMedia ? gallery.indexes.get(openedMedia) : undefined;
   const heightsRef = useRef<Map<string, number>>(new Map());
   const anchorRef = useRef<{ key: string; offset: number } | null>(null);
   const revealTargetRef = useRef<{ index: number; until: number } | null>(null);
   const [range, setRange] = useState<{ start: number; end: number } | null>(null);
-  const latestRef = useRef({ messages, awayFromBottom, range });
-  latestRef.current = { messages, awayFromBottom, range };
+  const latestRef = useRef({ messages, rowIndex, awayFromBottom, range });
+  latestRef.current = { messages, rowIndex, awayFromBottom, range };
 
   const measureRows = useCallback(() => {
     const listEl = listRef.current;
@@ -688,7 +731,8 @@ export const MessageList = memo(function MessageList({
     if (!listEl || !scroller) return;
     const onScroll = () => updateWindow();
     const onReveal = (event: Event) => {
-      const index = (event as CustomEvent<{ index?: number }>).detail?.index;
+      const id = (event as CustomEvent<{ messageId: string }>).detail?.messageId;
+      const index = latestRef.current.rowIndex.get(id);
       const msgs = latestRef.current.messages;
       if (
         typeof index !== 'number' ||
@@ -788,73 +832,75 @@ export const MessageList = memo(function MessageList({
   return (
     <GalleryContext.Provider value={gallery}>
       <SelfContext.Provider value={meUsername}>
-      <div ref={listRef} className={`message-list kind-${kind}`}>
-        {topSpacer > 0 && (
-          <div
-            className="message-spacer"
-            style={{ height: topSpacer, flexShrink: 0 }}
-            aria-hidden="true"
-          />
-        )}
-        {days.map((day) => (
-          <section className="message-day" key={day.key}>
-            <div className="date-divider">
-              <span>{day.label}</span>
-            </div>
-            {day.items.map((index) => {
-              const message = messages[index];
-              const key = itemKey(message);
-              // An album is drawn once, by its first message; the rest are folded into it.
-              if (index > start && sameAlbum(messages[index - 1], message)) return null;
-              let album: Message[] | undefined;
-              if (inAlbum(message)) {
-                album = [message];
-                while (sameAlbum(album.at(-1), messages[index + album.length]))
-                  album.push(messages[index + album.length]);
-                if (album.length < 2) album = undefined;
-              }
-              const last = index + (album?.length ?? 1) - 1;
-              return (
-                // Keyed by nonce: the server's copy replaces a just-sent bubble without a remount.
-                <Fragment key={key}>
-                  {message.id === unreadFrom && (
-                    <div className="unread-divider" role="separator">
-                      <span>Новые сообщения</span>
-                    </div>
-                  )}
-                  <MessageRow
-                    message={message}
-                    album={album}
-                    itemKey={key}
-                    own={message.sender_id === meId}
-                    canDeleteForAll={message.sender_id === meId || Boolean(moderator)}
-                    pinned={canPin ? message.id === pinnedId : null}
-                    selecting={Boolean(selection)}
-                    selected={Boolean(selection?.has(message.id))}
-                    kind={kind}
-                    continued={grouped(messages[index - 1], message)}
-                    showAvatar={!grouped(messages[last], messages[last + 1])}
-                    fresh={fresh.has(message.id)}
-                    copied={copiedId === message.id}
-                    sending={sending}
-                    savingEdit={savingEdit}
-                    actions={actions}
-                    highlight={highlight}
-                  />
-                </Fragment>
-              );
-            })}
-          </section>
-        ))}
-        {bottomSpacer > 0 && (
-          <div
-            className="message-spacer"
-            style={{ height: bottomSpacer, flexShrink: 0 }}
-            aria-hidden="true"
-          />
-        )}
-      </div>
+        <div ref={listRef} className={`message-list kind-${kind}`}>
+          {topSpacer > 0 && (
+            <div
+              className="message-spacer"
+              style={{ height: topSpacer, flexShrink: 0 }}
+              aria-hidden="true"
+            />
+          )}
+          {days.map((day) => (
+            <section className="message-day" key={day.key}>
+              <div className="date-divider">
+                <span>{day.label}</span>
+              </div>
+              {day.items.map((index) => {
+                const message = messages[index];
+                const key = itemKey(message);
+                const album = albums.get(message.id);
+                return (
+                  // Keyed by nonce: the server's copy replaces a just-sent bubble without a remount.
+                  <Fragment key={key}>
+                    {(message.id === unreadFrom ||
+                      album?.some((item) => item.id === unreadFrom)) && (
+                      <div className="unread-divider" role="separator">
+                        <span>Новые сообщения</span>
+                      </div>
+                    )}
+                    <MessageRow
+                      message={message}
+                      album={album}
+                      itemKey={key}
+                      own={message.sender_id === meId}
+                      canDeleteForAll={message.sender_id === meId || Boolean(moderator)}
+                      pinned={canPin ? message.id === pinnedId : null}
+                      selecting={Boolean(selection)}
+                      selected={Boolean(selection?.has(message.id))}
+                      kind={kind}
+                      continued={grouped(messages[index - 1], message)}
+                      showAvatar={!grouped(message, messages[index + 1])}
+                      fresh={fresh.has(message.id)}
+                      copied={copiedId === message.id}
+                      sending={sending}
+                      savingEdit={savingEdit}
+                      actions={actions}
+                      highlight={highlight}
+                    />
+                  </Fragment>
+                );
+              })}
+            </section>
+          ))}
+          {bottomSpacer > 0 && (
+            <div
+              className="message-spacer"
+              style={{ height: bottomSpacer, flexShrink: 0 }}
+              aria-hidden="true"
+            />
+          )}
+        </div>
       </SelfContext.Provider>
+      {openedIndex !== undefined && (
+        <GalleryViewer
+          item={gallery.items[openedIndex]}
+          index={openedIndex}
+          count={gallery.items.length}
+          steps={gallery.steps(gallery.items[openedIndex].id)}
+          onDownload={actions.download}
+          onClose={() => setOpenedMedia(null)}
+        />
+      )}
     </GalleryContext.Provider>
   );
 });

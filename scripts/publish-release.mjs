@@ -16,7 +16,11 @@ if (!section) throw Error(`CHANGELOG.md has no section for ${version}.`);
 const releaseNotes = section.slice(section.indexOf('\n') + 1).trim();
 const directory = 'release';
 const files = (await readdir(directory))
-  .filter((name) => /\.(exe|dmg|zip|AppImage|deb|apk|pkg\.tar\.zst|yml|blockmap)$/.test(name))
+  .filter(
+    (name) =>
+      name === 'PKGBUILD' ||
+      /\.(exe|dmg|zip|AppImage|deb|apk|pkg\.tar\.zst|yml|blockmap)$/.test(name),
+  )
   .sort();
 for (const required of [
   '-android-release.apk',
@@ -26,6 +30,7 @@ for (const required of [
   '.AppImage',
   '.deb',
   '.pkg.tar.zst',
+  'PKGBUILD',
   'latest.yml',
   'latest-linux.yml',
 ]) {
@@ -34,7 +39,7 @@ for (const required of [
 }
 const digests = new Map();
 for (const name of files) {
-  if (!name.startsWith('latest') && !name.startsWith(`Galinka-${version}-`))
+  if (name !== 'PKGBUILD' && !name.startsWith('latest') && !name.startsWith(`Galinka-${version}-`))
     throw Error(`Unexpected version in artifact: ${name}`);
   const hash = createHash('sha256');
   for await (const chunk of (await openAsBlob(`${directory}/${name}`)).stream()) hash.update(chunk);

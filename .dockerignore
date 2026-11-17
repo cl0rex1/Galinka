@@ -25,4 +25,6 @@ firebase-service-account*.json
 compose.casaos.yml
 
 .deploy/
+.pgtest/
+.claude/
 backups

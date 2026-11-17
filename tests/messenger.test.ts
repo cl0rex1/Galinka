@@ -343,6 +343,24 @@ test(
       assert.equal(normalizedVoice.status, 201);
       assert.equal(normalizedVoice.data.mime, 'audio/mp4');
       assert.equal(normalizedVoice.data.name, 'new-voice.m4a');
+      // A selected audio attachment keeps the original instead of entering the
+      // recorder's five-minute AAC conversion, even for a shared container type.
+      const music = new FormData();
+      music.append('file', new Blob([voiceBytes], { type: 'audio/webm' }), 'music.webm');
+      const song = await request(
+        `/chats/${chat}/files?originalAudio=1`,
+        'POST',
+        music,
+        alice.cookie,
+      );
+      assert.equal(song.status, 201);
+      assert.equal(song.data.name, 'music.webm');
+      assert.equal(song.data.mime, 'audio/webm');
+      const playable = await fetch(`${base}/api/files/${song.data.id}?inline=1`, {
+        headers: { Cookie: bob.cookie },
+      });
+      assert.equal(playable.headers.get('content-type'), 'audio/webm');
+      assert.deepEqual(Buffer.from(await playable.arrayBuffer()), voiceBytes);
       assert.equal(
         (await db.query('SELECT audio_ready FROM files WHERE id=$1', [normalizedVoice.data.id]))
           .rows[0].audio_ready,

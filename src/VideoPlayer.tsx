@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
+  ChevronLeft,
+  ChevronRight,
   Maximize2,
   Minimize2,
   Pause,
@@ -12,6 +14,7 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
+import type { GallerySteps } from './gallery';
 import { motionAllowed } from './ui';
 
 const time = (seconds: number) =>
@@ -40,6 +43,8 @@ export function VideoPlayer({
   name,
   onError,
   compact = false,
+  steps,
+  onDismiss,
   poster,
   ratio,
 }: {
@@ -47,6 +52,9 @@ export function VideoPlayer({
   name: string;
   onError?: () => void;
   compact?: boolean;
+  steps?: GallerySteps;
+  /** Set when the gallery opens this video directly in the full player. */
+  onDismiss?: () => void;
   /** Blurred preview shown until the first frame loads. */
   poster?: string;
   /** width / height, so the bubble keeps its size before the video loads. */
@@ -55,7 +63,15 @@ export function VideoPlayer({
   const slot = useRef<HTMLDivElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const video = useRef<HTMLVideoElement>(null);
-  const [fullscreen, setFullscreen] = useState(false);
+  const standalone = Boolean(onDismiss);
+  const [fullscreen, setFullscreen] = useState(standalone);
+  const swipe = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    if (!standalone) return;
+    const player = dialog.current!;
+    player.showModal();
+    return () => player.close();
+  }, [standalone]);
   const [leaving, setLeaving] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -163,6 +179,10 @@ export function VideoPlayer({
       setLeaving(true);
       setTimeout(
         () => {
+          if (onDismiss) {
+            onDismiss();
+            return;
+          }
           player.close();
           player.show();
           container.style.minHeight = '';
@@ -179,6 +199,18 @@ export function VideoPlayer({
     player.showModal();
     setFullscreen(true);
     wake();
+  }
+
+  function navigate(open: () => void) {
+    video.current?.pause();
+    if (!standalone) {
+      const player = dialog.current!;
+      player.close();
+      player.show();
+      slot.current!.style.minHeight = '';
+      setFullscreen(false);
+    }
+    open();
   }
 
   const volumeLevel = muted ? 0 : volume;
@@ -211,7 +243,7 @@ export function VideoPlayer({
   return (
     <div ref={slot} className={`video-player-slot${compact ? ' compact' : ''}`}>
       <dialog
-        open
+        open={standalone ? undefined : true}
         ref={dialog}
         className={`video-player${compact ? ' compact' : ''}${playing ? ' playing' : ''}${
           fullscreen && idle && playing ? ' idle' : ''
@@ -229,8 +261,8 @@ export function VideoPlayer({
           const actions: Record<string, () => void> = {
             ' ': togglePlayback,
             k: togglePlayback,
-            ArrowLeft: () => seekBy(-5),
-            ArrowRight: () => seekBy(5),
+            ArrowLeft: () => (steps?.previous ? navigate(steps.previous) : seekBy(-5)),
+            ArrowRight: () => (steps?.next ? navigate(steps.next) : seekBy(5)),
             ArrowUp: () => setLevel(volumeLevel + 0.1),
             ArrowDown: () => setLevel(volumeLevel - 0.1),
             m: toggleMute,
@@ -248,6 +280,29 @@ export function VideoPlayer({
           type="button"
           className="video-stage"
           aria-label={fullscreen ? 'Переключить воспроизведение видео' : 'Открыть видео'}
+          onTouchStart={(event) => {
+            const touch = event.touches[0];
+            swipe.current =
+              fullscreen && event.touches.length === 1
+                ? { x: touch.clientX, y: touch.clientY }
+                : null;
+          }}
+          onTouchCancel={() => {
+            swipe.current = null;
+          }}
+          onTouchEnd={(event) => {
+            const from = swipe.current;
+            swipe.current = null;
+            if (!from) return;
+            const touch = event.changedTouches[0];
+            const dx = touch.clientX - from.x;
+            if (Math.abs(dx) <= Math.max(80, Math.abs(touch.clientY - from.y) * 1.5)) return;
+            const open = dx < 0 ? steps?.next : steps?.previous;
+            if (open) {
+              event.preventDefault();
+              navigate(open);
+            }
+          }}
           onClick={(event) => {
             if (!fullscreen) {
               toggleFullscreen();
@@ -283,9 +338,7 @@ export function VideoPlayer({
                 ? undefined
                 : {
                     ...(ratio ? { aspectRatio: ratio } : {}),
-                    ...(poster
-                      ? { background: `url("${poster}") center / cover no-repeat` }
-                      : {}),
+                    ...(poster ? { background: `url("${poster}") center / cover no-repeat` } : {}),
                   }
             }
             playsInline
@@ -349,6 +402,26 @@ export function VideoPlayer({
           </div>
         ) : (
           <>
+            {steps?.previous && (
+              <button
+                type="button"
+                className="media-nav prev"
+                aria-label="Предыдущее вложение"
+                onClick={() => navigate(steps.previous!)}
+              >
+                <ChevronLeft size={30} />
+              </button>
+            )}
+            {steps?.next && (
+              <button
+                type="button"
+                className="media-nav next"
+                aria-label="Следующее вложение"
+                onClick={() => navigate(steps.next!)}
+              >
+                <ChevronRight size={30} />
+              </button>
+            )}
             <div className="video-viewer-head">
               <span title={name}>{name}</span>
               <button

@@ -1,4 +1,5 @@
 import { test, expect, type Locator } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 // Chromium's fake camera and microphone: never the user's real devices.
 test.use({
@@ -57,6 +58,107 @@ test('round video: record, attach, send and play', async ({ page, browserName })
   await note.click();
   await expect(note).toHaveClass(/playing/);
   await expect(page.locator('.chat-item').first()).toContainText('Вы: Кружок');
+  await note.click();
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'Голосовое-тест.m4a',
+    mimeType: 'audio/mp4',
+    buffer: await readFile('tests/fixtures/voice-webkit.m4a'),
+  });
+  await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+  const voice = page.locator('.messages .voice-player');
+  await voice.locator('.voice-play').click();
+  await expect(voice).toHaveAttribute('data-state', 'playing');
+  await note.click();
+  await expect(voice).not.toHaveAttribute('data-state', 'playing');
+  await expect(note).toHaveClass(/playing/);
+  await voice.locator('.voice-play').click();
+  await expect(note).not.toHaveClass(/playing/);
+  await expect(page.locator('.mini-player-title')).toContainText('Голосовое сообщение');
+});
+
+test('a video note switches exclusive cameras and keeps both scenes in one recording', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', 'Uses the Chromium fake microphone and canvas capture.');
+  await page.addInitScript(() => {
+    const devices = navigator.mediaDevices;
+    const microphone = devices.getUserMedia.bind(devices);
+    Object.defineProperty(devices, 'enumerateDevices', {
+      value: async () => ['front', 'back'].map((deviceId) => ({ kind: 'videoinput', deviceId })),
+    });
+    let previous: MediaStreamTrack | undefined;
+    Object.defineProperty(devices, 'getUserMedia', {
+      value: async (constraints: MediaStreamConstraints) => {
+        const exact = (
+          (constraints.video as MediaTrackConstraints)?.deviceId as ConstrainDOMStringParameters
+        )?.exact;
+        const id = exact === 'back' ? 'back' : 'front';
+        if (previous?.readyState === 'live')
+          throw new DOMException('Camera is busy', 'NotReadableError');
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 160;
+        const context = canvas.getContext('2d')!;
+        const stream = canvas.captureStream(20);
+        const track = stream.getVideoTracks()[0];
+        previous = track;
+        const draw = () => {
+          if (track.readyState !== 'live') return;
+          context.fillStyle = id === 'front' ? '#e10b0b' : '#0be10b';
+          context.fillRect(0, 0, 160, 160);
+          requestAnimationFrame(draw);
+        };
+        draw();
+        track.getSettings = () => ({
+          deviceId: id,
+          facingMode: id === 'front' ? 'user' : 'environment',
+        });
+        if (constraints.audio)
+          (await microphone({ audio: true }))
+            .getAudioTracks()
+            .forEach((audio) => stream.addTrack(audio));
+        return stream;
+      },
+    });
+  });
+  await page.goto('/?demo=1');
+  await page.getByRole('button', { name: 'Записать кружок', exact: true }).click();
+  const recording = page.getByRole('dialog', { name: 'Запись кружка' });
+  await expect(recording.locator('.recording-time')).toHaveText('0:01');
+  await recording.getByRole('button', { name: 'Сменить камеру' }).click();
+  await expect
+    .poll(() =>
+      recording
+        .locator('video')
+        .evaluate(
+          (video) =>
+            ((video as HTMLVideoElement).srcObject as MediaStream).getVideoTracks()[0].getSettings()
+              .deviceId,
+        ),
+    )
+    .toBe('back');
+  await expect(recording.locator('.recording-time')).toHaveText('0:03');
+  await recording.getByRole('button', { name: 'Завершить кружок' }).click();
+  await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+  const note = page.locator('.video-note video');
+  await expect(page.locator('.video-note-time')).toHaveText(/0:0[3-5]/);
+  const frames = await note.evaluate(async (element: HTMLVideoElement) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext('2d')!;
+    const frame = async (second: number) => {
+      const sought = new Promise<void>((done) =>
+        element.addEventListener('seeked', () => done(), { once: true }),
+      );
+      element.currentTime = second;
+      await sought;
+      ctx.drawImage(element, 0, 0, 1, 1);
+      const [red, green] = ctx.getImageData(0, 0, 1, 1).data;
+      return red > green ? 'front' : 'back';
+    };
+    return [await frame(0.4), await frame(element.duration - 0.3)];
+  });
+  expect(frames).toEqual(['front', 'back']);
 });
 
 test('video keeps its position and element when fullscreen rotates', async ({
@@ -90,7 +192,22 @@ test('video keeps its position and element when fullscreen rotates', async ({
   await expect(page.locator('.pending-file .video-inline button')).toHaveCount(1);
   await expect(page.getByRole('slider', { name: 'Позиция видео' })).toBeVisible();
   await expect(page.getByRole('slider', { name: 'Громкость видео' })).toHaveCount(0);
-  await page.getByRole('dialog', { name: /^Отправить/ }).getByRole('button', { name: 'Отправить', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: /^Отправить/ })
+    .getByRole('button', { name: 'Отправить', exact: true })
+    .click();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'after-video.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWT0AAAAASUVORK5CYII=',
+      'base64',
+    ),
+  });
+  await page
+    .getByRole('dialog', { name: /^Отправить/ })
+    .getByRole('button', { name: 'Отправить', exact: true })
+    .click();
   const video = page.locator('.video-player video');
   await expect(video).toHaveCount(1);
   await page.getByRole('button', { name: 'Воспроизвести видео', exact: true }).click();
@@ -125,6 +242,21 @@ test('video keeps its position and element when fullscreen rotates', async ({
   await expect(page.locator('.video-player:modal')).toHaveCount(0);
   await expect(page.getByRole('slider', { name: 'Громкость видео' })).toHaveCount(0);
   await expect(video).toHaveAttribute('data-original', 'true');
+
+  await page
+    .getByRole('button', { name: 'Открыть видео', exact: true })
+    .click({ position: { x: 24, y: 40 } });
+  await page.keyboard.press('ArrowRight');
+  const viewer = page.getByRole('dialog', { name: 'Просмотр фотографии' });
+  await expect(viewer).toContainText('2 из 2');
+  await viewer.getByRole('button', { name: 'Предыдущее вложение' }).click();
+  const galleryVideo = page.getByRole('dialog', { name: 'Видео video.webm' });
+  await expect(galleryVideo).toBeVisible();
+  await expect(galleryVideo.getByRole('combobox', { name: 'Скорость видео' })).toBeVisible();
+  await galleryVideo.getByRole('button', { name: 'Следующее вложение' }).click();
+  await expect(viewer).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('dialog:modal')).toHaveCount(0);
 });
 
 test('photo viewer zooms and resets; dialogs survive a text selection dragged outside', async ({
@@ -145,7 +277,10 @@ test('photo viewer zooms and resets; dialogs survive a text selection dragged ou
       'base64',
     ),
   });
-  await page.getByRole('dialog', { name: /^Отправить/ }).getByRole('button', { name: 'Отправить', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: /^Отправить/ })
+    .getByRole('button', { name: 'Отправить', exact: true })
+    .click();
   await page.getByRole('button', { name: 'Открыть фото zoom.png', exact: true }).click();
   const viewer = page.getByRole('dialog', { name: 'Просмотр фотографии', exact: true });
   await page.setViewportSize({ width: 320, height: 640 });

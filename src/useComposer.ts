@@ -9,7 +9,7 @@ import {
   type MutableRefObject,
   type SetStateAction,
 } from 'react';
-import { api, ApiError, upload, uploadInParts } from './api';
+import { api, ApiError, originalAudioQuery, upload, uploadInParts } from './api';
 import { compressImage, measureMedia } from './image';
 import type { Transfer } from './AttachmentPreview';
 import type { Attachment, Chat, LinkPreview, Message, Person } from './types';
@@ -40,13 +40,14 @@ function isTikTokLink(rawUrl: string): boolean {
  * the server's id of a big upload in progress, so a retry continues it.
  */
 type PendingFile = { file: File; source?: File; uploaded?: Attachment; resume?: { id?: string } };
+function discardUpload(item?: PendingFile) {
+  if (item?.resume?.id && !item.uploaded)
+    void api(`/uploads/${item.resume.id}`, 'DELETE').catch(() => {});
+}
 const MAX_FILES = 10;
 const MAX_BYTES = 100 * 1024 * 1024;
 /** Bigger files go in resumable parts. */
 const SMALL_FILE = 4 * 1024 * 1024;
-/** A recorded voice message, a circle or an audio file is sent alone, with its player. */
-const recorded = (file: File) =>
-  /^(Голосовое-|Кружок)/.test(file.name) || file.type.startsWith('audio/');
 /** Photos and videos sent together are drawn as one album. */
 const albumable = (file: { name: string; mime?: string }) =>
   /^(image|video)\//.test(file.mime || '') && !file.name.startsWith('Кружок');
@@ -282,7 +283,11 @@ export function useComposer({
     if (!me || !activeId || (lastSyncedDrafts.current[activeId] ?? '') === draft) return;
     const chatId = activeId,
       value = draft;
-    pendingDraft.current = { chatId, value, timer: setTimeout(() => pushDraft(chatId, value), 600) };
+    pendingDraft.current = {
+      chatId,
+      value,
+      timer: setTimeout(() => pushDraft(chatId, value), 600),
+    };
   }, [draft, activeId, me?.id, pushDraft]);
 
   useEffect(() => {
@@ -296,9 +301,7 @@ export function useComposer({
 
   const detectedUrl = !edit && !attachment ? extractComposerUrl(draft) : null;
   const tiktokUrl =
-    detectedUrl && isTikTokLink(detectedUrl) && !dismissedTikTok[detectedUrl]
-      ? detectedUrl
-      : null;
+    detectedUrl && isTikTokLink(detectedUrl) && !dismissedTikTok[detectedUrl] ? detectedUrl : null;
 
   useEffect(() => {
     if (!detectedUrl || tiktokUrl || dismissedPreviewUrl === detectedUrl) {
@@ -394,47 +397,63 @@ export function useComposer({
     }
   }
 
-  /**
-   * Adds a file to the message; `original` swaps a shrunk photo for its full-size source.
-   * `sendNow`: a voice message recorded by holding the button.
-   */
-  async function attachFile(source: File, original = false, sendNow = false) {
+  /** Prepare the entire selection before it can be sent. A mixed batch becomes separate messages. */
+  async function attachFiles(sources: File[], original = false, sendNow = false) {
     const id = activeId;
-    if (!id || edit || sending) return;
-    if (sendNow) autoSend.current = id;
-    else if (!original && albumable({ name: source.name, mime: source.type })) setReviewing(id);
-    const file = original ? source : await compressImage(source);
-    if (file.size > MAX_BYTES) {
-      onError('Файл больше 100 МБ.');
-      return;
-    }
-    const item: PendingFile = { file, source: file === source ? undefined : source };
-    const list = attachments[id] ?? [];
-    if (!original && list.length >= MAX_FILES && !recorded(file)) {
+    if (!id || !sources.length || edit || sendingChats.current.has(id)) return;
+    const existing = attachments[id] ?? [];
+    // Choosing one new audio take replaces the single take already in the player.
+    const replace =
+      original ||
+      (existing.length === 1 &&
+        sources.length === 1 &&
+        existing[0].file.type.startsWith('audio/') &&
+        sources[0].type.startsWith('audio/'));
+    if (!replace && existing.length + sources.length > MAX_FILES) {
+      setReviewing(null);
       onError('В одном сообщении не больше 10 файлов.');
       return;
     }
-    setAttachments((previous) => {
-      const current = previous[id] ?? [];
-      const alone = original || recorded(file) || current.some((entry) => recorded(entry.file));
-      return { ...previous, [id]: alone ? [item] : [...current, item].slice(0, MAX_FILES) };
-    });
-    setTransfers((previous) => {
-      const next = { ...previous };
-      delete next[id];
-      return next;
-    });
-    delete nonces.current[id];
-  }
-
-  async function attachFiles(files: File[]) {
-    for (const file of files.slice(0, MAX_FILES)) await attachFile(file);
+    sendingChats.current.add(id);
+    setSendingIds([...sendingChats.current]);
+    try {
+      const items: PendingFile[] = [];
+      for (const source of sources) {
+        const file = original ? source : await compressImage(source);
+        if (file.size > MAX_BYTES) {
+          setReviewing(null);
+          onError(`Файл «${source.name}» больше 100 МБ.`);
+          return;
+        }
+        items.push({ file, source: file === source ? undefined : source });
+      }
+      if (replace) discardUpload(existing[0]);
+      setAttachments((previous) => ({
+        ...previous,
+        [id]: replace ? items : [...(previous[id] ?? []), ...items],
+      }));
+      setTransfers((previous) => {
+        const next = { ...previous };
+        delete next[id];
+        return next;
+      });
+      if (sendNow) autoSend.current = id;
+      else if (!original && sources.some((file) => albumable({ name: file.name, mime: file.type })))
+        setReviewing(id);
+      delete nonces.current[id];
+    } catch (error) {
+      report(error);
+    } finally {
+      sendingChats.current.delete(id);
+      setSendingIds([...sendingChats.current]);
+    }
   }
 
   /** An edited photo takes the place of the one it was made from. */
   function replaceAttachment(index: number, file: File) {
     const id = activeId;
     if (!id) return;
+    discardUpload(attachments[id]?.[index]);
     setAttachments((previous) => {
       const list = previous[id];
       if (!list?.[index]) return previous;
@@ -454,6 +473,7 @@ export function useComposer({
   function removeAttachment(index = 0) {
     if (!activeId) return;
     const id = activeId;
+    discardUpload(attachments[id]?.[index]);
     setAttachments((previous) => {
       const next = { ...previous };
       const rest = (next[id] ?? []).filter((_, position) => position !== index);
@@ -527,8 +547,7 @@ export function useComposer({
         local,
       ]);
     }
-    const skipPreview =
-      !special && Boolean(detectedUrl && dismissedPreviewUrl === detectedUrl);
+    const skipPreview = !special && Boolean(detectedUrl && dismissedPreviewUrl === detectedUrl);
     if (!nonce) {
       if (!special) {
         pushDraft(id, '');
@@ -576,12 +595,11 @@ export function useComposer({
       await saveEdit();
       return;
     }
-    if (!activeId || (!draft.trim() && !attachment)) return;
+    if (!activeId || sendingChats.current.has(activeId) || (!draft.trim() && !attachment)) return;
     if (!attachment) {
       sendText(activeId, draft.trim(), replies[activeId], undefined, silent);
       return;
     }
-    if (sendingChats.current.has(activeId)) return;
     setReviewing(null);
     const id = activeId,
       text = draft.trim(),
@@ -617,13 +635,20 @@ export function useComposer({
             for (const [key, value] of Object.entries(meta))
               if (value !== undefined) form.append(key, String(value));
             form.append('file', item.file);
-            file = await upload<Attachment>(`/chats/${id}/files`, form, report);
+            file = await upload<Attachment>(
+              `/chats/${id}/files${originalAudioQuery(item.file)}`,
+              form,
+              report,
+            );
           }
           const uploaded = file;
           // Keep what is already uploaded, so a retry sends only the rest.
           setAttachments((prev) =>
             prev[id]?.[index]?.file === item.file
-              ? { ...prev, [id]: prev[id].map((entry, i) => (i === index ? { ...entry, uploaded } : entry)) }
+              ? {
+                  ...prev,
+                  [id]: prev[id].map((entry, i) => (i === index ? { ...entry, uploaded } : entry)),
+                }
               : prev,
           );
         }
@@ -817,16 +842,10 @@ export function useComposer({
     chooseMention,
     startReply,
     startEdit,
-    attachFile,
     attachFiles,
     removeAttachment,
     replaceAttachment,
-    reviewing: Boolean(
-      activeId &&
-        reviewing === activeId &&
-        pendingFiles.length &&
-        !pendingFiles.some((item) => recorded(item.file)),
-    ),
+    reviewing: Boolean(activeId && reviewing === activeId && pendingFiles.length),
     closeReview: () => setReviewing(null),
     cancelContext,
     send,

@@ -1,4 +1,4 @@
-FROM node:24-alpine AS build
+FROM node:24-alpine3.24 AS build
 WORKDIR /app
 ARG BUILD_SHA=
 ARG VITE_API_BASE=/api
@@ -8,9 +8,15 @@ RUN ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
-FROM node:24-alpine
+FROM node:24-alpine3.24
 # yt-dlp: last fallback for TikTok downloads.
-RUN apk add --no-cache ffmpeg yt-dlp
+RUN apk add --no-cache ffmpeg yt-dlp whisper.cpp
+# Multilingual Whisper base (Q5_1), packaged at build time for offline recognition.
+RUN mkdir -p /opt/whisper && wget -q -O /opt/whisper/base.bin \
+      https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base-q5_1.bin && \
+    echo '422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898  /opt/whisper/base.bin' | sha256sum -c -
+ENV WHISPER_MODEL=/opt/whisper/base.bin
+COPY packaging/whisper/LICENSE /opt/whisper/LICENSE
 ARG BUILD_SHA=
 ENV NODE_ENV=production PORT=3001 BUILD_SHA=$BUILD_SHA
 WORKDIR /app

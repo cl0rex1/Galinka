@@ -160,6 +160,10 @@ export async function upload<T>(
 
 // Small enough to arrive within the two-minute request limit on a slow phone connection.
 const PART = 2 * 1024 * 1024;
+// Keep a selected audio file in its original format. Older clients leave this unset
+// and their MediaRecorder uploads still receive the compatible AAC conversion.
+export const originalAudioQuery = (file: File) =>
+  file.type.startsWith('audio/') && !file.name.startsWith('Голосовое-') ? '?originalAudio=1' : '';
 /**
  * Sends a big file in 2 MB parts. After a dropped connection it asks the server how much
  * arrived and goes on from there; `resume.id` keeps the upload between attempts, so the
@@ -175,10 +179,15 @@ export async function uploadInParts<T>(
   let offset = 0;
   if (resume.id) {
     try {
-      offset = (await api<{ offset: number }>(`/uploads/${resume.id}`)).offset;
+      const status = await api<{ offset: number; file?: T }>(`/uploads/${resume.id}`);
+      if (status.file) {
+        onProgress(100);
+        return status.file;
+      }
+      offset = status.offset;
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 404)) throw error;
-      resume.id = undefined; // Expired or finished elsewhere: start again.
+      resume.id = undefined; // The unfinished upload expired.
     }
   }
   if (!resume.id) {
@@ -194,7 +203,7 @@ export async function uploadInParts<T>(
   }
   const id = resume.id;
   onProgress(Math.floor((offset / file.size) * 100));
-  for (let failures = 0, known = true; !known || offset < file.size; ) {
+  for (let failures = 0, known = true; !known || offset < file.size;) {
     const part = file.slice(offset, offset + PART);
     const start = offset;
     try {
@@ -221,5 +230,7 @@ export async function uploadInParts<T>(
       known = false;
     }
   }
-  return api<T>(`/uploads/${id}/finish`, 'POST', undefined, { timeoutMs: 120_000 });
+  return api<T>(`/uploads/${id}/finish${originalAudioQuery(file)}`, 'POST', undefined, {
+    timeoutMs: 120_000,
+  });
 }

@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { mkdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 const { version } = JSON.parse(
   readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
@@ -11,8 +10,7 @@ test('demo conversation and Nelya work; chat details and keyboard modal are usab
   await expect(
     page.getByRole('heading', { name: 'На выходные', exact: true }).first(),
   ).toBeVisible();
-  await mkdir('docs/screenshots', { recursive: true });
-  await page.screenshot({ path: 'docs/screenshots/desktop.png' });
+  await page.screenshot({ path: test.info().outputPath('desktop.png') });
   await page.getByRole('textbox', { name: 'Сообщение', exact: true }).fill('@неля монетка');
   await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
   await expect(page.locator('.bubble').last()).toContainText(/Выпало: (орёл|решка)/);
@@ -44,7 +42,7 @@ for (const width of [320, 375, 414, 768])
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true);
-    if (width === 375) await page.screenshot({ path: 'docs/screenshots/mobile.png' });
+    if (width === 375) await page.screenshot({ path: test.info().outputPath('mobile.png') });
     // The conversation slides in on phones; measure once it has settled.
     await expect
       .poll(async () => {

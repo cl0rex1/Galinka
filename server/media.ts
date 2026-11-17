@@ -2,11 +2,23 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { z } from 'zod';
 
 /** Largest file a resumable upload accepts; the single-request upload stays at 20 MB. */
 export const maxUploadBytes = 100 * 1024 * 1024;
+export const maxAccountFileBytes = 500 * 1024 * 1024;
+export async function fileUsage(db: PoolClient, userId: string) {
+  const {
+    rows: [usage],
+  } = await db.query(
+    `SELECT (SELECT COALESCE(sum(size),0) FROM files WHERE user_id=$1) + COALESCE(sum(size),0) AS total,
+       count(*)::int AS open FROM uploads WHERE user_id=$1`,
+    [userId],
+  );
+  return { bytes: Number(usage.total), open: Number(usage.open) };
+}
+export const videoPath = (directory: string, id: string) => path.join(directory, id + '.mp4');
 const bars = 48;
 
 /** Size and a tiny blurred preview the client measured before sending a photo or video. */
@@ -73,6 +85,10 @@ const safeInput = (format: string, source: string) => [
   '-hide_banner',
   '-loglevel',
   'error',
+  '-threads',
+  '2',
+  '-filter_threads',
+  '1',
   '-protocol_whitelist',
   'file,pipe',
   '-f',
@@ -141,6 +157,10 @@ export function videoArgs(source: string, mime: string, target: string, note: bo
     '96k',
     '-movflags',
     '+faststart',
+    // A file hitting this cutoff must also exceed the publication limit, since
+    // ffmpeg can return success when it stops at -fs before the end of a video.
+    '-fs',
+    String(2 * maxUploadBytes),
     '-f',
     'mp4',
     target,
@@ -162,38 +182,61 @@ export function startMediaWorker(
   async function next() {
     const { rows } = await pool.query(
       `UPDATE media_jobs j SET started_at=now(),attempts=attempts+1 FROM files f
-       WHERE j.file_id=(SELECT file_id FROM media_jobs WHERE attempts<3 AND (started_at IS NULL OR started_at<now()-interval '30 minutes')
-         ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) AND f.id=j.file_id
-       RETURNING f.id,f.mime,f.size,f.name`,
+       WHERE j.file_id=(SELECT mj.file_id FROM media_jobs mj JOIN files mf ON mf.id=mj.file_id
+         WHERE (mj.attempts<3 OR mf.converted_video) AND (mj.started_at IS NULL OR mj.started_at<now()-interval '30 minutes')
+         ORDER BY mj.created_at LIMIT 1 FOR UPDATE OF mj SKIP LOCKED) AND f.id=j.file_id
+       RETURNING f.id,f.mime,f.size,f.name,f.user_id,f.converted_video`,
     );
     const job = rows[0];
     if (!job) {
-      await pool.query(
-        "DELETE FROM media_jobs WHERE attempts>=3 AND started_at<now()-interval '30 minutes'",
+      const { rows: abandoned } = await pool.query(
+        `DELETE FROM media_jobs j USING files f WHERE f.id=j.file_id AND NOT f.converted_video
+         AND j.attempts>=3 AND j.started_at<now()-interval '30 minutes' RETURNING j.file_id`,
       );
+      for (const row of abandoned) await unlink(videoPath(directory, row.file_id)).catch(() => {});
       return false;
     }
     const source = path.join(directory, job.id);
     const target = `${source}.${randomUUID()}.mp4.part`;
+    async function retireOriginal() {
+      await unlink(source).catch((e: NodeJS.ErrnoException) => {
+        if (e.code !== 'ENOENT') throw e;
+      });
+      await pool.query('DELETE FROM media_jobs WHERE file_id=$1', [job.id]);
+    }
     try {
+      if (job.converted_video) {
+        await retireOriginal();
+        return true;
+      }
       await run(videoArgs(source, job.mime, target, job.name.startsWith('Кружок')), 15 * 60_000);
       const output = await stat(target);
       // Keep a smaller original unless the format itself is the problem.
-      let replace = output.size > 0 && (job.mime === 'video/webm' || output.size < job.size);
+      let replace =
+        output.size > 0 &&
+        output.size <= maxUploadBytes &&
+        (job.mime === 'video/webm' || output.size < job.size);
       const db = await pool.connect();
       try {
         await db.query('BEGIN');
-        // The row lock makes a concurrent deletion wait, then remove the converted file.
+        if (replace && output.size > job.size) {
+          await db.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [job.user_id]);
+          const usage = await fileUsage(db, job.user_id);
+          replace = usage.bytes - job.size + output.size <= maxAccountFileBytes;
+        }
         const still = await db.query('SELECT 1 FROM files WHERE id=$1 FOR UPDATE', [job.id]);
         replace &&= Boolean(still.rowCount);
-        await db.query('DELETE FROM media_jobs WHERE file_id=$1', [job.id]);
         if (replace) {
+          // Prepare the new bytes before publishing the pointer. Readers of
+          // an uncommitted or rolled-back row still have the intact original.
+          await rename(target, videoPath(directory, job.id));
           await db.query(
-            `UPDATE files SET size=$2,mime='video/mp4',name=regexp_replace(name,'\\.[^.]+$','')||'.mp4' WHERE id=$1`,
+            `UPDATE files SET converted_video=true,size=$2,mime='video/mp4',name=regexp_replace(name,'\\.[^.]+$','')||'.mp4' WHERE id=$1`,
             [job.id, output.size],
           );
-          // Last before COMMIT: a failed rename rolls the row back to the original.
-          await rename(target, source);
+        } else {
+          await unlink(videoPath(directory, job.id)).catch(() => {});
+          await db.query('DELETE FROM media_jobs WHERE file_id=$1', [job.id]);
         }
         await db.query('COMMIT');
       } catch (error) {
@@ -202,7 +245,15 @@ export function startMediaWorker(
       } finally {
         db.release();
       }
-      if (replace) await changed(job.id);
+      if (replace) {
+        try {
+          await changed(job.id);
+        } finally {
+          // The queued row also records cleanup work after a crash or a reader
+          // still holding the old file on Windows.
+          await retireOriginal();
+        }
+      }
     } catch {
       console.error('Video conversion failed');
     } finally {

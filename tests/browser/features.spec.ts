@@ -197,7 +197,7 @@ test('real messenger features synchronize replies, edits, media and group permis
     await alice
       .locator('input[type="file"]')
       .setInputFiles({ name: 'friends.png', mimeType: 'image/png', buffer: imageBytes });
-    await alice.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
+    await alice.getByRole('dialog').getByRole('button', { name: 'Отправить', exact: true }).click();
     const preview = bob.getByRole('button', { name: 'Открыть фото friends.png', exact: true });
     await expect(preview.locator('img')).toHaveJSProperty('naturalWidth', 1);
     await preview.click();

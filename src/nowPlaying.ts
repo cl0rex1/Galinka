@@ -1,5 +1,10 @@
 import { useSyncExternalStore } from 'react';
 
+export const playbackEvent = 'galinka:voice-play';
+export function claimPlayback(element: HTMLMediaElement) {
+  window.dispatchEvent(new CustomEvent(playbackEvent, { detail: element }));
+}
+
 /** The voice message or round video playing in the feed, for the mini-player above the chat. */
 export type NowPlaying = { element: HTMLMediaElement; label: string };
 let current: NowPlaying | null = null;

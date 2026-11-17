@@ -119,7 +119,7 @@ export function useConversation({
     async (id: string, reset = false) => {
       if (activeRef.current !== id) return;
       const epoch = ++requestEpoch.current;
-      const data = await api<Message[]>(`/chats/${id}/messages`);
+      const data = await api<Message[]>(`/chats/${id}/messages?completeAlbums=1`);
       if (activeRef.current !== id || epoch !== requestEpoch.current) return;
       const previous = messagesRef.current;
       const latest = previous.at(-1);
@@ -154,7 +154,7 @@ export function useConversation({
       });
       // A non-overlapping window means over 60 new messages arrived while offline.
       // Expose older history again; retaining the old "fully loaded" flag would hide it.
-      if (reset || boundary < 0 || data.length < 60) setHasOlder(data.length === 60);
+      if (reset || boundary < 0 || data.length < 60) setHasOlder(data.length >= 60);
       if (data.length) await markRead(id, data.at(-1)!.id);
       return data;
     },
@@ -397,7 +397,7 @@ export function useConversation({
       setPaging(true);
       let data: { messages: Message[]; hasOlder: boolean; complete: boolean };
       try {
-        data = await api(`/chats/${id}/messages?${query}${before}`);
+        data = await api(`/chats/${id}/messages?completeAlbums=1&${query}${before}`);
       } catch (e) {
         if (activeRef.current === id && epoch === requestEpoch.current) report(e);
         return added;
@@ -431,7 +431,9 @@ export function useConversation({
     if (olderRequest.current?.id === id) return olderRequest.current.promise;
     setPaging(true);
     const epoch = requestEpoch.current;
-    const promise = api<Message[]>(`/chats/${id}/messages?before=${encodeURIComponent(oldest.id)}`)
+    const promise = api<Message[]>(
+      `/chats/${id}/messages?completeAlbums=1&before=${encodeURIComponent(oldest.id)}`,
+    )
       .then((data) => {
         if (activeRef.current !== id || epoch !== requestEpoch.current) return false;
         followBottom.current = false;
@@ -444,7 +446,7 @@ export function useConversation({
             ...data.filter((m) => !prev.some((old) => old.id === m.id)),
             ...prev,
           ]);
-          setHasOlder(data.length === 60);
+          setHasOlder(data.length >= 60);
         });
         return data.length > 0;
       })
@@ -472,19 +474,19 @@ export function useConversation({
   ) {
     const id = activeRef.current;
     if (remember && from && from !== messageId && !returnRef.current) setReturnTo(from);
+    const selector = `[data-message-id="${messageId}"], [data-album-messages~="${messageId}"]`;
     for (let page = 0; page < 40 && id === activeRef.current; page++) {
-      let row = scroller.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+      let row = scroller.current?.querySelector<HTMLElement>(selector);
       if (!row && scroller.current) {
-        const targetIndex = messagesRef.current.findIndex((m) => m.id === messageId);
-        if (targetIndex >= 0) {
+        if (messagesRef.current.some((m) => m.id === messageId)) {
           followBottom.current = false;
           setAwayFromBottom(true);
           scroller.current.dispatchEvent(
-            new CustomEvent('galinka:reveal', { detail: { index: targetIndex } }),
+            new CustomEvent('galinka:reveal', { detail: { messageId } }),
           );
           await new Promise((resolve) => setTimeout(resolve, 32));
           if (id !== activeRef.current) return;
-          row = scroller.current?.querySelector<HTMLElement>(`[data-message-id="${messageId}"]`);
+          row = scroller.current?.querySelector<HTMLElement>(selector);
         }
       }
       if (row) {

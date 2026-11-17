@@ -6,6 +6,8 @@ on:
 permissions:
   contents: write
 jobs:
+  verify:
+    uses: ./.github/workflows/checks.yml
   android:
     uses: ./.github/workflows/android.yml
     secrets: inherit
@@ -70,12 +72,13 @@ jobs:
             release/*.AppImage
             release/*.deb
             release/*.pkg.tar.zst
+            release/PKGBUILD
             release/latest*.yml
             release/*.blockmap
           if-no-files-found: error
   publish:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [package, android]
+    needs: [verify, package, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
