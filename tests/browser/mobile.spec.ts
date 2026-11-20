@@ -288,6 +288,9 @@ test('"Назад" on a phone slides the chat away and brings the list in from u
   // Mid-way both screens are on show.
   await expect(page.locator('.app-shell[data-swipe="back"]')).toHaveCount(1);
   await expect(page.locator('.sidebar')).toBeVisible();
+  const sidebar = (await page.locator('.sidebar').boundingBox())!;
+  const nav = (await page.locator('.app-nav').boundingBox())!;
+  expect(Math.abs(sidebar.y + sidebar.height - nav.y)).toBeLessThanOrEqual(1);
   await expect(page.locator('.app-shell.has-active')).toHaveCount(0);
   await expect(page.locator('.app-shell[data-swipe]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /На выходные/ })).toBeVisible();

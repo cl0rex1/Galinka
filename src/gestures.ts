@@ -23,6 +23,10 @@ export class EdgeDrag {
     layer.style.transition = 'none';
     layer.style.willChange = 'translate';
     shell?.setAttribute('data-swipe', 'back');
+    if (shell) {
+      const nav = shell.querySelector<HTMLElement>('.app-nav');
+      shell.style.setProperty('--back-nav-height', `${nav?.offsetHeight ?? 0}px`);
+    }
   }
   move(clientX: number) {
     const now = performance.now();
@@ -52,6 +56,7 @@ export class EdgeDrag {
       layer.style.removeProperty('will-change');
       shell?.removeAttribute('data-swipe');
       shell?.style.removeProperty('--back-progress');
+      shell?.style.removeProperty('--back-nav-height');
     };
     if (!motionAllowed()) {
       finish();

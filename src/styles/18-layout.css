@@ -253,7 +253,7 @@
   }
   .app-shell[data-swipe='back'] .sidebar {
     top: 0;
-    bottom: 0;
+    bottom: var(--back-nav-height, 0px);
   }
   .app-shell[data-swipe='back'] .app-nav {
     display: grid;
@@ -293,6 +293,17 @@
     margin-left: -18px;
     border-radius: var(--radius-pill);
     background: var(--color-paper-3);
+  }
+}
+
+/* WebKit zooms the entire page when a focused text field is smaller than 16px. */
+@supports (-webkit-touch-callout: none) {
+  @media (pointer: coarse) {
+    input:not([type='range']):not([type='checkbox']):not([type='radio']),
+    textarea,
+    select {
+      font-size: 16px !important;
+    }
   }
 }
 @property --back-progress {
