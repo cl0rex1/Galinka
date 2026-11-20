@@ -196,6 +196,8 @@ test('video keeps its position and element when fullscreen rotates', async ({
     .getByRole('dialog', { name: /^Отправить/ })
     .getByRole('button', { name: 'Отправить', exact: true })
     .click();
+  const video = page.locator('.video-player video');
+  await expect(video).toHaveCount(1);
   await page.locator('input[type="file"]').setInputFiles({
     name: 'after-video.png',
     mimeType: 'image/png',
@@ -208,8 +210,6 @@ test('video keeps its position and element when fullscreen rotates', async ({
     .getByRole('dialog', { name: /^Отправить/ })
     .getByRole('button', { name: 'Отправить', exact: true })
     .click();
-  const video = page.locator('.video-player video');
-  await expect(video).toHaveCount(1);
   await page.getByRole('button', { name: 'Воспроизвести видео', exact: true }).click();
   await expect
     .poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime))

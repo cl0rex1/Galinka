@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { accessSync, constants } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -63,7 +64,7 @@ test(
       assert.equal(tables[0]?.exists, true);
     } finally {
       await tempPool?.end().catch(() => {});
-      await adminPool.query(`DROP DATABASE IF EXISTS "${tempDbName}" WITH (FORCE)`).catch(() => {});
+      await adminPool.query(`DROP DATABASE IF EXISTS "${tempDbName}"`).catch(() => {});
       await adminPool.end();
     }
   },
@@ -203,9 +204,13 @@ test(
       assert.equal(afterClear.status, 200);
       assert.equal(afterClear.data.errors.length, 0);
     } finally {
-      server?.kill();
+      if (server && server.exitCode === null && server.signalCode === null) {
+        const exited = once(server, 'exit');
+        server.kill();
+        await exited;
+      }
       await db.end().catch(() => {});
-      await adminPool.query(`DROP DATABASE IF EXISTS "${tempDbName}" WITH (FORCE)`).catch(() => {});
+      await adminPool.query(`DROP DATABASE IF EXISTS "${tempDbName}"`).catch(() => {});
       await adminPool.end();
       await rm(directory, { recursive: true, force: true });
     }
