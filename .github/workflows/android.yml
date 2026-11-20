@@ -44,7 +44,10 @@ jobs:
           fi
       - name: Verify APK signature and camera permission
         run: |
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs release/*.apk
+          signature=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs release/*.apk)
+          printf '%s\n' "$signature"
+          # Android only installs an update signed with the same certificate as the published APK.
+          grep -Fx 'Signer #1 certificate SHA-256 digest: 94d1b617222d77b7d436890e583eebec3a59eb512a3d08e9f6afc590e69482cd' <<<"$signature"
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump permissions release/*.apk | grep -Fx "uses-permission: name='android.permission.CAMERA'"
       - name: Enable emulator acceleration
         run: sudo chmod 666 /dev/kvm
