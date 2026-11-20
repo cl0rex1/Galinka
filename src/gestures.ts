@@ -78,11 +78,9 @@ export class EdgeDrag {
         onLeave();
         return;
       }
-      // The screen under it is already in place: it must not play its own entrance again.
-      shell.setAttribute('data-swiped', '');
+      // Leave data-swipe in place until React switches panes to skip the list's entrance.
       onLeave();
       requestAnimationFrame(() => requestAnimationFrame(finish));
-      setTimeout(() => shell?.removeAttribute('data-swiped'), 450);
     }, duration);
   }
   cancel() {
@@ -173,11 +171,16 @@ export function useConversationGestures(options: {
         return;
       }
       if (dx < 12 || dx < Math.abs(dy) * 1.4) return;
+      const screen = event.currentTarget.closest<HTMLElement>('.workspace');
+      const shell = screen?.closest<HTMLElement>('.app-shell') ?? null;
+      if (shell?.hasAttribute('data-swipe')) {
+        reset();
+        return;
+      }
       current.horizontal = true;
       event.currentTarget.setPointerCapture(event.pointerId);
-      const screen = event.currentTarget.closest<HTMLElement>('.workspace');
       if (current.mode === 'back' && screen)
-        current.drag = new EdgeDrag(screen, screen.closest('.app-shell'), current.x);
+        current.drag = new EdgeDrag(screen, shell, current.x);
     }
     current.distance = Math.max(0, dx);
     current.drag?.move(event.clientX);
@@ -204,8 +207,12 @@ export function useConversationGestures(options: {
     reset();
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
-    if (drag) drag.release(activate, () => latest.current.onBack());
-    else if (activate) {
+    if (drag) {
+      const chatId = latest.current.chatId;
+      drag.release(activate, () => {
+        if (latest.current.chatId === chatId) latest.current.onBack();
+      });
+    } else if (activate) {
       if (current.mode === 'back') latest.current.onBack();
       else if (id) latest.current.onReply(id);
     }

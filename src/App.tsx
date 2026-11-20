@@ -638,8 +638,11 @@ export default function App() {
   const lastPane = useRef(pane);
   useLayoutEffect(() => {
     const el = shell.current;
-    if (el && lastPane.current !== pane)
-      el.dataset.nav = pane === 'chat' ? 'push' : lastPane.current === 'chat' ? 'pop' : '';
+    if (el && lastPane.current !== pane) {
+      if (pane === 'chat') el.dataset.nav = 'push';
+      else if (lastPane.current === 'chat' && !el.hasAttribute('data-swipe')) el.dataset.nav = 'pop';
+      else delete el.dataset.nav;
+    }
     lastPane.current = pane;
   }, [pane]);
 

@@ -234,32 +234,33 @@
    The chat follows the finger (gestures.ts) and the chat list shows through underneath, moving
    in from a little to the left, as in iOS. */
 @media (max-width: 800px), (max-width: 960px) and (max-height: 500px) and (pointer: coarse) {
-  .app-shell[data-swipe='back'] {
-    position: relative;
+  @media (pointer: fine) {
+    .app-shell.has-active[data-swipe='back'] {
+      position: relative;
+    }
   }
-  .app-shell[data-swipe='back'] .workspace {
+  .app-shell.has-active[data-swipe='back'] .workspace {
     position: relative;
     z-index: 2;
     box-shadow: -16px 0 32px var(--color-shadow-deep);
   }
-  .app-shell[data-swipe='back'] .sidebar,
-  .app-shell[data-swipe='back'] .app-nav {
+  .app-shell.has-active[data-swipe='back'] :is(.sidebar, .app-nav) {
     display: flex;
     position: absolute;
     left: 0;
     right: 0;
     z-index: 1;
+    pointer-events: none;
     translate: calc((var(--back-progress, 0) - 1) * 24%) 0;
   }
-  .app-shell[data-swipe='back'] .sidebar {
+  .app-shell.has-active[data-swipe='back'] .sidebar {
     top: 0;
     bottom: var(--back-nav-height, 0px);
   }
-  .app-shell[data-swipe='back'] .app-nav {
+  .app-shell.has-active[data-swipe='back'] .app-nav {
     display: grid;
     bottom: 0;
   }
-  .app-shell[data-swiped] :is(.sidebar, .app-nav),
   .chat-info[data-swiped] {
     animation: none !important;
   }

@@ -10,6 +10,14 @@
   overflow: hidden;
   background: var(--color-surface);
 }
+/* WebKit can pan the visual viewport as well as shrink it for the keyboard. */
+@media (pointer: coarse) {
+  .app-shell {
+    position: fixed;
+    inset-inline: 0;
+    top: var(--app-offset-top, 0px);
+  }
+}
 .sidebar {
   grid-area: sidebar;
   display: flex;

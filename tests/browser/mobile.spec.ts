@@ -78,21 +78,31 @@ test('composer stays accessible when keyboard shrinks the visual viewport and in
   const input = page.getByRole('textbox', { name: 'Сообщение', exact: true });
   await input.fill('Черновик с открытой клавиатурой');
   await input.focus();
-  await page.evaluate(() => {
+  // WebKit can pan the visible viewport while opening the keyboard to reveal the field.
+  const offset = 180;
+  await page.evaluate((top) => {
     Object.defineProperty(visualViewport!, 'height', { configurable: true, value: 430 });
+    Object.defineProperty(visualViewport!, 'offsetTop', { configurable: true, value: top });
     visualViewport!.dispatchEvent(new Event('resize'));
-  });
+    visualViewport!.dispatchEvent(new Event('scroll'));
+  }, offset);
   await expect
     .poll(async () => {
       const composer = await page.locator('.composer').boundingBox();
-      return composer!.y + composer!.height;
+      const bottom = composer!.y + composer!.height;
+      return bottom > offset + 400 && bottom <= offset + 430;
     })
-    .toBeLessThanOrEqual(430);
+    .toBe(true);
+  const header = (await page.locator('.chat-header:visible').boundingBox())!;
+  expect(header.y).toBeGreaterThanOrEqual(offset);
   await expect(input).toHaveValue('Черновик с открытой клавиатурой');
   await page.evaluate(() => {
+    (document.activeElement as HTMLElement).blur();
+    delete (visualViewport as unknown as Record<string, unknown>).offsetTop;
     delete (visualViewport as unknown as Record<string, unknown>).height;
     visualViewport!.dispatchEvent(new Event('resize'));
   });
+  await expect.poll(async () => (await page.locator('.app-shell').boundingBox())!.y).toBe(0);
   await page.setViewportSize({ width: 844, height: 390 });
   await insideViewport(page, '.composer');
   await page.getByRole('button', { name: 'Отправить сообщение', exact: true }).click();
@@ -242,6 +252,8 @@ test.describe('gestures on a phone', () => {
     await release();
     // 150 of 390 is past a third: the chat leaves.
     await expect(page.locator('.app-shell.has-active')).toHaveCount(0);
+    await expect(page.locator('.app-shell')).not.toHaveAttribute('data-nav', 'pop');
+    await expect(page.locator('.app-shell[data-swipe]')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /На выходные/ })).toBeVisible();
 
     // A short pull returns the chat to its place.
@@ -284,6 +296,12 @@ test('"Назад" on a phone slides the chat away and brings the list in from u
   await page.setViewportSize({ width: 390, height: 844 });
   await openChat(page);
   await settled(page);
+  await page.locator('.sidebar').evaluate((sidebar) => {
+    sidebar.addEventListener('animationstart', (event) => {
+      if (event.target === sidebar && event.animationName === 'pop-in')
+        sidebar.setAttribute('data-replayed-pop', '');
+    });
+  });
   await page.getByRole('button', { name: 'Назад к чатам', exact: true }).click();
   // Mid-way both screens are on show.
   await expect(page.locator('.app-shell[data-swipe="back"]')).toHaveCount(1);
@@ -294,4 +312,7 @@ test('"Назад" on a phone slides the chat away and brings the list in from u
   await expect(page.locator('.app-shell.has-active')).toHaveCount(0);
   await expect(page.locator('.app-shell[data-swipe]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /На выходные/ })).toBeVisible();
+  await expect(page.locator('.app-shell')).not.toHaveAttribute('data-nav', 'pop');
+  await settled(page);
+  await expect(page.locator('.sidebar')).not.toHaveAttribute('data-replayed-pop');
 });
