@@ -22,6 +22,7 @@ import { pipeline } from 'node:stream/promises';
 import { z, ZodError } from 'zod';
 import { digest, hashPassword, verifyPassword, readCookie } from './security.js';
 import { migrate } from './migrate.js';
+import { releaseDownloads } from './downloads.js';
 import { startTranscriptionWorker } from './transcription.js';
 import {
   fileUsage,
@@ -450,36 +451,22 @@ app.delete('/api/push/subscriptions', auth, async (req, res) => {
   res.json({ ok: true });
 });
 let releaseCache: { expires: number; value: unknown } | undefined;
+let releaseRefresh: ReturnType<typeof releaseDownloads> | undefined;
 app.get('/api/downloads', async (_req, res) => {
   if (releaseCache && releaseCache.expires > Date.now()) {
     res.json(releaseCache.value);
     return;
   }
   try {
-    const response = await fetch('https://api.github.com/repos/cl0rex1/Galinka/releases/latest', {
-      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Galinka' },
-      signal: AbortSignal.timeout(8000),
+    releaseRefresh ??= releaseDownloads().finally(() => {
+      releaseRefresh = undefined;
     });
-    if (!response.ok) {
-      res.status(503).json({ error: 'Релиз ещё готовится.' });
-      return;
-    }
-    const release = (await response.json()) as {
-      tag_name: string;
-      html_url: string;
-      assets: { name: string; browser_download_url: string; size: number }[];
-    };
-    const value = {
-      version: release.tag_name.replace(/^v/, ''),
-      url: release.html_url,
-      assets: release.assets
-        .filter((a) => /\.(exe|dmg|AppImage|deb|apk|pkg\.tar\.zst)$/.test(a.name))
-        .map((a) => ({ name: a.name, url: a.browser_download_url, size: a.size })),
-    };
+    const value = await releaseRefresh;
     releaseCache = { expires: Date.now() + 60000, value };
     res.json(value);
   } catch {
-    res.status(503).json({ error: 'Не удалось проверить сборки. Попробуйте позже.' });
+    if (releaseCache) res.json(releaseCache.value);
+    else res.status(503).json({ error: 'Не удалось проверить сборки. Попробуйте позже.' });
   }
 });
 async function createAccount(
