@@ -1,0 +1,108 @@
+/* ========== Avatar ========== */
+.avatar {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  font-weight: 600;
+  font-size: 18px;
+  text-transform: uppercase;
+  color: var(--tone-2-ink);
+  background: var(--tone-2-bg);
+  user-select: none;
+}
+/* "в сети" reads in the accent colour wherever a status is shown. */
+.is-online,
+.chat-heading p.is-online {
+  color: var(--color-accent);
+}
+/* A photo fills the circle; the green dot marks someone online. */
+.avatar {
+  position: relative;
+}
+.avatar > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+.avatar.online::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 10px;
+  aspect-ratio: 1;
+  min-width: 9px;
+  border-radius: 50%;
+  background: #3cc26d;
+  box-shadow: 0 0 0 2px var(--color-surface);
+  animation: badge-in var(--dur-medium) var(--ease-out);
+}
+.chat-item.selected .avatar.online::after {
+  box-shadow: 0 0 0 2px var(--color-selected);
+}
+.avatar.small {
+  width: 36px;
+  height: 36px;
+  font-size: var(--text-sm);
+}
+.avatar.small svg {
+  width: 17px;
+  height: 17px;
+}
+.avatar.large {
+  width: 88px;
+  height: 88px;
+  font-size: 30px;
+}
+.avatar.large svg {
+  width: 36px;
+  height: 36px;
+}
+.tone-0 {
+  color: var(--tone-0-ink);
+  background: var(--tone-0-bg);
+}
+.tone-1 {
+  color: var(--tone-1-ink);
+  background: var(--tone-1-bg);
+}
+.tone-2 {
+  color: var(--tone-2-ink);
+  background: var(--tone-2-bg);
+}
+.tone-3 {
+  color: var(--tone-3-ink);
+  background: var(--tone-3-bg);
+}
+.tone-4 {
+  color: var(--tone-4-ink);
+  background: var(--tone-4-bg);
+}
+.tone-5 {
+  color: var(--tone-5-ink);
+  background: var(--tone-5-bg);
+}
+.tone-text-0 {
+  color: var(--tone-0-ink);
+}
+.tone-text-1 {
+  color: var(--tone-1-ink);
+}
+.tone-text-2 {
+  color: var(--tone-2-ink);
+}
+.tone-text-3 {
+  color: var(--tone-3-ink);
+}
+.tone-text-4 {
+  color: var(--tone-4-ink);
+}
+.tone-text-5 {
+  color: var(--tone-5-ink);
+}

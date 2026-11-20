@@ -86,6 +86,7 @@ export function Composer({
     fileInput,
   } = composer;
 
+  const pickAsFile = useRef(false);
   const mentionPanel = usePresence(mentionOptions.length > 0, 160);
   const previousMentionOptions = useRef(mentionOptions);
   if (mentionOptions.length) previousMentionOptions.current = mentionOptions;
@@ -152,7 +153,8 @@ export function Composer({
               {shownContext.edit
                 ? shownContext.edit.message.body || shownContext.edit.message.file?.name
                 : plainText(shownContext.reply!.body) ||
-                  (shownContext.reply!.file && fileLabel(shownContext.reply!.file.name)) ||
+                  (shownContext.reply!.file &&
+                    fileLabel(shownContext.reply!.file.name, shownContext.reply!.file.as_file)) ||
                   'Сообщение'}
             </p>
           </div>
@@ -202,7 +204,7 @@ export function Composer({
       {composer.reviewing && !edit && (
         <AttachDialog
           key={active.id}
-          files={pendingFiles.map((item) => item.file)}
+          items={pendingFiles}
           caption={draft}
           onCaption={composer.changeDraft}
           onRemove={composer.removeAttachment}
@@ -210,6 +212,7 @@ export function Composer({
           onAddMore={() => {
             const input = fileInput.current;
             if (!input) return;
+            pickAsFile.current = false;
             input.accept = 'image/*,video/*';
             input.click();
           }}
@@ -219,7 +222,7 @@ export function Composer({
       )}
       {pendingFiles.length > 1 && !edit && (
         <AttachmentStrip
-          files={pendingFiles.map((item) => item.file)}
+          items={pendingFiles}
           transfer={transfer}
           onRetry={() => void composer.send()}
           onRemove={composer.removeAttachment}
@@ -228,10 +231,11 @@ export function Composer({
       {pendingFiles.length === 1 && !edit && (
         <AttachmentPreview
           file={attachment}
+          asFile={pendingFiles[0].asFile}
           transfer={transfer}
           original={attachmentSource && !transfer ? attachmentSource : undefined}
           onOriginal={() => {
-            if (attachmentSource) void composer.attachFiles([attachmentSource], true);
+            if (attachmentSource) void composer.attachFiles([attachmentSource], { original: true });
           }}
           onRetry={() => void composer.send()}
           onRemove={() => composer.removeAttachment(0)}
@@ -270,7 +274,8 @@ export function Composer({
           hidden
           onChange={(e) => {
             const files = [...(e.target.files ?? [])];
-            if (files.length) void composer.attachFiles(files);
+            if (files.length) void composer.attachFiles(files, { asFile: pickAsFile.current });
+            pickAsFile.current = false;
             e.target.value = '';
           }}
         />
@@ -281,11 +286,7 @@ export function Composer({
             </IconButton>
           ) : (
             <details className="chat-actions attachment-menu">
-              <summary
-                className="icon-button"
-                aria-label="Прикрепить файл"
-                onClick={toggleMenu}
-              >
+              <summary className="icon-button" aria-label="Прикрепить файл" onClick={toggleMenu}>
                 <Paperclip size={21} />
               </summary>
               <div className="chat-actions-menu">
@@ -298,10 +299,12 @@ export function Composer({
                   <button
                     type="button"
                     key={label}
+                    aria-label={label}
                     onClick={(event) => {
                       const input = fileInput.current;
                       if (!input) return;
                       closeMenu(event.currentTarget.closest('details')!);
+                      pickAsFile.current = label === 'Файл';
                       input.accept = accept;
                       input.click();
                     }}
@@ -312,6 +315,7 @@ export function Composer({
                 ))}
                 <button
                   type="button"
+                  aria-label="Опрос"
                   onClick={(event) => {
                     closeMenu(event.currentTarget.closest('details')!);
                     onOpenPoll();
@@ -348,11 +352,7 @@ export function Composer({
               }
             }}
             onKeyDown={(e) => {
-              if (
-                selectedMention &&
-                !e.nativeEvent.isComposing &&
-                e.nativeEvent.keyCode !== 229
-              ) {
+              if (selectedMention && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
                 if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
                   e.preventDefault();
                   setMentionIndex(
@@ -472,7 +472,7 @@ export function Composer({
             key={active.id}
             disabled={sending}
             onActive={() => onTyping('voice')}
-            onRecorded={(file, sendNow) => void composer.attachFiles([file], false, sendNow)}
+            onRecorded={(file, sendNow) => void composer.attachFiles([file], { sendNow })}
             onError={onError}
           />
         ) : (

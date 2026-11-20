@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
 import { api } from './api';
 import type { Announcement, Page } from './types';
 
@@ -31,30 +30,38 @@ export function Announcements() {
   }, [page]);
   useEffect(() => {
     void load();
-    return () => request.current?.abort();
+    // Back in the app after a while: the feed catches up by itself.
+    const visible = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    document.addEventListener('visibilitychange', visible);
+    return () => {
+      document.removeEventListener('visibilitychange', visible);
+      request.current?.abort();
+    };
   }, [load]);
   return (
     <section className="announcement-feed" aria-labelledby="announcements-title">
       <div className="announcement-heading">
-        <div>
-          <h2 id="announcements-title">Объявления</h2>
-        </div>
-        <button className="secondary" onClick={load} disabled={busy}>
-          <RefreshCw size={16} />
-          Обновить
-        </button>
+        <h2 id="announcements-title">Объявления</h2>
       </div>
       {error && (
         <p className="form-error" role="alert">
-          {error}
+          {error}{' '}
+          <button type="button" className="text-button" onClick={load} disabled={busy}>
+            Повторить
+          </button>
         </p>
       )}
-      {busy ? (
+      {busy && !data.items.length ? (
         <p role="status" className="muted">
           Загрузка…
         </p>
       ) : !error && !data.items.length ? (
-        <p className="muted">Объявлений пока нет.</p>
+        <p className="muted">
+          Объявлений пока нет. Здесь появятся новости от владельца сервера: обновления, планы и
+          важные изменения.
+        </p>
       ) : (
         data.page === page &&
         data.items.map((item) => (

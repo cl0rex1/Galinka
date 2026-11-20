@@ -1,0 +1,113 @@
+/* ========== Search filters and recent searches ========== */
+.search-filters {
+  display: grid;
+  gap: 8px;
+  padding: 2px 10px 8px;
+  border-bottom: 1px solid var(--color-rule);
+}
+.search-types {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.search-types button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 0 11px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-paper-2);
+}
+.search-types button.selected {
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+}
+.search-refine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+}
+.search-refine select {
+  flex: 1 1 140px;
+  min-width: 0;
+  min-height: 32px;
+}
+.search-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-muted);
+}
+.search-date input {
+  min-height: 32px;
+  padding: 0 6px;
+  border-radius: var(--radius-item);
+  font: inherit;
+  color: var(--color-ink);
+  background: var(--color-paper-2);
+  border: 0;
+}
+.search-reset {
+  min-height: 32px;
+  padding: 0 8px;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+.recent-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.recent-heading h3 {
+  font: inherit;
+}
+.recent-heading button {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-accent);
+}
+.recent-chats {
+  display: flex;
+  gap: 4px;
+  padding: 4px 6px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.recent-chats button {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  width: 68px;
+  flex-shrink: 0;
+  padding: 6px 2px;
+  border-radius: var(--radius-lg);
+  font-size: var(--text-xs);
+}
+.recent-chats button:hover {
+  background: var(--color-paper-2);
+}
+.recent-chats span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-row.recent-query {
+  align-items: center;
+  color: var(--color-ink);
+}
+.search-row.recent-query svg {
+  flex-shrink: 0;
+  margin: 0 6px;
+  color: var(--color-muted);
+}

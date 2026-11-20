@@ -146,6 +146,7 @@ async function desktopSession(page: Page) {
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
+  await page.getByRole('button', { name: 'Уведомления и звуки', exact: true }).click();
   await expect(page.getByRole('switch', { name: 'Пуш-уведомления' })).toHaveAttribute(
     'aria-checked',
     'true',

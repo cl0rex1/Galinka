@@ -1,0 +1,24 @@
+/* ========== Reduced motion: no travel, short fades only ==========
+   System setting or Galinka's own (html[data-motion='reduced']). Nothing moves across the screen
+   or scales; state changes keep a short fade of colour and opacity, so a change is still noticed.
+   Spinners (.spin) keep turning: they say work is going on. 0.01ms, not 0s, so animationend and
+   transitionend still fire for the code that waits for them. */
+@media (prefers-reduced-motion: reduce) {
+  *:not(.spin),
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-property: opacity, color, background-color, border-color, box-shadow !important;
+    transition-duration: var(--dur-press) !important;
+    scroll-behavior: auto !important;
+  }
+}
+html[data-motion='reduced'] *:not(.spin),
+html[data-motion='reduced'] *::before,
+html[data-motion='reduced'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-property: opacity, color, background-color, border-color, box-shadow !important;
+  transition-duration: var(--dur-press) !important;
+}

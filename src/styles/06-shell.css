@@ -1,0 +1,102 @@
+/* ========== Shell: sidebar with tab bar at its foot, conversation on the right ========== */
+.app-shell {
+  height: var(--app-height, 100dvh);
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'sidebar main'
+    'nav main';
+  overflow: hidden;
+  background: var(--color-surface);
+}
+.sidebar {
+  grid-area: sidebar;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--color-rule);
+  background: var(--color-surface);
+  padding-top: env(safe-area-inset-top);
+}
+.app-nav {
+  grid-area: nav;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--color-rule);
+  border-right: 1px solid var(--color-rule);
+  background: var(--color-surface);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.app-nav button {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  padding: 7px 4px 6px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+}
+.app-nav button.active {
+  color: var(--color-accent);
+}
+.app-nav button:hover:not(.active) {
+  color: var(--color-ink);
+}
+/* The chosen tab sits on a soft berry pill that grows out of the icon when the tab changes. */
+.app-nav button::before {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  width: 54px;
+  height: 30px;
+  margin-left: -27px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-soft);
+  opacity: 0;
+  scale: 0.5 0.9;
+  transition:
+    opacity var(--dur-short) ease,
+    scale var(--dur-medium) var(--ease-out);
+}
+.app-nav button.active::before {
+  opacity: 1;
+  scale: 1;
+}
+.app-nav button > :is(svg, span) {
+  position: relative;
+}
+.app-nav button > svg {
+  transition: scale var(--dur-press) var(--ease-out);
+}
+.app-nav button:active > svg {
+  scale: 0.88;
+}
+.nav-badge {
+  position: absolute;
+  z-index: 1;
+  top: 3px;
+  left: calc(50% + 7px);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 2px solid var(--color-surface);
+  box-sizing: content-box;
+  border-radius: var(--radius-pill);
+  color: #fff;
+  background: var(--color-recording);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 18px;
+}
+.workspace {
+  grid-area: main;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-conversation);
+}

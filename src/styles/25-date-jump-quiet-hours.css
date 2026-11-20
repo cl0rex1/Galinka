@@ -1,0 +1,62 @@
+/* ========== Jump to a date, @все, quiet hours ========== */
+.message-search .date-jump {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.message-text .message-mention.all {
+  color: var(--color-accent);
+  font-weight: 600;
+}
+.quiet-hours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+.quiet-hours label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-muted);
+}
+.quiet-hours input {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  font: inherit;
+  color: var(--color-ink);
+  background: var(--color-paper-2);
+}
+.info-section .settings-row select {
+  flex-shrink: 0;
+  max-width: 140px;
+}
+/* Form controls are full-width by default; these sit inline. */
+.search-refine select,
+.search-date input,
+.quiet-hours input,
+.info-section .settings-row select {
+  width: auto;
+  min-height: 34px;
+  padding: 4px 8px;
+}
+.search-refine select {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+/* Author on its own line, the two days side by side under it. */
+.search-refine select {
+  flex-basis: 100%;
+}
+.search-date {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.search-date input {
+  width: 100%;
+  min-width: 0;
+}

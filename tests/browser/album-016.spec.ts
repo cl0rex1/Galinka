@@ -67,6 +67,10 @@ test.describe('0.16.0 albums in the demo', () => {
     for (const index of [0, 1]) {
       await page.getByRole('button', { name: 'О чате', exact: true }).click();
       await page.locator('.chat-media .media-grid button').nth(index).click();
+      await page
+        .getByRole('dialog', { name: 'Просмотр фотографии' })
+        .getByRole('button', { name: 'Показать в чате' })
+        .click();
       await expect(row).toHaveClass(/flash/);
     }
     await row.locator('.message-text').click({ button: 'right' });
@@ -140,7 +144,10 @@ test('the chat profile lists shared media, files and links and opens the message
   await expect(section.getByText('Голосовых сообщений и кружков пока нет.')).toBeVisible();
   // A tap on an item shows that message in the conversation.
   await section.getByRole('tab', { name: 'Файлы' }).click();
-  await section.getByRole('button', { name: /отчёт\.pdf/ }).click();
+  const download = page.waitForEvent('download');
+  await section.getByRole('button', { name: 'Скачать отчёт.pdf' }).click();
+  expect((await download).suggestedFilename()).toBe('отчёт.pdf');
+  await section.getByRole('button', { name: 'Показать в чате' }).click();
   await expect(page.locator('.message-row.flash')).toHaveCount(1);
 });
 

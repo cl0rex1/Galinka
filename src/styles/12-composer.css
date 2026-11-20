@@ -1,0 +1,495 @@
+/* ========== Composer: rounded field and a separate round send button ========== */
+.composer-wrap {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  /* One column that never grows past the screen: a long unbroken file name in the reply bar
+     used to widen it and push the send button off the edge. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  width: min(calc(var(--column-width) + 36px), 100%);
+  margin: 0 auto;
+  padding: 4px 18px max(14px, env(safe-area-inset-bottom));
+}
+.composer {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 0;
+}
+.composer-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  box-shadow: var(--bubble-shadow);
+}
+.composer textarea {
+  flex: 1;
+  min-height: 40px;
+  max-height: 180px;
+  padding: 9px 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  resize: none;
+  line-height: 1.4;
+}
+.composer textarea:hover {
+  border: 0;
+}
+.composer .icon-button {
+  border-radius: 50%;
+}
+.composer-field .icon-button:hover:not(:disabled) {
+  color: var(--color-accent);
+  background: transparent;
+}
+.send-button,
+.voice-button {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  box-shadow: var(--bubble-shadow);
+  animation: icon-in var(--dur-short) var(--ease-out);
+  transition:
+    background var(--dur-fast),
+    scale var(--dur-press) var(--ease-out);
+}
+.send-button {
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+}
+.send-button:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+.composer .voice-button,
+.composer .voice-button:hover:not(:disabled) {
+  color: var(--color-muted);
+  background: var(--color-surface);
+}
+@media (hover: hover) {
+  .composer .voice-button:hover:not(:disabled) {
+    color: var(--color-accent);
+  }
+}
+/* Send and microphone swap like one control: scale, fade, a little blur. */
+@keyframes icon-in {
+  from {
+    opacity: 0;
+    scale: 0.5;
+    filter: blur(2px);
+  }
+}
+.composer-context,
+.pending-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: 54px;
+  padding: 7px 4px 7px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--bubble-shadow);
+  animation: rise var(--dur-menu) var(--ease-out);
+}
+.composer-context > svg {
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+.composer-context div {
+  flex: 1;
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--color-accent);
+}
+.composer-context strong {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--color-accent);
+}
+.composer-context p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+}
+.pending-thumbnail {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  object-fit: cover;
+}
+.pending-file > svg {
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+.pending-file-content {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+.pending-file > button {
+  flex-shrink: 0;
+}
+.mention-options {
+  position: absolute;
+  z-index: 2;
+  inset: auto 48px calc(100% + 6px) 0;
+  padding: 4px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--float-shadow);
+  max-height: min(240px, 40dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform-origin: bottom left;
+  transition:
+    opacity var(--dur-short) var(--ease-out),
+    transform var(--dur-short) var(--ease-out);
+}
+.mention-options[data-closing] {
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+}
+@starting-style {
+  .mention-options:not([data-closing]) {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+.mention-options button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  text-align: left;
+  transition: background var(--dur-fast) ease;
+}
+.mention-options button:hover,
+.mention-options button.selected {
+  background: var(--color-selected);
+}
+.mention-options small {
+  color: var(--color-muted);
+}
+.attachment-menu .chat-actions-menu {
+  z-index: 3;
+  inset: auto auto calc(100% + 8px) 0;
+  transform-origin: bottom left;
+}
+.message-text .message-mention {
+  font-weight: 600;
+}
+.pending-file-content strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.pending-file-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+.pending-file.has-error .pending-file-status {
+  color: var(--color-error);
+}
+.emoji-wrap {
+  position: relative;
+}
+.emoji-picker {
+  position: absolute;
+  right: -6px;
+  bottom: calc(100% + 12px);
+  z-index: 20;
+  width: min(372px, calc(100vw - 24px));
+  height: min(440px, calc(var(--app-height, 100dvh) - 160px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform-origin: bottom right;
+}
+.emoji-picker.reaction-picker {
+  position: static;
+  width: 100%;
+  height: 300px;
+  box-shadow: none;
+  border-radius: 0;
+  background: transparent;
+}
+.emoji-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 8px 8px 0;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+}
+.emoji-tabs button {
+  flex: 1;
+  height: 28px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-muted);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.emoji-tabs button.selected {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.emoji-search-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 8px 2px;
+  padding: 0 12px;
+  height: 34px;
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+  color: var(--color-muted);
+  cursor: text;
+}
+.emoji-search-wrap input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: var(--text-md);
+  color: var(--color-ink);
+  outline: none;
+  box-shadow: none;
+}
+.emoji-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 8px 8px;
+  scrollbar-width: thin;
+}
+.emoji-scroll.gifs {
+  padding-top: 6px;
+}
+.emoji-section-label {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 10px 4px 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-surface);
+}
+.reaction-picker .emoji-section-label {
+  background: var(--color-surface);
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+}
+.emoji-grid button {
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  font-size: 26px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  transition:
+    background var(--dur-fast),
+    scale var(--dur-press) var(--ease-out);
+}
+.emoji-grid button:hover,
+.emoji-grid button:focus-visible {
+  background: var(--color-paper-2);
+}
+.emoji-grid button:active {
+  scale: 0.88;
+}
+.emoji-empty {
+  margin: 0;
+  padding: 32px 8px;
+  font-size: var(--text-md);
+  text-align: center;
+  color: var(--color-muted);
+}
+.sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 2px;
+}
+.sticker-pick {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-lg);
+  transition:
+    background var(--dur-fast),
+    scale var(--dur-press) var(--ease-out);
+}
+.sticker-pick:hover {
+  background: var(--color-paper-2);
+}
+.sticker-pick:active {
+  scale: 0.9;
+}
+.gif-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+.gif-pick {
+  padding: 0;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-paper-2);
+  transition: opacity var(--dur-fast);
+}
+.gif-pick:hover {
+  opacity: 0.85;
+}
+.emoji-categories {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px;
+  border-top: 1px solid var(--color-rule);
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+.emoji-categories::-webkit-scrollbar {
+  display: none;
+}
+.emoji-categories button {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  color: var(--color-muted);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.emoji-categories button:hover {
+  color: var(--color-ink);
+}
+.emoji-categories button.selected {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+.emoji-category-glyph {
+  font-size: 20px;
+  line-height: 1;
+}
+.sticker-lottie {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.sticker-lottie > svg {
+  position: absolute;
+  inset: 0;
+}
+.sticker-fallback {
+  line-height: 1;
+  transition: opacity var(--dur-fast);
+}
+.sticker-lottie.ready .sticker-fallback {
+  opacity: 0;
+}
+.voice-recorder {
+  display: contents;
+}
+.voice-recording {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 3px 3px 3px 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  box-shadow: var(--bubble-shadow);
+  animation: icon-in var(--dur-short) var(--ease-out);
+}
+.recording-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-recording);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.recording-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.recording-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.voice-finish {
+  min-height: 40px;
+  border-radius: var(--radius-pill);
+}
+/* 0.16: hold to record, pause, and the microphone's loudness while recording. */
+.voice-button {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.recording-dot.paused {
+  animation: none;
+  opacity: 0.4;
+}
+.recording-wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 24px;
+  flex: 0 1 112px;
+  min-width: 0;
+  overflow: hidden;
+}
+.recording-wave i {
+  flex: 0 0 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+}
+.voice-recording.holding {
+  box-shadow:
+    var(--bubble-shadow),
+    0 0 0 2px var(--color-recording);
+}

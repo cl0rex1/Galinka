@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Download,
   FileText,
+  MessageSquare,
   Play,
   X,
   ZoomIn,
@@ -40,16 +41,18 @@ const size = (bytes: number) =>
 const clock = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 /** Recorded voice and round videos carry a date in their file names; show what they are instead. */
-export const fileLabel = (name: string) =>
-  name.startsWith('Кружок')
-    ? 'Кружок'
-    : name.startsWith('Голосовое-')
-      ? 'Голосовое сообщение'
-      : /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(name)
-        ? 'Фотография'
-        : /\.(mp4|mov|webm|m4v)$/i.test(name)
-          ? 'Видео'
-          : name;
+export const fileLabel = (name: string, asFile?: boolean | null) =>
+  asFile
+    ? name
+    : name.startsWith('Кружок')
+      ? 'Кружок'
+      : name.startsWith('Голосовое-')
+        ? 'Голосовое сообщение'
+        : /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(name)
+          ? 'Фотография'
+          : /\.(mp4|mov|webm|m4v)$/i.test(name)
+            ? 'Видео'
+            : name;
 /** Round video messages are recorded by Galinka under this name. */
 export const isVideoNote = (file: { name: string; mime?: string }) =>
   /^video\//.test(file.mime || '') && file.name.startsWith('Кружок');
@@ -91,9 +94,9 @@ export function MediaAttachment({
   const url = fileUrl(file);
   const failed = Boolean(url && failedUrl === url);
   const mime = file.mime || '';
-  const image = /^image\/(png|jpeg|gif|webp)$/.test(mime) && url && !failed;
-  const audio = isAudioFile(file.name, mime) && url;
-  const video = /^video\/(mp4|webm|quicktime)$/.test(mime) && url && !failed;
+  const image = !file.as_file && /^image\/(png|jpeg|gif|webp)$/.test(mime) && url && !failed;
+  const audio = !file.as_file && isAudioFile(file.name, mime) && url;
+  const video = !file.as_file && /^video\/(mp4|webm|quicktime)$/.test(mime) && url && !failed;
   if (audio && url)
     return (
       <div className="media-attachment audio-attachment">
@@ -177,7 +180,7 @@ const viewerDate = new Intl.DateTimeFormat('ru', {
   hour: '2-digit',
   minute: '2-digit',
 });
-const fileUrl = (file: Attachment) =>
+export const fileUrl = (file: Attachment) =>
   isDemo()
     ? getDemoFileUrl(file.id)
     : `${API_BASE}/files/${encodeURIComponent(file.id)}?inline=1${file.mime?.startsWith('video/') ? `&v=${file.size}-${encodeURIComponent(file.mime)}` : ''}`;
@@ -189,6 +192,7 @@ type ViewerProps = {
   steps: GallerySteps;
   onDownload: (file: Attachment) => void;
   onClose: () => void;
+  onShowMessage?: () => void;
 };
 
 export function GalleryViewer(props: ViewerProps) {
@@ -202,6 +206,7 @@ export function GalleryViewer(props: ViewerProps) {
         name={file.name}
         steps={props.steps}
         onDismiss={props.onClose}
+        onShowMessage={props.onShowMessage}
       />
     );
   return <PhotoViewer {...props} />;
@@ -213,7 +218,15 @@ export function GalleryViewer(props: ViewerProps) {
  * around the pointer; dragging pans a zoomed photo; at normal size a vertical drag or a click
  * beside the photo closes the viewer.
  */
-function PhotoViewer({ item: photo, index, count, steps, onDownload, onClose }: ViewerProps) {
+function PhotoViewer({
+  item: photo,
+  index,
+  count,
+  steps,
+  onDownload,
+  onClose,
+  onShowMessage,
+}: ViewerProps) {
   const dialog = useRef<HTMLDialogElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const picture = useRef<HTMLImageElement>(null);
@@ -386,6 +399,17 @@ function PhotoViewer({ item: photo, index, count, steps, onDownload, onClose }: 
           <strong>{photo.sender.name}</strong>
           <span>{viewerDate.format(new Date(photo.at))}</span>
         </div>
+        {onShowMessage && (
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Показать в чате"
+            title="Показать в чате"
+            onClick={onShowMessage}
+          >
+            <MessageSquare size={20} />
+          </button>
+        )}
         <button
           type="button"
           className="icon-button"

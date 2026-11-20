@@ -1,0 +1,39 @@
+/* ========== Brand, boot ========== */
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-ink);
+  font-weight: 700;
+  font-size: var(--text-lg);
+  text-decoration: none;
+}
+.brand img {
+  width: 32px;
+  height: 32px;
+}
+.brand-dot {
+  color: var(--color-accent);
+}
+.boot,
+.app-loading {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: var(--color-paper);
+}
+.boot img {
+  animation: boot-in 400ms var(--ease-out) both;
+}
+@keyframes boot-in {
+  from {
+    opacity: 0;
+    scale: 0.9;
+  }
+}
+.app-loading {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  font-weight: 600;
+}

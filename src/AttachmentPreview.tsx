@@ -11,37 +11,40 @@ const formatSize = (bytes: number) =>
 export type Transfer = { phase: 'uploading' | 'sending' | 'error'; progress: number };
 /** Several files waiting in the composer: a strip of thumbnails, each with its own remove button. */
 export function AttachmentStrip({
-  files,
+  items,
   transfer,
   onRemove,
   onRetry,
 }: {
-  files: File[];
+  items: { file: File; asFile?: boolean }[];
   transfer?: Transfer;
   onRemove: (index: number) => void;
   onRetry: () => void;
 }) {
   const [urls, setUrls] = useState<string[]>([]);
   useEffect(() => {
-    const next = files.map((file) => URL.createObjectURL(file));
+    const next = items.map(({ file, asFile }) => (asFile ? '' : URL.createObjectURL(file)));
     setUrls(next);
-    return () => next.forEach((url) => URL.revokeObjectURL(url));
-  }, [files.map((file) => `${file.name}:${file.size}:${file.lastModified}`).join('|')]);
+    return () =>
+      next.forEach((url) => {
+        if (url) URL.revokeObjectURL(url);
+      });
+  }, [items]);
   const busy = transfer?.phase === 'uploading' || transfer?.phase === 'sending';
-  const total = files.reduce((sum, file) => sum + file.size, 0);
+  const total = items.reduce((sum, { file }) => sum + file.size, 0);
   return (
     <div className={`pending-strip ${transfer?.phase === 'error' ? 'has-error' : ''}`}>
       <ul>
-        {files.map((file, index) => (
+        {items.map(({ file, asFile }, index) => (
           <li key={`${index}:${file.name}:${file.size}`}>
-            {file.type.startsWith('image/') && urls[index] ? (
+            {!asFile && file.type.startsWith('image/') && urls[index] ? (
               <img src={urls[index]} alt={file.name} />
-            ) : file.type.startsWith('video/') && urls[index] ? (
+            ) : !asFile && file.type.startsWith('video/') && urls[index] ? (
               <video src={`${urls[index]}#t=0.1`} muted playsInline preload="metadata" />
             ) : (
               <span className="pending-strip-file" title={file.name}>
                 <FileText size={22} />
-                <small>{fileLabel(file.name)}</small>
+                <small>{fileLabel(file.name, asFile)}</small>
               </span>
             )}
             <button
@@ -64,7 +67,7 @@ export function AttachmentStrip({
             ? 'Отправка…'
             : transfer?.phase === 'uploading'
               ? `Загрузка ${transfer.progress}%`
-              : `Файлов: ${files.length} · ${formatSize(total)}`}
+              : `Файлов: ${items.length} · ${formatSize(total)}`}
         {transfer?.phase === 'error' && (
           <button type="button" className="text-button" onClick={onRetry}>
             Повторить
@@ -81,6 +84,7 @@ export function AttachmentStrip({
 export function AttachmentPreview({
   file,
   transfer,
+  asFile,
   original,
   onOriginal,
   onRemove,
@@ -88,6 +92,7 @@ export function AttachmentPreview({
 }: {
   file: File;
   transfer?: Transfer;
+  asFile?: boolean;
   original?: File;
   onOriginal?: () => void;
   onRemove: () => void;
@@ -95,16 +100,17 @@ export function AttachmentPreview({
 }) {
   const [preview, setPreview] = useState<{ file: File; url: string } | null>(null);
   const url = preview?.file === file ? preview.url : '';
-  const audio = isAudioFile(file.name, file.type);
-  const image = file.type.startsWith('image/');
-  const video = file.type.startsWith('video/');
+  const audio = !asFile && isAudioFile(file.name, file.type);
+  const image = !asFile && file.type.startsWith('image/');
+  const video = !asFile && file.type.startsWith('video/');
   const note = video && isVideoNote({ name: file.name, mime: file.type });
   const busy = transfer?.phase === 'uploading' || transfer?.phase === 'sending';
   useEffect(() => {
+    if (asFile) return;
     const next = URL.createObjectURL(file);
     setPreview({ file, url: next });
     return () => URL.revokeObjectURL(next);
-  }, [file]);
+  }, [file, asFile]);
   const label =
     transfer?.phase === 'error'
       ? 'Не отправлено'
@@ -134,13 +140,14 @@ export function AttachmentPreview({
         !audio && !video && <FileText size={22} />
       )}
       <div className="pending-file-content">
-        <strong title={file.name}>{fileLabel(file.name)}</strong>
+        <strong title={file.name}>{fileLabel(file.name, asFile)}</strong>
         {video && !note && url && <VideoPlayer key={url} src={url} name={file.name} compact />}
         {audio && url && (
           <AudioPlayer src={url} name={file.name} size={file.size} mime={file.type} compact />
         )}
         <span className="pending-file-status" role="status">
           {busy && <LoaderCircle size={13} className="spin" />}
+          {asFile && 'Файл · '}
           {label}
           {original && onOriginal && (
             <button type="button" className="text-button" onClick={onOriginal}>

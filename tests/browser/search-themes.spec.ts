@@ -61,7 +61,7 @@ test('a custom theme is created, applied, and travels by link to another browser
   });
   await page.goto('/?demo=1');
   await page.getByRole('button', { name: 'Настройки', exact: true }).click();
-  await page.getByRole('tab', { name: 'Оформление', exact: true }).click();
+  await page.getByRole('button', { name: 'Оформление', exact: true }).click();
   await page.getByRole('button', { name: 'Создать', exact: true }).click();
   const editor = page.getByRole('dialog', { name: 'Новая тема' });
   await editor.getByLabel('Название').fill('Мята');

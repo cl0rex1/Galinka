@@ -7,9 +7,11 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import { X } from 'lucide-react';
+import { isPhoneLayout } from './layout';
 
 export function IconButton({
   label,
@@ -58,6 +60,7 @@ export function Modal({
   const titleId = useId();
   const [closing, setClosing] = useState(false);
   const pressedOutside = useRef(false);
+  const sheet = useSheetDrag(() => requestClose());
   // Play the exit transition, then let the parent unmount the dialog.
   const requestClose = (force = false) => {
     if ((closeDisabled && !force) || closing) return;
@@ -84,7 +87,12 @@ export function Modal({
       // field and releasing the mouse over the backdrop must not dismiss the dialog.
       onPointerDown={(e) => {
         pressedOutside.current = outside(e);
+        sheet.onPointerDown(e);
       }}
+      onPointerMove={sheet.onPointerMove}
+      onPointerUp={sheet.onPointerUp}
+      onPointerCancel={sheet.onPointerCancel}
+      onClickCapture={sheet.onClickCapture}
       onClick={(e) => {
         if (pressedOutside.current && outside(e)) requestClose();
         pressedOutside.current = false;
@@ -170,6 +178,104 @@ export function Confirm({
       </div>
     </Modal>
   );
+}
+
+/**
+ * A bottom sheet on a phone follows the finger down and closes when pulled far enough or
+ * flicked. It is pulled by its head (with the grabber above the title), which does not scroll, so
+ * scrolling the content never closes it by accident. Spread the handlers on the <dialog>;
+ * `close` plays the usual exit from where the finger left it.
+ */
+/** Where a sheet can be grabbed: its head. CSS gives these `touch-action: none` on phones. */
+const SHEET_HANDLE = '.modal-head, .attach-dialog-head, .sheet-handle';
+export function useSheetDrag(close: () => void, enabled = true) {
+  const drag = useRef<{
+    pointer: number;
+    x: number;
+    y: number;
+    dy: number;
+    last: { y: number; t: number };
+    speed: number;
+    active: boolean;
+  } | null>(null);
+  const moved = useRef(false);
+  const settle = (dialog: HTMLElement) => {
+    dialog.style.transition = 'translate 260ms cubic-bezier(0.23, 1, 0.32, 1)';
+    dialog.style.translate = '0 0';
+    setTimeout(() => {
+      dialog.style.removeProperty('transition');
+      dialog.style.removeProperty('translate');
+    }, 280);
+  };
+  return {
+    onPointerDown(event: ReactPointerEvent<HTMLElement>) {
+      moved.current = false;
+      const target = event.target as Element;
+      if (
+        !enabled ||
+        event.pointerType === 'mouse' ||
+        !event.isPrimary ||
+        !isPhoneLayout() ||
+        !target.closest(SHEET_HANDLE) ||
+        target.closest('input, textarea, select, [role="slider"]')
+      )
+        return;
+      drag.current = {
+        pointer: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        dy: 0,
+        last: { y: event.clientY, t: performance.now() },
+        speed: 0,
+        active: false,
+      };
+    },
+    onPointerMove(event: ReactPointerEvent<HTMLElement>) {
+      const current = drag.current;
+      if (!current || current.pointer !== event.pointerId) return;
+      const dx = event.clientX - current.x;
+      current.dy = event.clientY - current.y;
+      if (!current.active) {
+        if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(current.dy)) return void (drag.current = null);
+        if (current.dy < -6) return void (drag.current = null);
+        if (current.dy < 10) return;
+        current.active = true;
+        moved.current = true;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        event.currentTarget.style.transition = 'none';
+      }
+      const now = performance.now();
+      current.speed = (event.clientY - current.last.y) / Math.max(1, now - current.last.t);
+      current.last = { y: event.clientY, t: now };
+      // Upwards it gives a little and resists.
+      const offset = current.dy > 0 ? current.dy : current.dy * 0.2;
+      event.currentTarget.style.translate = `0 ${offset}px`;
+    },
+    onPointerUp(event: ReactPointerEvent<HTMLElement>) {
+      const current = drag.current;
+      drag.current = null;
+      if (!current?.active || current.pointer !== event.pointerId) return;
+      const dialog = event.currentTarget;
+      const height = dialog.getBoundingClientRect().height;
+      if (current.dy > Math.min(140, height * 0.3) || (current.speed > 0.5 && current.dy > 30)) {
+        // The exit transition starts from where the finger left the sheet.
+        dialog.style.removeProperty('transition');
+        close();
+        requestAnimationFrame(() => dialog.style.removeProperty('translate'));
+      } else settle(dialog);
+    },
+    onPointerCancel(event: ReactPointerEvent<HTMLElement>) {
+      if (drag.current?.active) settle(event.currentTarget);
+      drag.current = null;
+    },
+    /** A drag is not a tap on whatever it started on. */
+    onClickCapture(event: React.MouseEvent) {
+      if (!moved.current) return;
+      moved.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+  };
 }
 
 /** True when a pointer event on a <dialog> landed on its backdrop, not on the card itself. */
@@ -325,4 +431,43 @@ export function toggleMenu(event: { preventDefault: () => void; currentTarget: E
   const details = event.currentTarget.closest('details')!;
   if (details.open && !details.hasAttribute('data-closing')) closeMenu(details);
   else openMenu(details);
+}
+
+/**
+ * What "Назад" closes next. A screen opened over another (a settings page, a panel) registers a
+ * handler while it is open; the Android back button and Esc run the newest one first.
+ */
+const backHandlers: (() => void)[] = [];
+export function useBackHandler(active: boolean, handler: () => void) {
+  const latest = useRef(handler);
+  latest.current = handler;
+  useEffect(() => {
+    if (!active) return;
+    const entry = () => latest.current();
+    backHandlers.push(entry);
+    return () => {
+      const index = backHandlers.lastIndexOf(entry);
+      if (index >= 0) backHandlers.splice(index, 1);
+    };
+  }, [active]);
+}
+/** Runs the newest back handler; false when nothing registered one. */
+export function runBackHandler() {
+  const handler = backHandlers.at(-1);
+  if (!handler) return false;
+  handler();
+  return true;
+}
+
+/**
+ * A short tap of the vibration motor on phones that have one: a gesture passed its point, a menu
+ * opened by a long press. Nothing on computers or when the person asked for less motion.
+ */
+export function haptic(strength: 'tick' | 'press' = 'tick') {
+  if (!matchMedia('(pointer: coarse)').matches || !motionAllowed()) return;
+  try {
+    navigator.vibrate?.(strength === 'tick' ? 6 : 14);
+  } catch {
+    /* Some browsers refuse vibration without a recent tap; that is fine. */
+  }
 }

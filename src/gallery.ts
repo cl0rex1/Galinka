@@ -4,7 +4,7 @@ import type { Attachment, Person } from './types';
 export type GalleryItem = {
   id: string;
   file: Attachment;
-  sender: Pick<Person, 'id' | 'name' | 'color' | 'avatar' | 'username'>;
+  sender: Pick<Person, 'name'> & Partial<Person>;
   at: string;
   caption?: string;
 };

@@ -1,0 +1,183 @@
+/* ========== Floating surfaces: menus, pickers ==========
+   Enter with the menu curve, leave faster; <details> keeps its content rendered while closing. */
+.chat-actions-menu,
+.message-menu-content,
+.emoji-picker {
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--float-shadow);
+  transition:
+    opacity var(--dur-fast) ease,
+    scale var(--dur-fast) var(--ease-in),
+    visibility var(--dur-fast);
+}
+.chat-actions[open] .chat-actions-menu,
+.message-menu[open] .message-menu-content,
+.emoji-picker.open {
+  transition-duration: var(--dur-menu);
+  transition-timing-function: var(--ease-out);
+}
+.chat-actions:not([open]) .chat-actions-menu,
+.message-menu:not([open]) .message-menu-content,
+.emoji-picker:not(.open) {
+  opacity: 0;
+  scale: 0.96;
+}
+.emoji-picker:not(.open) {
+  visibility: hidden;
+}
+.message-menu[data-closing] .message-menu-content,
+.chat-actions[data-closing] .chat-actions-menu {
+  pointer-events: none;
+}
+@starting-style {
+  .chat-actions[open] .chat-actions-menu,
+  .message-menu[open] .message-menu-content {
+    opacity: 0;
+    scale: 0.94;
+  }
+}
+
+/* A menu at a point (ContextMenu.tsx): same surface and items as the other menus; it grows out
+   of the press and fades out faster than it came. */
+.context-menu {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  width: max-content;
+  min-width: 220px;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--float-shadow);
+  transition:
+    opacity var(--dur-menu) var(--ease-out),
+    scale var(--dur-menu) var(--ease-out);
+}
+@starting-style {
+  .context-menu {
+    opacity: 0;
+    scale: 0.9;
+  }
+}
+.context-menu[data-closing] {
+  opacity: 0;
+  scale: 0.96;
+  pointer-events: none;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-in);
+}
+.context-menu button {
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 14px 0 10px;
+  border-radius: var(--radius-item);
+  font-size: var(--text-md);
+  font-weight: 500;
+  text-align: left;
+}
+.context-menu button:is(:hover, :focus-visible) {
+  outline: none;
+  background: var(--color-paper-2);
+}
+.context-menu svg {
+  color: var(--color-muted);
+}
+.context-menu .danger-text,
+.context-menu .danger-text svg {
+  color: var(--color-error);
+}
+@media (pointer: coarse) {
+  .context-menu button {
+    min-height: 46px;
+  }
+}
+
+/* ========== Modal: centered card on wide screens, bottom sheet on phones ========== */
+.modal,
+.media-dialog {
+  border: 0;
+  padding: 0;
+  color: var(--color-ink);
+  background: var(--color-surface);
+}
+.modal {
+  /* Top-anchored: a dialog that grows (search results, a folded field) grows downwards and its
+     controls stay where they were. Phones override this with the bottom sheet. */
+  margin: max(10vh, 24px) auto auto;
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(720px, calc(var(--app-height, 100dvh) - max(10vh, 24px) - 24px));
+  padding: 20px 22px 22px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--float-shadow);
+  overflow: auto;
+  overscroll-behavior: contain;
+  transition:
+    opacity var(--dur-modal) var(--ease-out),
+    scale var(--dur-modal) var(--ease-out),
+    translate var(--dur-push) var(--ease-sheet);
+}
+.modal[open] {
+  display: grid;
+  gap: var(--space-lg);
+  align-content: start;
+}
+@starting-style {
+  .modal[open] {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+.modal[data-closing] {
+  opacity: 0;
+  scale: 0.97;
+  transition-duration: var(--dur-exit);
+  pointer-events: none;
+}
+.modal[data-closing]::backdrop {
+  opacity: 0;
+  transition-duration: var(--dur-exit);
+}
+.modal::backdrop,
+.media-dialog::backdrop {
+  background: var(--color-overlay);
+  transition: opacity var(--dur-modal) var(--ease-out);
+}
+@starting-style {
+  .modal[open]::backdrop,
+  .media-dialog[open]::backdrop {
+    opacity: 0;
+  }
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin: -6px -10px 0 0;
+}
+.modal-head h2 {
+  font-size: var(--text-lg);
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+.install-steps {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+.install-steps dt {
+  font-weight: 600;
+}
+.install-steps dd {
+  margin: 0 0 8px;
+  color: var(--color-muted);
+}

@@ -1,10 +1,11 @@
-import { Bell, BellOff, QrCode, Search, Users, X } from 'lucide-react';
+import { ArrowLeft, Bell, BellOff, Pencil, QrCode, Search, X } from 'lucide-react';
 import { Avatar, seenText } from './Avatar';
 import { ChatMedia } from './ChatMedia';
+import { usePanelSwipeBack } from './gestures';
 import { ProfileHero } from './ProfileHero';
 import { CHAT_SOUNDS, playTone } from './sounds';
 import { IconButton } from './ui';
-import type { Chat, Person } from './types';
+import type { Attachment, Chat, Person } from './types';
 
 /** The "О чате" panel: profile, quick actions, members and Nelya. */
 export function ChatInfo({
@@ -20,6 +21,7 @@ export function ChatInfo({
   onSound,
   onSearch,
   onOpenMessage,
+  onDownload,
   onInvite,
   onManage,
   onPerson,
@@ -38,17 +40,28 @@ export function ChatInfo({
   onSearch: () => void;
   /** Show this message in the conversation. */
   onOpenMessage: (messageId: string) => void;
+  onDownload: (file: Attachment) => void;
   onInvite: () => void;
   onManage: () => void;
   onPerson: (person: Person) => void;
   onNelya: () => void;
 }) {
   const owner = chat.owner_id === meId;
+  const swipe = usePanelSwipeBack(onClose);
   return (
-    <aside className={`chat-info ${closing ? 'closing' : ''}`} aria-label="О чате" inert={closing}>
+    <aside
+      className={`chat-info ${closing ? 'closing' : ''}`}
+      aria-label="О чате"
+      inert={closing}
+      {...swipe}
+    >
+      {/* Phones show it as a screen of its own: back sits on the left, where the chat's back is. */}
       <div className="info-head">
+        <IconButton label="Закрыть информацию" className="info-back" onClick={onClose}>
+          <ArrowLeft size={22} />
+        </IconButton>
         <strong>О чате</strong>
-        <IconButton label="Закрыть информацию" onClick={onClose}>
+        <IconButton label="Закрыть информацию" className="info-close" onClick={onClose}>
           <X size={20} />
         </IconButton>
       </div>
@@ -74,14 +87,14 @@ export function ChatInfo({
               <QrCode size={20} />
               Пригласить
             </button>
-            <button onClick={onManage}>
-              <Users size={20} />
-              Управление
+            <button onClick={onManage} aria-label="Управление группой">
+              <Pencil size={20} />
+              Изменить
             </button>
           </>
         )}
       </div>
-      <ChatMedia key={chat.id} chatId={chat.id} onOpen={onOpenMessage} />
+      <ChatMedia key={chat.id} chatId={chat.id} onOpen={onOpenMessage} onDownload={onDownload} />
       {chat.kind !== 'saved' && (
         <div className="info-section">
           <h4>

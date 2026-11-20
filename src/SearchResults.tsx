@@ -292,7 +292,7 @@ export function SearchResults({
       {messages.length > 0 && <h3 className="results-heading">Сообщения</h3>}
       {messages.map((hit) => {
         const chat = chats.find((item) => item.id === hit.chat_id)!;
-        const text = hit.body || (hit.file ? fileLabel(hit.file.name) : '');
+        const text = hit.body || (hit.file ? fileLabel(hit.file.name, hit.file.as_file) : '');
         return (
           <button key={hit.id} className="search-row message-hit" onClick={() => onMessage(hit)}>
             <Avatar chat={chat} person={chat.peer} size="small" />

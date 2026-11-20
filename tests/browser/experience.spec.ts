@@ -38,6 +38,8 @@ test('touch gestures reply and return to chats without losing a draft or hijacki
     await input.blur();
     const area = (await page.locator('.messages').boundingBox())!;
     await swipe(15, area.y + area.height / 2, 135, 3);
+    // The chat slides away under the finger's momentum; then only the list is left.
+    await expect(page.locator('.app-shell.has-active')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /На выходные/ })).toBeVisible();
     await page.getByRole('button', { name: /На выходные/ }).click();
     await expect(input).toHaveValue('Черновик после свайпа');
@@ -79,6 +81,7 @@ async function signedIn(page: Page) {
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
+  await page.getByRole('button', { name: 'Уведомления и звуки', exact: true }).click();
 }
 
 test('browser push asks permission only on click, registers this session, and removes the subscription when disabled', async ({

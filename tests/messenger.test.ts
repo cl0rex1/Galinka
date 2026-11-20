@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
@@ -16,7 +16,9 @@ test(
   },
   async () => {
     const db = new Pool({ connectionString: database });
-    const directory = await mkdtemp(path.join(tmpdir(), 'galinka-messenger-'));
+    const temp = await mkdtemp(path.join(tmpdir(), 'galinka-messenger-'));
+    const directory = path.join(temp, '.local', 'uploads');
+    await mkdir(directory, { recursive: true });
     const base = 'http://localhost:3016';
     const invite = 'messenger-feature-test-invite';
     const accounts: string[] = [];
@@ -252,6 +254,15 @@ test(
       assert.equal(inline.headers.get('cross-origin-resource-policy'), 'same-origin');
       assert.equal(inline.headers.get('content-security-policy'), "default-src 'none'; sandbox");
       assert.deepEqual(Buffer.from(await inline.arrayBuffer()), imageBytes);
+      const avatarForm = new FormData();
+      avatarForm.append('file', new Blob([imageBytes], { type: 'image/png' }), 'avatar.png');
+      const account = await request('/me/avatar', 'POST', avatarForm, alice.cookie);
+      assert.equal(account.status, 200);
+      const avatar = await fetch(`${base}/api/avatars/${account.data.avatar}`, {
+        headers: { Cookie: bob.cookie },
+      });
+      assert.equal(avatar.status, 200);
+      assert.deepEqual(Buffer.from(await avatar.arrayBuffer()), imageBytes);
       const alternateOrigin = await fetch(
         `http://localhost:3017/api/files/${file.data.id}?inline=1`,
         {
@@ -284,6 +295,7 @@ test(
       const download = await fetch(`${base}/api/files/${fake.data.id}?inline=1`, {
         headers: { Cookie: alice.cookie },
       });
+      assert.equal(download.status, 200);
       assert.match(download.headers.get('content-disposition')!, /^attachment/);
       await download.arrayBuffer();
       const mp4Container = Buffer.from('00000018667479704d344120000000004d34412069736f6d', 'hex');
@@ -529,7 +541,7 @@ test(
         await db.query('DELETE FROM users WHERE id=ANY($1::uuid[])', [accounts]);
       }
       await db.end();
-      await rm(directory, { recursive: true, force: true });
+      await rm(temp, { recursive: true, force: true });
     }
   },
 );

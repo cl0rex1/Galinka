@@ -1,7 +1,7 @@
 import { test, expect, type BrowserContext } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -194,6 +194,27 @@ test('two real clients exchange group messages; retry and chat switching preserv
     await expect(alice.locator('.pending-file')).toContainText('private-note.txt');
     const files = await db.query('SELECT name FROM files WHERE user_id=$1', [accounts[0]]);
     expect(files.rows.map((row) => row.name)).toEqual(['group-note.txt']);
+
+    await alice.locator('.chat-list .chat-item', { hasText: group }).click();
+    await bob.getByLabel('Прикрепить файл', { exact: true }).tap();
+    const chooser = bob.waitForEvent('filechooser');
+    await bob.getByRole('button', { name: 'Файл', exact: true }).tap();
+    const name = 'Оригинал.m4a';
+    const padding = Buffer.alloc(5 * 1024 * 1024);
+    padding.writeUInt32BE(padding.length);
+    padding.write('free', 4);
+    const original = Buffer.concat([await readFile('tests/fixtures/voice-webkit.m4a'), padding]);
+    await (await chooser).setFiles({ name, mimeType: 'audio/mp4', buffer: original });
+    await expect(bob.locator('.pending-file')).toContainText(name);
+    await bob.getByRole('button', { name: 'Отправить сообщение', exact: true }).tap();
+    await expect(alice.locator('.file-attachment', { hasText: name })).toBeVisible();
+    await alice.getByRole('button', { name: 'О чате', exact: true }).click();
+    await alice.getByRole('tab', { name: 'Файлы', exact: true }).click();
+    const download = alice.waitForEvent('download');
+    await alice.getByRole('button', { name: 'Скачать ' + name }).click();
+    const received = await download;
+    expect(received.suggestedFilename()).toBe(name);
+    expect(await readFile((await received.path())!)).toEqual(original);
     expect(pageErrors).toEqual([]);
   } finally {
     releaseUpload?.();

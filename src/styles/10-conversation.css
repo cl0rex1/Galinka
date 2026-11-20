@@ -1,0 +1,809 @@
+/* ========== Conversation ========== */
+.conversation-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.conversation {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.messages {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 18px 6px;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  touch-action: pan-y pinch-zoom;
+}
+.message-list,
+.older-button,
+.conversation-empty {
+  width: min(var(--column-width), 100%);
+  margin: 0 auto;
+}
+/* Short conversations sit just above the composer. */
+.message-list {
+  flex-shrink: 0;
+  margin-top: auto;
+}
+.older-button {
+  display: block;
+  width: auto;
+  margin: 4px auto 12px;
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-pill-ink);
+  background: var(--color-pill);
+}
+.conversation-empty {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-sm);
+  margin-block: auto;
+}
+.conversation-empty p {
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  color: var(--color-pill-ink);
+  background: var(--color-pill);
+  font-size: var(--text-sm);
+}
+.messages-loading {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  padding: 12px 0 6px;
+}
+.messages-loading span,
+.chat-skeleton > span:first-child,
+.chat-skeleton i {
+  background:
+    linear-gradient(
+        100deg,
+        transparent 30%,
+        color-mix(in srgb, var(--color-surface) 70%, transparent) 50%,
+        transparent 70%
+      )
+      0 0 / 300% 100%,
+    var(--skeleton);
+  animation: shimmer 1.4s linear infinite;
+}
+.messages-loading span {
+  --skeleton: color-mix(in srgb, var(--color-message) 70%, transparent);
+  justify-self: start;
+  height: 38px;
+  margin-left: 44px;
+  border-radius: var(--radius-bubble);
+}
+.messages-loading span.own {
+  --skeleton: color-mix(in srgb, var(--color-outgoing) 75%, transparent);
+  justify-self: end;
+  margin: 0;
+}
+.messages-loading span:nth-child(4) {
+  height: 58px;
+}
+@keyframes shimmer {
+  from {
+    background-position:
+      150% 0,
+      0 0;
+  }
+  to {
+    background-position:
+      -150% 0,
+      0 0;
+  }
+}
+.chat-skeleton {
+  --skeleton: var(--color-paper-2);
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 7px 9px;
+}
+.chat-skeleton > span:first-child {
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+}
+.chat-skeleton > span:last-child {
+  flex: 1;
+  display: grid;
+  gap: 9px;
+}
+.chat-skeleton i {
+  height: 11px;
+  border-radius: var(--radius-sm);
+}
+.chat-skeleton i:first-child {
+  height: 13px;
+}
+/* Each day is a section; its date pill sticks to the top while that day scrolls past. */
+.date-divider {
+  position: sticky;
+  top: 6px;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  margin: 12px 0 6px;
+  pointer-events: none;
+}
+.date-divider span {
+  padding: 3px 11px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-pill-ink);
+  background: var(--color-pill);
+}
+.unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 8px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-accent);
+}
+/* A rule on both sides tells it apart from the date pills. */
+.unread-divider::before,
+.unread-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-accent-soft);
+}
+
+/* ---- Rows ---- */
+.message-row {
+  --swipe-distance: 0px;
+  --swipe-progress: 0;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+.message-row.continued {
+  margin-top: 2px;
+}
+.message-row.own {
+  justify-content: flex-end;
+}
+.message-avatar {
+  width: 36px;
+  flex-shrink: 0;
+}
+.message-list:not(.kind-group) .message-avatar {
+  display: none;
+}
+.message-content {
+  min-width: 0;
+  max-width: min(520px, 80%);
+  display: grid;
+  justify-items: start;
+}
+.own .message-content {
+  justify-items: end;
+}
+.sender-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 1px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.bot-tag {
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-paper-2);
+}
+
+/* ---- Bubbles: grouped corners and a tail on the last bubble of a run ---- */
+.bubble {
+  position: relative;
+  font-size: var(--message-size, var(--text-base));
+  max-width: 100%;
+  min-width: 0;
+  padding: 6px 10px 7px 11px;
+  border-radius: var(--radius-bubble);
+  color: var(--color-ink);
+  background: var(--color-message);
+  box-shadow: var(--bubble-shadow);
+  overflow-wrap: anywhere;
+  line-height: 1.38;
+}
+.message-row:not(.own).continued .bubble {
+  border-top-left-radius: var(--radius-join);
+}
+.message-row:not(.own):not(.last) .bubble {
+  border-bottom-left-radius: var(--radius-join);
+}
+.own .bubble {
+  color: var(--color-outgoing-ink);
+  background: var(--color-outgoing);
+}
+.own.continued .bubble {
+  border-top-right-radius: var(--radius-join);
+}
+.own:not(.last) .bubble {
+  border-bottom-right-radius: var(--radius-join);
+}
+.message-row.last .bubble::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: -8px;
+  width: 9px;
+  height: 17px;
+  background: inherit;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 17'%3E%3Cpath d='M9 0v17H1.6c-1.2 0-1.9-1.4-1.1-2.3C4.4 10.4 8.6 6.2 9 0z'/%3E%3C/svg%3E")
+    no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 9 17'%3E%3Cpath d='M9 0v17H1.6c-1.2 0-1.9-1.4-1.1-2.3C4.4 10.4 8.6 6.2 9 0z'/%3E%3C/svg%3E")
+    no-repeat;
+  -webkit-mask-size: 100% 100%;
+  mask-size: 100% 100%;
+}
+.message-row:not(.own).last .bubble {
+  border-bottom-left-radius: 0;
+}
+.own.last .bubble {
+  border-bottom-right-radius: 0;
+}
+.own.last .bubble::before {
+  left: auto;
+  right: -8px;
+  scale: -1 1;
+}
+.bot .bubble {
+  background: var(--color-surface);
+  outline: 1px dashed var(--color-selection-rule);
+  outline-offset: -1px;
+  box-shadow: none;
+}
+.message-text {
+  display: inline;
+  white-space: pre-wrap;
+}
+/* Reserve room at the end of the last line for the timestamp. */
+.message-text::after {
+  content: '';
+  display: inline-block;
+  width: 44px;
+}
+.own .message-text::after {
+  width: 62px;
+}
+.message-row:has(.message-edited) .message-text::after {
+  width: 112px;
+}
+.message-time {
+  position: absolute;
+  right: 10px;
+  bottom: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11.5px;
+  line-height: 1;
+  color: var(--color-muted);
+  white-space: nowrap;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+.own .message-time {
+  color: var(--color-outgoing-meta);
+}
+.bubble:not(:has(.message-text)) .message-time {
+  position: static;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.read-receipt {
+  display: inline-flex;
+  color: var(--color-receipt);
+}
+.message-text a {
+  color: var(--color-accent);
+  text-underline-offset: 2px;
+}
+.own .message-text a {
+  color: inherit;
+}
+.message-quote {
+  display: flex;
+  gap: 6px;
+  margin: 3px 0 5px;
+  padding: 4px 9px 5px;
+  border-left: 3px solid var(--color-accent);
+  border-radius: var(--radius-xs) var(--radius-item) var(--radius-item) var(--radius-xs);
+  background: var(--color-quote);
+  font-size: var(--text-md);
+  line-height: 1.3;
+}
+.message-quote > svg {
+  display: none;
+}
+.message-quote[role='button'] {
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.message-quote[role='button']:hover {
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+.message-quote div {
+  display: grid;
+  min-width: 0;
+}
+.message-quote strong {
+  color: var(--color-accent);
+  font-size: var(--text-sm);
+}
+.message-quote span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.reactions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 9px 0 7px;
+  border-radius: var(--radius-pill);
+  background: var(--color-pill);
+  font-size: var(--text-base);
+  transition: scale var(--dur-press) var(--ease-out);
+}
+.reactions button:active {
+  scale: 0.92;
+}
+.reactions button.mine {
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+}
+.reactions span {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-pill-ink);
+}
+.reactions button.mine span {
+  color: inherit;
+}
+/* A new message grows out of its corner while the whole list glides up to make room (App.tsx),
+   so the bubble itself does not travel. */
+.message-row.is-new > .message-content {
+  animation: arrive var(--dur-enter) var(--ease-out);
+  transform-origin: bottom left;
+}
+.message-row.own.is-new > .message-content {
+  transform-origin: bottom right;
+}
+@keyframes arrive {
+  from {
+    opacity: 0;
+    scale: 0.9;
+  }
+}
+/* Sending: a clock instead of the tick; failed: a red mark and a retry under the bubble. */
+.pending-mark {
+  opacity: 0.7;
+}
+.failed-mark {
+  color: var(--color-error);
+}
+.message-row:has(.failed-mark) .bubble {
+  opacity: 0.75;
+}
+.failed-actions {
+  order: -1;
+  align-self: center;
+  display: flex;
+  gap: 2px;
+  animation: icon-in var(--dur-short) var(--ease-out);
+}
+.failed-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  color: var(--color-error);
+  background: var(--color-pill);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.failed-actions button:last-child {
+  padding: 0 8px;
+}
+
+/* ---- Message menu: hover handle on desktop, long press on touch ---- */
+.message-menu {
+  align-self: center;
+}
+.message-menu > summary {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: var(--color-pill-ink);
+  list-style: none;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast),
+    background var(--dur-fast);
+}
+.message-row:hover .message-menu > summary,
+.message-menu[open] > summary,
+.message-menu > summary:focus-visible {
+  opacity: 1;
+}
+.message-menu > summary:hover,
+.message-menu[open] > summary {
+  background: var(--color-pill);
+}
+.own .message-menu {
+  order: -1;
+}
+.message-menu-content {
+  position: fixed;
+  z-index: 30;
+  top: var(--message-menu-y, 50%);
+  left: var(--message-menu-x, 50%);
+  width: min(272px, calc(100vw - 24px));
+  max-height: calc(var(--app-height, 100dvh) - 24px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  gap: 0;
+}
+.message-menu-content > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.message-menu-content > .reaction-bar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0 0 6px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--color-paper-2);
+}
+.message-menu-content > .reaction-bar button {
+  flex: 1;
+  min-width: 0;
+  aspect-ratio: 1;
+  max-height: 36px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 22px;
+  line-height: 1;
+  transition:
+    background var(--dur-fast),
+    scale var(--dur-press) var(--ease-out);
+}
+.message-menu-content > .reaction-bar button.mine {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+.message-menu-content > .reaction-bar .reaction-more-btn {
+  flex: 0 0 32px;
+  height: 32px;
+  font-size: var(--text-base);
+  color: var(--color-muted);
+}
+.message-menu-content > .reaction-bar button:hover {
+  scale: 1.18;
+}
+.message-menu-content > .reaction-bar .reaction-more-btn:hover {
+  scale: 1;
+  color: var(--color-ink);
+  background: var(--color-surface);
+}
+.message-menu-content > .reaction-bar button:active {
+  scale: 0.9;
+}
+.menu-people {
+  display: grid;
+  margin: 0 0 6px;
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--color-rule);
+}
+.menu-people.scroll {
+  max-height: min(360px, calc(var(--app-height, 100dvh) - 120px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.menu-person,
+.menu-people-summary,
+.menu-read-at {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 3px 10px 3px 6px;
+  border-radius: var(--radius-item);
+  font-size: var(--text-md);
+}
+.menu-read-at {
+  padding-left: 10px;
+  gap: 12px;
+  color: var(--color-muted);
+}
+.menu-read-at svg,
+.menu-people-summary > svg:first-child {
+  color: var(--color-accent);
+}
+.menu-person .avatar,
+.menu-avatar-stack .avatar {
+  width: 26px;
+  height: 26px;
+  font-size: var(--text-xs);
+  flex-shrink: 0;
+}
+.menu-person-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.menu-person-emoji {
+  font-size: 18px;
+  line-height: 1;
+}
+.menu-person time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+}
+.menu-people-summary {
+  width: 100%;
+  padding-left: 10px;
+  gap: 12px;
+  text-align: left;
+  font-weight: 500;
+}
+.menu-people-summary > span:not(.menu-avatar-stack, .menu-person-emoji) {
+  flex: 1;
+}
+.menu-people-summary:hover {
+  background: var(--color-paper-2);
+}
+.menu-people-summary > svg:last-child {
+  color: var(--color-muted);
+}
+.menu-avatar-stack {
+  display: flex;
+}
+.menu-avatar-stack .avatar {
+  width: 22px;
+  height: 22px;
+  margin-left: -7px;
+  box-shadow: 0 0 0 2px var(--color-surface);
+}
+.menu-avatar-stack .avatar:first-child {
+  margin-left: 0;
+}
+.menu-actions {
+  display: grid;
+}
+.menu-group {
+  display: grid;
+}
+.menu-group + .menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--color-rule);
+}
+.menu-group:empty {
+  display: none;
+}
+.menu-actions :is(.message-action, .delete-action) kbd {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-paper-2);
+}
+.menu-actions :is(.message-action, .delete-action):focus-visible {
+  outline: 0;
+  background: var(--color-paper-2);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+/* Touch: the keys mean nothing, and the rows grow to a finger. */
+@media (hover: none) {
+  .menu-actions kbd {
+    display: none;
+  }
+  .message-menu-content {
+    width: min(300px, calc(100vw - 24px));
+  }
+  .menu-actions :is(.message-action, .delete-action) {
+    min-height: 48px;
+    gap: 14px;
+    font-size: var(--text-base);
+  }
+  .message-menu-content > .reaction-bar button {
+    max-height: 42px;
+    font-size: 25px;
+  }
+}
+.menu-subheader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  margin-bottom: 4px;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+.menu-subheader button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--color-muted);
+}
+.menu-subheader button:hover {
+  color: var(--color-ink);
+  background: var(--color-paper-2);
+}
+.message-menu-content .emoji-picker.reaction-picker .emoji-scroll {
+  padding: 0;
+}
+.message-edited {
+  font-style: normal;
+  font-size: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.message-row:has(.message-menu[open]) .bubble {
+  filter: brightness(0.96);
+}
+:root[data-theme='dark'] .message-row:has(.message-menu[open]) .bubble {
+  filter: brightness(1.15);
+}
+/* Touch screens open the menu with a long press, as in Telegram: no dots beside every bubble. */
+@media (hover: none) {
+  .message-menu:not([open]) > summary {
+    display: none;
+  }
+}
+
+/* ---- Swipe to reply ---- */
+.message-row > .message-content,
+.message-row > .message-avatar {
+  translate: var(--swipe-distance) 0;
+  transition: translate var(--dur-medium) var(--ease-out);
+}
+.message-row[data-swiping] > .message-content,
+.message-row[data-swiping] > .message-avatar {
+  transition: none;
+}
+.swipe-reply-indicator {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: var(--color-pill-ink);
+  background: var(--color-pill);
+  opacity: var(--swipe-progress);
+  transform: translateY(-50%) scale(calc(0.6 + var(--swipe-progress) * 0.4));
+  pointer-events: none;
+}
+@media (hover: none) and (pointer: coarse) {
+  .message-row {
+    -webkit-touch-callout: none;
+  }
+  .message-row :is(.bubble, .sender-name) {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .message-text a {
+    -webkit-touch-callout: default;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+.jump-to-latest {
+  position: absolute;
+  right: 18px;
+  bottom: calc(100% + 10px);
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  box-shadow: var(--float-shadow);
+  transition:
+    opacity var(--dur-menu) var(--ease-out),
+    scale var(--dur-menu) var(--ease-out),
+    visibility var(--dur-menu);
+}
+.jump-to-latest:not(.shown) {
+  opacity: 0;
+  scale: 0.7;
+  visibility: hidden;
+}
+.jump-to-latest:active {
+  scale: 0.92;
+}
+.jump-to-latest b {
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  translate: -50% 0;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 22px;
+}
+.receipt-slot {
+  display: inline-flex;
+  align-items: center;
+}
+/* Far enough to reply: the arrow fills with the accent (and the phone ticks, gestures.ts). */
+.swipe-reply-indicator {
+  transition:
+    color var(--dur-fast),
+    background-color var(--dur-fast);
+}
+[data-armed] .swipe-reply-indicator {
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+}

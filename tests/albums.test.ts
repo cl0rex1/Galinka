@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
@@ -291,6 +291,83 @@ test(
         ),
         new Set(forwarded.data.ids),
       );
+
+      // Explicit file mode is persisted through a resumable upload and forwarding.
+      const recording = await readFile(new URL('./fixtures/voice-chromium.webm', import.meta.url));
+      const name = 'Голосовое-оригинал.webm';
+      const pending = await request(
+        `/chats/${chatId}/uploads`,
+        'POST',
+        { name, size: recording.length, type: 'audio/webm' },
+        alice.cookie,
+      );
+      const uploadId = pending.data.id;
+      const part = await fetch(`${base}/api/uploads/${uploadId}?offset=0`, {
+        method: 'PUT',
+        headers: { Cookie: alice.cookie, Origin: base },
+        body: recording,
+      });
+      assert.equal(part.status, 200);
+      const finished = await request(
+        `/uploads/${uploadId}/finish?asFile=1`,
+        'POST',
+        {},
+        alice.cookie,
+      );
+      assert.equal(finished.status, 201);
+      assert.equal(finished.data.as_file, true);
+      assert.equal(finished.data.name, name);
+      assert.equal(
+        (await request(`/uploads/${uploadId}`, 'GET', undefined, alice.cookie)).data.file.as_file,
+        true,
+      );
+      const imageForm = new FormData();
+      imageForm.append('file', new Blob([PNG], { type: 'image/png' }), 'source.png');
+      const docImage = await fetch(`${base}/api/chats/${chatId}/files?asFile=1`, {
+        method: 'POST',
+        headers: { Cookie: alice.cookie, Origin: base },
+        body: imageForm,
+      });
+      assert.equal(docImage.status, 201);
+      const imageId = (await docImage.json()).id;
+      const sentDocs = await request(
+        `/chats/${chatId}/messages`,
+        'POST',
+        { fileIds: [uploadId, imageId], album: true, nonce: randomUUID() },
+        alice.cookie,
+      );
+      assert.equal(sentDocs.status, 201);
+      const docs = (await request(`/chats/${chatId}/media?type=file`, 'GET', undefined, bob.cookie))
+        .data.items;
+      assert.deepEqual(
+        new Set(docs.map((item: any) => item.file.id)),
+        new Set([imageId, uploadId]),
+      );
+      for (const kind of ['media', 'voice']) {
+        const regular = await request(
+          `/chats/${chatId}/media?type=${kind}`,
+          'GET',
+          undefined,
+          bob.cookie,
+        );
+        assert.ok(regular.data.items.every((item: any) => !item.file.as_file));
+      }
+      const download = await fetch(`${base}/api/files/${uploadId}?inline=1`, {
+        headers: { Cookie: bob.cookie },
+      });
+      assert.match(download.headers.get('content-disposition') || '', /^attachment/);
+      assert.deepEqual(Buffer.from(await download.arrayBuffer()), recording);
+      const copy = await request(
+        `/chats/${chatId}/forward`,
+        'POST',
+        { messageIds: [docs[0].id] },
+        bob.cookie,
+      );
+      assert.equal(copy.status, 201);
+      const refreshed = (
+        await request(`/chats/${chatId}/media?type=file`, 'GET', undefined, bob.cookie)
+      ).data.items;
+      assert.ok(refreshed.some((item: any) => item.id === copy.data.ids[0] && item.file.as_file));
     } finally {
       server.kill();
       if (accounts.length)

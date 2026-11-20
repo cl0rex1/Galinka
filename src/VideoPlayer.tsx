@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  MessageSquare,
   Maximize2,
   Minimize2,
   Pause,
@@ -45,6 +46,7 @@ export function VideoPlayer({
   compact = false,
   steps,
   onDismiss,
+  onShowMessage,
   poster,
   ratio,
 }: {
@@ -55,6 +57,7 @@ export function VideoPlayer({
   steps?: GallerySteps;
   /** Set when the gallery opens this video directly in the full player. */
   onDismiss?: () => void;
+  onShowMessage?: () => void;
   /** Blurred preview shown until the first frame loads. */
   poster?: string;
   /** width / height, so the bubble keeps its size before the video loads. */
@@ -424,6 +427,17 @@ export function VideoPlayer({
             )}
             <div className="video-viewer-head">
               <span title={name}>{name}</span>
+              {onShowMessage && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Показать в чате"
+                  title="Показать в чате"
+                  onClick={onShowMessage}
+                >
+                  <MessageSquare size={20} />
+                </button>
+              )}
               <button
                 type="button"
                 className="icon-button"

@@ -1,0 +1,168 @@
+/* ========== Auth ========== */
+.auth-page {
+  position: relative;
+  min-height: var(--app-height, 100dvh);
+  display: grid;
+  place-items: center;
+  /* Anchored to the top, so the tabs stay put while the sign-up fields fold open below. */
+  align-content: start;
+  gap: var(--space-lg);
+  padding: max(48px, 12vh) var(--space-lg) var(--space-xl);
+  background: var(--color-conversation);
+}
+.auth-theme {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  right: 12px;
+}
+.auth-card {
+  width: min(380px, 100%);
+  display: grid;
+  gap: var(--space-lg);
+  padding: 28px 24px 24px;
+  border-radius: var(--radius-xl);
+  background: var(--color-surface);
+  box-shadow: var(--bubble-shadow);
+  animation: rise var(--dur-enter) var(--ease-out) both;
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    translate: 0 12px;
+  }
+}
+.auth-card h1 {
+  font-size: var(--text-xl);
+  animation: swap-in var(--dur-enter) var(--ease-out);
+}
+.swap-in {
+  display: inline-block;
+  animation: swap-in var(--dur-enter) var(--ease-out);
+}
+@keyframes swap-in {
+  from {
+    opacity: 0;
+    translate: 0 5px;
+  }
+}
+/* Folding fields (sign-up, group name): rows grow from 0fr. In a .stack form spacing lives in
+   margins, not the grid gap, so a folded field leaves no gap behind. */
+form.stack {
+  gap: 0;
+}
+form.stack > :not(:last-child, .fold),
+.fold label {
+  margin-bottom: var(--space-lg);
+}
+.fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows var(--dur-enter) var(--ease-sheet),
+    opacity var(--dur-press) ease;
+}
+.fold[data-open='true'] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition-duration: 300ms, var(--dur-medium);
+  transition-delay: 0ms, 60ms;
+}
+.fold > * {
+  min-height: 0;
+  overflow: hidden;
+}
+/* Segmented controls: one thumb slides under the selected option. */
+.auth-tabs,
+.segmented,
+.theme-picker {
+  --options: 2;
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--color-paper-2);
+}
+.theme-picker,
+.auth-tabs {
+  --options: 3;
+}
+.auth-tabs::before,
+.segmented::before,
+.theme-picker::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 3px auto 3px 3px;
+  width: calc((100% - 6px) / var(--options));
+  border-radius: var(--radius-item);
+  background: var(--color-surface);
+  box-shadow: 0 1px 3px var(--color-shadow);
+  transition: translate var(--dur-long) var(--ease-out);
+}
+:is(.auth-tabs, .segmented, .theme-picker):not(
+    :has(> :is([aria-selected='true'], .selected, [aria-pressed='true']))
+  )::before {
+  opacity: 0;
+}
+:is(.auth-tabs, .segmented, .theme-picker):has(
+    > :nth-child(2):is([aria-selected='true'], .selected, [aria-pressed='true'])
+  )::before {
+  translate: 100% 0;
+}
+:is(.auth-tabs, .segmented, .theme-picker):has(
+    > :nth-child(3):is([aria-selected='true'], .selected, [aria-pressed='true'])
+  )::before {
+  translate: 200% 0;
+}
+.auth-tabs button,
+.segmented button,
+.theme-picker button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  border-radius: var(--radius-item);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-muted);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.auth-tabs [aria-selected='true'],
+.segmented .selected,
+.theme-picker [aria-pressed='true'] {
+  color: var(--color-ink);
+}
+.auth-demo {
+  justify-self: center;
+}
+.auth-version {
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}
+.auth-error {
+  position: fixed;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  translate: -50% 0;
+  width: min(440px, calc(100vw - 24px));
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  color: var(--color-error);
+  background: var(--color-error-bg);
+  font-size: var(--text-sm);
+  animation: rise var(--dur-enter) var(--ease-out);
+}
+.auth-error button {
+  margin-left: auto;
+  display: grid;
+}

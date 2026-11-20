@@ -63,22 +63,33 @@
   --space-xl: 24px;
   --space-2xl: 32px;
   --space-3xl: 48px;
+  /* Type scale. xs: time, badges, counters. sm: captions and field labels. md: the second line
+     of a list row and menu items. base: messages and titles. Values outside the scale are not used
+     for interface text; emoji and initials size themselves to their circle. */
   --text-xs: 12px;
   --text-sm: 13px;
+  --text-md: 14px;
   --text-base: 15px;
   --text-lg: 17px;
   --text-xl: 20px;
   --text-2xl: 28px;
   --text-display: clamp(36px, 5vw, 64px);
+  /* Radius by role: xs marks and badges, item rows inside a menu or list (menu 14 − padding 6),
+     sm/md controls, lg cards, sheets and media, xl bubbles and the auth card, pill fields. */
+  --radius-xs: 4px;
   --radius-sm: 6px;
+  --radius-item: 8px;
   --radius-md: 10px;
   --radius-lg: 14px;
-  --radius-bubble: 18px;
+  --radius-xl: 18px;
+  --radius-bubble: var(--radius-xl);
   --radius-join: 6px;
   --radius-pill: 999px;
 
-  /* Motion: ease-out for entering and feedback, sheet curve for pushes and drawers. */
+  /* Motion: ease-out for entering and feedback, ease-in for leaving, move for travel across the
+     screen, sheet for pushes and drawers. Exits run at about 70% of the entrance. */
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --ease-move: cubic-bezier(0.77, 0, 0.175, 1);
   --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
@@ -87,8 +98,11 @@
   --dur-short: 160ms;
   --dur-menu: 180ms;
   --dur-section: 160ms;
+  --dur-exit: 200ms;
+  --dur-medium: 220ms;
   --dur-enter: 240ms;
   --dur-modal: 260ms;
+  --dur-long: 280ms;
   --dur-push: 380ms;
   --touch-target: 44px;
   --sidebar-width: 360px;

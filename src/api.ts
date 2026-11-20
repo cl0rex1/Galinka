@@ -162,8 +162,12 @@ export async function upload<T>(
 const PART = 2 * 1024 * 1024;
 // Keep a selected audio file in its original format. Older clients leave this unset
 // and their MediaRecorder uploads still receive the compatible AAC conversion.
-export const originalAudioQuery = (file: File) =>
-  file.type.startsWith('audio/') && !file.name.startsWith('Голосовое-') ? '?originalAudio=1' : '';
+export const uploadQuery = (file: File, asFile = false) =>
+  asFile
+    ? '?asFile=1'
+    : file.type.startsWith('audio/') && !file.name.startsWith('Голосовое-')
+      ? '?originalAudio=1'
+      : '';
 /**
  * Sends a big file in 2 MB parts. After a dropped connection it asks the server how much
  * arrived and goes on from there; `resume.id` keeps the upload between attempts, so the
@@ -175,6 +179,7 @@ export async function uploadInParts<T>(
   meta: object,
   onProgress: (percent: number) => void,
   resume: { id?: string },
+  asFile = false,
 ): Promise<T> {
   let offset = 0;
   if (resume.id) {
@@ -230,7 +235,7 @@ export async function uploadInParts<T>(
       known = false;
     }
   }
-  return api<T>(`/uploads/${id}/finish${originalAudioQuery(file)}`, 'POST', undefined, {
+  return api<T>(`/uploads/${id}/finish${uploadQuery(file, asFile)}`, 'POST', undefined, {
     timeoutMs: 120_000,
   });
 }

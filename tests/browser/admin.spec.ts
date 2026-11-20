@@ -160,10 +160,11 @@ test('administrator manages users and published mobile content through the real 
         json: { error: 'Сервер временно недоступен. Повторите попытку.' },
       }),
     );
-    await page.getByRole('button', { name: 'Обновить', exact: true }).click();
+    // Coming back to the app refreshes the feed; a failure offers to try again.
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await expect(page.getByRole('alert').filter({ hasText: 'Сервер временно' })).toBeVisible();
     await page.unroute('**/api/announcements?*');
-    await page.getByRole('button', { name: 'Обновить', exact: true }).click();
+    await page.getByRole('button', { name: 'Повторить', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Встреча нашей компании' })).toBeVisible();
     for (const width of [320, 375, 414, 768]) {
       await page.setViewportSize({ width, height: 850 });

@@ -917,16 +917,16 @@ app.get('/api/chats', auth, async (req, res) => {
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
  (SELECT count(*)::int FROM scheduled_messages sm WHERE sm.chat_id=c.id AND sm.sender_id=$1) AS scheduled_count,
  CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color,'avatar',peer.avatar,'last_seen_at',peer.last_seen_at,'show_last_seen',peer.show_last_seen) END AS peer,
- CASE WHEN last.created_at IS NULL THEN NULL ELSE json_build_object('body',last.body,'created_at',last.created_at,'sender_id',last.sender_id,'file_id',last.file_id,'file',last.file) END AS last_message,
+ CASE WHEN last.created_at IS NULL THEN NULL ELSE json_build_object('id',last.id,'body',last.body,'created_at',last.created_at,'sender_id',last.sender_id,'file_id',last.file_id,'file',last.file) END AS last_message,
  (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=messages.id AND hm.user_id=$1) AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread,
  CASE WHEN c.kind='group' THEN (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=messages.id AND hm.user_id=$1) AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1 AND ${mentionsSQL('messages', '$1')}) ELSE 0 END AS unread_mentions,
- (SELECT json_build_object('id',pm.id,'body',pm.body,'file_name',pf.name) FROM messages pm LEFT JOIN files pf ON pf.id=pm.file_id
+ (SELECT json_build_object('id',pm.id,'body',pm.body,'file_name',pf.name,'as_file',pf.as_file) FROM messages pm LEFT JOIN files pf ON pf.id=pm.file_id
    WHERE pm.id=c.pinned_message_id AND pm.deleted_at IS NULL AND (pm.expires_at IS NULL OR pm.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=pm.id AND hm.user_id=$1)) AS pinned_message
  FROM chats c JOIN members m ON m.chat_id=c.id
  LEFT JOIN LATERAL (SELECT u.id,u.name,u.username,u.color,u.avatar,u.last_seen_at,u.show_last_seen FROM members mm JOIN users u ON u.id=mm.user_id
    WHERE c.kind='direct' AND mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) peer ON true
- LEFT JOIN LATERAL (SELECT lm.body,lm.created_at,lm.sender_id,lm.file_id,
-   CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
+ LEFT JOIN LATERAL (SELECT lm.id,lm.body,lm.created_at,lm.sender_id,lm.file_id,
+   CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'as_file',f.as_file,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
    FROM messages lm LEFT JOIN files f ON f.id=lm.file_id WHERE lm.chat_id=c.id AND lm.deleted_at IS NULL AND (lm.expires_at IS NULL OR lm.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=lm.id AND hm.user_id=$1)
    ORDER BY lm.created_at DESC,lm.id DESC LIMIT 1) last ON true
  WHERE m.user_id=$1 ORDER BY m.pinned DESC,COALESCE(last.created_at,c.created_at) DESC,c.id`,
@@ -1334,7 +1334,7 @@ async function voiceTranscript(req: Request, res: Response) {
   const { rows } = await pool.query(
     `SELECT f.name,f.mime,t.state,t.transcript FROM files f
      LEFT JOIN voice_transcripts t ON t.file_id=f.id
-     WHERE f.id=$1 AND EXISTS(SELECT 1 FROM messages m JOIN members mm ON mm.chat_id=m.chat_id
+     WHERE f.id=$1 AND NOT f.as_file AND EXISTS(SELECT 1 FROM messages m JOIN members mm ON mm.chat_id=m.chat_id
        WHERE m.file_id=f.id AND mm.user_id=$2 AND ${visibleMessageWhere})`,
     [fileId, user(req).id],
   );
@@ -1372,8 +1372,8 @@ app.route('/api/files/:id/transcription').post(auth, voiceTranscript).get(auth, 
 
 const messageSQL = `SELECT m.id,m.chat_id,m.sender_id,m.body,m.created_at,m.edited_at,m.expires_at,m.link_preview,m.nonce,m.forwarded_from,m.mention_all,m.album_id,
  CASE WHEN u.id IS NULL THEN json_build_object('id','nelya','name','Неля','username','nelya','color',5) ELSE json_build_object('id',u.id,'name',u.name,'username',u.username,'color',u.color) END AS sender,
- CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file,
- CASE WHEN replied.id IS NULL THEN NULL ELSE json_build_object('id',replied.id,'body',replied.body,'sender',json_build_object('id',COALESCE(reply_user.id::text,'nelya'),'name',COALESCE(reply_user.name,'Неля')),'file_name',reply_file.name) END AS reply,
+ CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'as_file',f.as_file,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file,
+ CASE WHEN replied.id IS NULL THEN NULL ELSE json_build_object('id',replied.id,'body',replied.body,'sender',json_build_object('id',COALESCE(reply_user.id::text,'nelya'),'name',COALESCE(reply_user.name,'Неля')),'file_name',reply_file.name,'as_file',reply_file.as_file) END AS reply,
  ${pollSelectSQL},
  (SELECT count(*)::int FROM members reader WHERE reader.chat_id=m.chat_id AND reader.user_id IS DISTINCT FROM m.sender_id AND reader.receipt_at>=m.created_at) AS read_by,
  COALESCE((SELECT json_agg(r) FROM (SELECT emoji,count(*)::int AS count,bool_or(user_id=$2) AS mine FROM reactions WHERE message_id=m.id GROUP BY emoji ORDER BY emoji) r),'[]') AS reactions
@@ -1441,10 +1441,11 @@ app.get('/api/chats/:id/messages', auth, async (req, res) => {
 const contains = (text: string) => `%${text.replace(/[\\%_]/g, '\\$&')}%`;
 /** SQL per attachment kind; names follow what the app records (see fileLabel on the client). */
 const searchKinds = {
-  photo: "f.id IS NOT NULL AND f.mime LIKE 'image/%'",
-  video: "f.id IS NOT NULL AND f.mime LIKE 'video/%' AND f.name NOT LIKE 'Кружок%'",
-  voice: "f.id IS NOT NULL AND (f.name LIKE 'Голосовое-%' OR f.name LIKE 'Кружок%')",
-  file: "f.id IS NOT NULL AND f.mime NOT LIKE 'image/%' AND f.mime NOT LIKE 'video/%' AND f.name NOT LIKE 'Голосовое-%'",
+  photo: "NOT f.as_file AND f.mime LIKE 'image/%'",
+  video: "NOT f.as_file AND f.mime LIKE 'video/%' AND f.name NOT LIKE 'Кружок%'",
+  voice:
+    "NOT f.as_file AND ((f.mime LIKE 'audio/%' AND f.name LIKE 'Голосовое-%') OR (f.mime LIKE 'video/%' AND f.name LIKE 'Кружок%'))",
+  file: "(f.as_file OR (f.mime NOT LIKE 'image/%' AND f.mime NOT LIKE 'video/%' AND NOT (f.mime LIKE 'audio/%' AND f.name LIKE 'Голосовое-%')))",
   link: "m.body ~* 'https?://'",
 } as const;
 app.get('/api/search', auth, async (req, res) => {
@@ -1468,7 +1469,7 @@ app.get('/api/search', auth, async (req, res) => {
   const from = filters.from === 'me' ? user(req).id : filters.from;
   const { rows } = await pool.query(
     `SELECT m.id,m.chat_id,m.body,m.created_at,m.sender_id,COALESCE(u.name,'Неля') AS sender_name,
-       CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
+       CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'as_file',f.as_file,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
      FROM messages m JOIN members viewer ON viewer.chat_id=m.chat_id AND viewer.user_id=$1
      LEFT JOIN users u ON u.id=m.sender_id LEFT JOIN files f ON f.id=m.file_id
      WHERE m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at>now())
@@ -1512,7 +1513,7 @@ app.get('/api/chats/:id/media', auth, async (req, res) => {
       : searchKinds[query.type];
   const { rows } = await pool.query(
     `SELECT m.id,m.created_at,m.created_at::text||'|'||m.id::text AS cursor,m.body,m.link_preview,COALESCE(u.name,'Неля') AS sender_name,
-       CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
+       CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'as_file',f.as_file,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
      FROM messages m LEFT JOIN users u ON u.id=m.sender_id LEFT JOIN files f ON f.id=m.file_id
      WHERE m.chat_id=$1 AND ${visibleMessageWhere} AND ${kind}
      AND ($3::timestamptz IS NULL OR (m.created_at,m.id)<($3::timestamptz,$4::uuid))
@@ -1570,14 +1571,16 @@ app.post('/api/chats/:id/messages', auth, async (req, res) => {
     let albumId = null;
     if (fileIds.length) {
       const { rows } = await db.query(
-        'SELECT id,mime,name FROM files WHERE id=ANY($1) AND chat_id=$2 AND user_id=$3',
+        'SELECT id,mime,name,as_file FROM files WHERE id=ANY($1) AND chat_id=$2 AND user_id=$3',
         [fileIds, chat.id, user(req).id],
       );
       requireValue(rows.length === fileIds.length, 400, 'Файл недоступен.');
       if (
         data.album &&
         rows.length > 1 &&
-        rows.every((f) => /^(image|video)\//.test(f.mime) && !f.name.startsWith('Кружок-'))
+        rows.every(
+          (f) => !f.as_file && /^(image|video)\//.test(f.mime) && !f.name.startsWith('Кружок-'),
+        )
       )
         albumId = randomUUID();
     }
@@ -2486,6 +2489,7 @@ async function storeUploadedFile(
   uploadDb?: PoolClient,
 ) {
   try {
+    const asFile = req.query.asFile === '1';
     let mime = await mediaType(file.path, file.declared);
     let name = fileName(file.name);
     let size = file.size;
@@ -2493,7 +2497,7 @@ async function storeUploadedFile(
     // retain its channels, metadata and original bytes when downloaded.
     const originalAudio = req.query.originalAudio === '1' && isRecordedAudio(mime);
     const normalized =
-      !originalAudio && size <= 20 * 1024 * 1024
+      !asFile && !originalAudio && size <= 20 * 1024 * 1024
         ? await normalizeUploadedAudio(file.path, mime)
         : null;
     let waveform: number[] | null = null;
@@ -2503,7 +2507,7 @@ async function storeUploadedFile(
       size = normalized.size;
       waveform = await voiceWaveform(file.path);
     }
-    const visual = visualMeta(mime, file.meta);
+    const visual = visualMeta(mime, asFile ? {} : file.meta);
     const store = async (db: PoolClient) => {
       await lockedMember(chatId, user(req).id, db);
       const account = await db.query('SELECT id,blocked FROM users WHERE id=$1 FOR UPDATE', [
@@ -2519,8 +2523,8 @@ async function storeUploadedFile(
       if (uploadDb) await db.query('DELETE FROM uploads WHERE id=$1', [file.id]);
       await checkUploadQuota(db, user(req).id, size);
       const { rows } = await db.query(
-        `INSERT INTO files(id,chat_id,user_id,name,size,mime,audio_ready,width,height,thumb,waveform)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id,name,size,mime,width,height,thumb,waveform`,
+        `INSERT INTO files(id,chat_id,user_id,name,size,mime,audio_ready,width,height,thumb,waveform,as_file)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id,name,size,mime,width,height,thumb,waveform,as_file`,
         [
           file.id,
           chatId,
@@ -2533,9 +2537,10 @@ async function storeUploadedFile(
           visual.height,
           visual.thumb,
           waveform,
+          asFile,
         ],
       );
-      if (needsVideoWork(mime, size))
+      if (!asFile && needsVideoWork(mime, size))
         await db.query('INSERT INTO media_jobs(file_id) VALUES($1) ON CONFLICT DO NOTHING', [
           file.id,
         ]);
@@ -2649,7 +2654,7 @@ app.put('/api/uploads/:id', auth, async (req, res) => {
 });
 async function finishedUpload(req: Request, db: Pool | PoolClient = pool) {
   const { rows } = await db.query(
-    'SELECT id,name,size,mime,width,height,thumb,waveform FROM files WHERE id=$1 AND user_id=$2',
+    'SELECT id,name,size,mime,width,height,thumb,waveform,as_file FROM files WHERE id=$1 AND user_id=$2',
     [uuid.parse(req.params.id), user(req).id],
   );
   requireValue(rows[0], 404, 'Загрузка не найдена. Начните её заново.');
@@ -2789,7 +2794,7 @@ app.get('/api/avatars/:id', auth, async (req, res) => {
   res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
   if (publicApiOrigin && publicApiOrigin !== origin)
     res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
-  res.sendFile(file);
+  res.sendFile(path.basename(file), { root: directory });
 });
 // A file is readable in the chat it was uploaded to and in every chat it was forwarded to.
 const fileAccessSQL = `(EXISTS(SELECT 1 FROM members WHERE chat_id=f.chat_id AND user_id=$2)
@@ -2821,12 +2826,13 @@ async function serveAttachment(req: Request, res: Response, next: NextFunction, 
     } else next(error);
   };
   const mime =
+    !file.as_file &&
     req.query.inline === '1' &&
     rows[0].mime === 'application/octet-stream' &&
     /\.(mp3|wav|flac|aac)$/i.test(rows[0].name)
       ? await mediaType(original, 'audio/*').catch(() => 'application/octet-stream')
       : rows[0].mime;
-  if (req.query.inline === '1' && inlineMediaTypes.has(mime)) {
+  if (!file.as_file && req.query.inline === '1' && inlineMediaTypes.has(mime)) {
     const preview =
       isRecordedAudio(mime) && !rows[0].audio_ready && rows[0].size <= 20 * 1024 * 1024
         ? await audioPreview(original, mime)
@@ -2852,13 +2858,17 @@ async function serveAttachment(req: Request, res: Response, next: NextFunction, 
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     if (publicApiOrigin && publicApiOrigin !== origin)
       res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
-    // The derived file lives in a private dot-directory; Express otherwise
-    // rejects it before opening. Both paths are resolved from validated IDs.
-    res.sendFile(preview?.path || original, { dotfiles: preview ? 'allow' : 'ignore' }, sent);
+    // Apply the dotfile policy inside the upload root. The configured root
+    // itself may be in a dot-directory, while only the voice cache needs an exception.
+    res.sendFile(
+      path.relative(directory, preview?.path || original),
+      { root: directory, dotfiles: preview ? 'allow' : 'ignore' },
+      sent,
+    );
     return;
   }
   res.setHeader('Content-Type', 'application/octet-stream');
-  res.download(original, file.name, sent);
+  res.download(path.basename(original), file.name, { root: directory }, sent);
 }
 app.get('/api/files/:id', auth, (req, res, next) => serveAttachment(req, res, next));
 const streams = new Map<Response, { userId: string; token: string }>();
@@ -3213,7 +3223,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(error);
   res.status(500).json({ error: 'Сервер не смог выполнить запрос. Попробуйте ещё раз.' });
 });
-const server = app.listen(Number(process.env.PORT) || 3001, '0.0.0.0', () =>
+const server = app.listen(Number(process.env.PORT) || 3001, process.env.APP_HOST || '0.0.0.0', () =>
   console.log(`Galinka API on http://localhost:${process.env.PORT || 3001}`),
 );
 const stopPush = startPushWorker(pool);

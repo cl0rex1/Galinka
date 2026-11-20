@@ -1,0 +1,220 @@
+/* ========== 0.16: send window for photos and videos, photo editor ========== */
+.attach-dialog form {
+  display: grid;
+  gap: 12px;
+}
+.attach-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.attach-dialog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: min(52vh, 420px);
+  overflow: auto;
+  border-radius: var(--radius-lg);
+}
+.attach-dialog-grid.n1 {
+  grid-template-columns: 1fr;
+}
+.attach-dialog-grid li {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: var(--color-paper-2);
+}
+.attach-dialog-grid.n1 li {
+  aspect-ratio: auto;
+  max-height: min(52vh, 420px);
+}
+.attach-dialog-grid :is(img, video) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.attach-dialog-grid.n1 :is(img, video) {
+  max-height: min(52vh, 420px);
+  object-fit: contain;
+}
+.attach-dialog-grid .pending-strip-file {
+  display: grid;
+  place-items: center;
+  height: 100%;
+}
+.attach-dialog-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+}
+.attach-dialog-actions .icon-button {
+  width: 30px;
+  height: 30px;
+  min-height: 0;
+  color: #fff;
+  background: rgb(0 0 0 / 55%);
+}
+.attach-dialog-caption {
+  width: 100%;
+  min-height: 44px;
+  max-height: 160px;
+  resize: vertical;
+}
+.attach-dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.attach-dialog-foot .primary {
+  margin-left: auto;
+}
+
+.image-editor {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  color: #fff;
+  background: rgb(8 8 9 / 96%);
+}
+.image-editor[open] {
+  display: flex;
+  flex-direction: column;
+}
+.image-editor-head,
+.image-editor-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.image-editor-head strong {
+  flex: 1;
+}
+.image-editor-tools {
+  justify-content: center;
+  flex-wrap: wrap;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+.image-editor .icon-button {
+  color: #fff;
+}
+.image-editor .icon-button.active {
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+}
+.image-editor .text-button {
+  color: #fff;
+}
+.image-editor-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  padding: 14px 18px;
+}
+.image-editor-canvas {
+  position: relative;
+  touch-action: none;
+}
+.image-editor-canvas canvas {
+  display: block;
+}
+.image-editor-canvas canvas.drawing {
+  cursor: crosshair;
+}
+.image-editor-crop {
+  position: absolute;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 55%);
+  outline: 1px solid rgb(255 255 255 / 85%);
+  cursor: move;
+  touch-action: none;
+}
+.crop-handle {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  margin: -11px;
+  border: 3px solid #fff;
+  border-radius: var(--radius-xs);
+  background: rgb(0 0 0 / 25%);
+}
+.crop-handle.nw {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+.crop-handle.ne {
+  right: 0;
+  top: 0;
+  cursor: nesw-resize;
+}
+.crop-handle.sw {
+  left: 0;
+  bottom: 0;
+  cursor: nesw-resize;
+}
+.crop-handle.se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+.crop-handle:is(.n, .s) {
+  left: 50%;
+  width: 28px;
+  height: 10px;
+  margin: -5px -14px;
+  cursor: ns-resize;
+}
+.crop-handle.n {
+  top: 0;
+}
+.crop-handle.s {
+  bottom: 0;
+}
+.crop-handle:is(.w, .e) {
+  top: 50%;
+  width: 10px;
+  height: 28px;
+  margin: -14px -5px;
+  cursor: ew-resize;
+}
+.crop-handle.w {
+  left: 0;
+}
+.crop-handle.e {
+  right: 0;
+}
+.image-editor-colors {
+  display: flex;
+  gap: 6px;
+}
+.image-editor-colors button {
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid rgb(255 255 255 / 40%);
+}
+.image-editor-colors button.selected {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px var(--color-accent);
+}

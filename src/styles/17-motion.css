@@ -1,0 +1,180 @@
+/* ========== Leaving: panels and bars play their entrance backwards, a little faster ========== */
+.chat-info.closing {
+  animation: panel-out var(--dur-exit) var(--ease-in) forwards;
+}
+@keyframes panel-out {
+  to {
+    opacity: 0;
+    translate: 24px 0;
+  }
+}
+.message-search.closing,
+.error-bar.closing {
+  animation: bar-out var(--dur-short) var(--ease-in) forwards;
+}
+@keyframes bar-out {
+  to {
+    opacity: 0;
+    translate: 0 -6px;
+  }
+}
+.composer-context.closing {
+  animation: sink var(--dur-short) var(--ease-in) forwards;
+}
+@keyframes sink {
+  to {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
+/* Folders: the list enters from the side of the folder chosen. */
+.sidebar {
+  overflow-x: clip;
+}
+.chat-list[data-dir='next'] {
+  animation: folder-next var(--dur-modal) var(--ease-out);
+}
+.chat-list[data-dir='prev'] {
+  animation: folder-prev var(--dur-modal) var(--ease-out);
+}
+@keyframes folder-next {
+  from {
+    opacity: 0;
+    translate: 32px 0;
+  }
+}
+@keyframes folder-prev {
+  from {
+    opacity: 0;
+    translate: -32px 0;
+  }
+}
+.chat-filters {
+  position: relative;
+}
+.chat-filters::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: var(--tab-w, 0);
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--color-accent);
+  translate: var(--tab-x, 0) 0;
+}
+.chat-filters::after {
+  width: calc(var(--tab-w, 12px) - 12px);
+  translate: calc(var(--tab-x, 0px) + 6px) 0;
+}
+/* More tabs hide past a faded edge. */
+.chat-filters[data-more='right'] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+}
+.chat-filters[data-more='left'] {
+  mask-image: linear-gradient(to left, #000 calc(100% - 48px), transparent);
+}
+.chat-filters[data-more='both'] {
+  mask-image: linear-gradient(to right, transparent, #000 48px calc(100% - 48px), transparent);
+}
+.chat-filters.ready::after {
+  transition:
+    translate var(--dur-long) var(--ease-move),
+    width var(--dur-long) var(--ease-move);
+}
+
+/* ========== Small motion: reactions, counters, highlights ========== */
+/* A new reaction rises from under the bubble; a changed count rolls up. */
+.reactions button.pop {
+  animation: reaction-in 320ms var(--ease-out);
+}
+@keyframes reaction-in {
+  from {
+    opacity: 0;
+    translate: 0 10px;
+    scale: 0.4;
+  }
+  60% {
+    scale: 1.08;
+  }
+}
+/* A new reaction (a double tap, a choice in the menu) sends out one berry ring: the answer to
+   the tap, seen where the eye already is. */
+.reactions button.pop {
+  position: relative;
+}
+.reactions button.pop::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border: 2px solid var(--color-accent);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: reaction-ring 460ms var(--ease-out) forwards;
+}
+@keyframes reaction-ring {
+  from {
+    opacity: 0.9;
+    scale: 0.8;
+  }
+  to {
+    opacity: 0;
+    scale: 1.45;
+  }
+}
+.reactions span.bump,
+.unread,
+.nav-badge,
+.jump-to-latest b {
+  animation: count-in var(--dur-medium) var(--ease-out);
+}
+@keyframes count-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+.unread,
+.nav-badge {
+  animation-name: badge-in;
+}
+@keyframes badge-in {
+  from {
+    opacity: 0;
+    scale: 0.5;
+  }
+}
+/* Jumping to a quoted message briefly lights it up. */
+.message-row.flash .bubble {
+  animation: flash 1100ms var(--ease-out);
+}
+@keyframes flash {
+  0%,
+  35% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--color-accent) 45%, transparent),
+      var(--bubble-shadow);
+  }
+}
+.message-row.flash {
+  isolation: isolate;
+}
+.message-row.flash::after {
+  content: '';
+  position: absolute;
+  inset: -2px -100vw;
+  z-index: -1;
+  background: var(--color-accent);
+  opacity: 0;
+  animation: flash-row 1100ms var(--ease-out);
+  pointer-events: none;
+}
+@keyframes flash-row {
+  0%,
+  30% {
+    opacity: 0.12;
+  }
+}
+.message-day {
+  position: relative;
+}

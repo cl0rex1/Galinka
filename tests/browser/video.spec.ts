@@ -37,7 +37,7 @@ test('round video: record, attach, send and play', async ({ page, browserName })
   test.skip(browserName !== 'chromium', 'Fake capture devices are a Chromium switch.');
   await page.goto('/?demo=1');
   await page.getByRole('button', { name: 'Настройки', exact: true }).click();
-  await page.getByRole('tab', { name: 'Голос и видео', exact: true }).click();
+  await page.getByRole('button', { name: 'Голос и видео', exact: true }).click();
   await page.getByRole('switch', { name: 'Отзеркалить камеру', exact: true }).click();
   await expect(page.getByRole('switch', { name: 'Отзеркалить камеру', exact: true })).toBeChecked();
   await page.getByRole('button', { name: 'Чаты', exact: true }).click();

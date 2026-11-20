@@ -1,0 +1,26 @@
+/* ========== Mentions ========== */
+.message-text .message-mention.me {
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+  text-decoration: none;
+}
+/* A message that names you reads as addressed to you. */
+.bubble.mentions-me {
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+.unread.mention-mark {
+  min-width: 20px;
+  padding: 0;
+  margin-right: 4px;
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+}
+/* The "@" button sits above the "to latest" one. */
+.jump-to-latest.jump-to-mention {
+  bottom: calc(100% + 64px);
+}
+.jump-to-latest.jump-to-mention:not(.shown) {
+  pointer-events: none;
+}

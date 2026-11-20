@@ -1,10 +1,45 @@
-import { useLayoutEffect, useRef } from 'react';
-import { Archive, ArrowLeft, BellOff, Pin } from 'lucide-react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Bell,
+  BellOff,
+  CheckCheck,
+  Pin,
+  PinOff,
+} from 'lucide-react';
+import { ContextMenu, type MenuItem } from './ContextMenu';
 import { Avatar } from './Avatar';
-import { fileLabel, isVideoNote } from './MediaAttachment';
+import { isVideoNote } from './MediaAttachment';
 import { plainText } from './MessageText';
 import { listTime } from './SearchResults';
-import { motionAllowed } from './ui';
+import { haptic, motionAllowed } from './ui';
+
+export type ChatAction = 'read' | 'pin' | 'mute' | 'archive';
+/** The quick actions of a chat row, offered on a long press or a right click. */
+function chatActions(chat: Chat, act: (action: ChatAction) => void): MenuItem[] {
+  return [
+    ...(chat.unread > 0 && chat.last_message?.id
+      ? [{ label: 'Отметить прочитанным', icon: CheckCheck, onSelect: () => act('read') }]
+      : []),
+    {
+      label: chat.pinned ? 'Открепить' : 'Закрепить',
+      icon: chat.pinned ? PinOff : Pin,
+      onSelect: () => act('pin'),
+    },
+    {
+      label: chat.muted ? 'Включить звук' : 'Без звука',
+      icon: chat.muted ? Bell : BellOff,
+      onSelect: () => act('mute'),
+    },
+    {
+      label: chat.archived ? 'Вернуть из архива' : 'В архив',
+      icon: chat.archived ? ArchiveRestore : Archive,
+      onSelect: () => act('archive'),
+    },
+  ];
+}
 import type { Chat } from './types';
 
 export const folders = ['Все', 'Непрочитанные', 'Личные', 'Группы', 'Архив'];
@@ -14,15 +49,17 @@ function preview(chat: Chat) {
   const file = chat.last_message?.file;
   return (
     plainText(chat.last_message?.body || '') ||
-    (file?.mime?.startsWith('audio/')
-      ? 'Голосовое сообщение'
-      : file && isVideoNote(file)
-        ? 'Кружок'
-        : file?.mime?.startsWith('video/')
-          ? 'Видео'
-          : file?.mime?.startsWith('image/')
-            ? 'Фотография'
-            : file?.name || (chat.last_message?.file_id ? 'Файл' : 'Нет сообщений'))
+    (file?.as_file
+      ? file.name
+      : file?.mime?.startsWith('audio/')
+        ? 'Голосовое сообщение'
+        : file && isVideoNote(file)
+          ? 'Кружок'
+          : file?.mime?.startsWith('video/')
+            ? 'Видео'
+            : file?.mime?.startsWith('image/')
+              ? 'Фотография'
+              : file?.name || (chat.last_message?.file_id ? 'Файл' : 'Нет сообщений'))
   );
 }
 
@@ -39,6 +76,7 @@ export function ChatList({
   loaded,
   onSelect,
   onNew,
+  onAction,
 }: {
   chats: Chat[];
   filter: string;
@@ -53,7 +91,18 @@ export function ChatList({
   loaded: boolean;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onAction: (chat: Chat, action: ChatAction) => void;
 }) {
+  const [menu, setMenu] = useState<{ chat: Chat; point: { x: number; y: number } } | null>(null);
+  // A long press on a phone opens the row's menu; the tap that ends it must not open the chat.
+  const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(
+    null,
+  );
+  const held = useRef(false);
+  const release = () => {
+    if (press.current) clearTimeout(press.current.timer);
+    press.current = null;
+  };
   const archive = filter === 'Архив';
   const shown = chats
     .filter(
@@ -146,8 +195,42 @@ export function ChatList({
           <button
             key={c.id}
             data-chat-id={c.id}
-            className={`chat-item ${selectedId === c.id ? 'selected' : ''}`}
-            onClick={() => onSelect(c.id)}
+            className={`chat-item ${selectedId === c.id ? 'selected' : ''} ${menu?.chat.id === c.id ? 'menu-open' : ''}`}
+            onClick={() => {
+              if (held.current) {
+                held.current = false;
+                return;
+              }
+              onSelect(c.id);
+            }}
+            onPointerDown={(event) => {
+              held.current = false;
+              if (event.pointerType === 'mouse' || !event.isPrimary) return;
+              const point = { x: event.clientX, y: event.clientY };
+              release();
+              press.current = {
+                ...point,
+                timer: setTimeout(() => {
+                  press.current = null;
+                  held.current = true;
+                  haptic('press');
+                  setMenu({ chat: c, point });
+                }, 420),
+              };
+            }}
+            onPointerMove={(event) => {
+              const start = press.current;
+              if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 8)
+                release();
+            }}
+            onPointerUp={release}
+            onPointerCancel={release}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              release();
+              if (held.current) return;
+              setMenu({ chat: c, point: { x: event.clientX, y: event.clientY } });
+            }}
           >
             <Avatar chat={c} person={c.peer} />
             <span className="chat-item-content">
@@ -165,7 +248,7 @@ export function ChatList({
                   ) : drafts[c.id] || attachmentNames[c.id] ? (
                     <>
                       <span className="chat-draft">Черновик:</span>{' '}
-                      {drafts[c.id] || fileLabel(attachmentNames[c.id])}
+                      {drafts[c.id] || attachmentNames[c.id]}
                     </>
                   ) : (
                     <>
@@ -204,6 +287,14 @@ export function ChatList({
             </span>
           </div>
         ))}
+      {menu && (
+        <ContextMenu
+          point={menu.point}
+          label={`Чат «${menu.chat.title}»`}
+          items={chatActions(menu.chat, (action) => onAction(menu.chat, action))}
+          onClose={() => setMenu(null)}
+        />
+      )}
       {!shown.length && loaded && (
         <div className="list-empty">
           <p>

@@ -451,7 +451,12 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         throw Error('Закрепляет владелец группы.');
       const target = state.messages.find((m) => m.id === data.messageId && m.chat_id === chat.id);
       chat.pinned_message = target
-        ? { id: target.id, body: target.body, file_name: target.file?.name || null }
+        ? {
+            id: target.id,
+            body: target.body,
+            file_name: target.file?.name || null,
+            as_file: target.file?.as_file,
+          }
         : null;
     } else if (parts[2] === 'forward') {
       const sources = state.messages.filter((m) => data.messageIds.includes(m.id));
@@ -634,27 +639,45 @@ export async function demoRequest(url: string, method: string, body: unknown): P
       const type = params.get('type');
       const kinds: Record<string, (m: Message) => boolean> = {
         media: (m) =>
-          /^(image|video)\//.test(m.file?.mime || '') && !m.file!.name.startsWith('Кружок'),
+          Boolean(
+            m.file &&
+            !m.file.as_file &&
+            (m.file.mime?.startsWith('image/') ||
+              (m.file.mime?.startsWith('video/') && !m.file.name.startsWith('Кружок'))),
+          ),
         file: (m) =>
-          Boolean(m.file) &&
-          !/^(image|video)\//.test(m.file!.mime || '') &&
-          !m.file!.name.startsWith('Голосовое-'),
-        voice: (m) => Boolean(m.file && /^(Голосовое-|Кружок)/.test(m.file.name)),
-        link: (m) => /https?:\/\//.test(m.body),
+          Boolean(
+            m.file &&
+            (m.file.as_file ||
+              (!/^(image|video)\//.test(m.file.mime || '') &&
+                !(m.file.mime?.startsWith('audio/') && m.file.name.startsWith('Голосовое-')))),
+          ),
+        voice: (m) =>
+          Boolean(
+            m.file &&
+            !m.file.as_file &&
+            ((m.file.mime?.startsWith('audio/') && m.file.name.startsWith('Голосовое-')) ||
+              (m.file.mime?.startsWith('video/') && m.file.name.startsWith('Кружок'))),
+          ),
+        link: (m) => /https?:\/\//i.test(m.body),
       };
       const items = state.messages
-        .filter((m) => m.chat_id === chat.id && !state.hidden.includes(m.id) && kinds[type ?? '']?.(m))
+        .filter(
+          (m) => m.chat_id === chat.id && !state.hidden.includes(m.id) && kinds[type ?? '']?.(m),
+        )
         .reverse()
         .map((m) => ({
           id: m.id,
           created_at: m.created_at,
-          cursor: m.created_at,
+          cursor: m.id,
           body: m.body,
           link_preview: m.link_preview ?? null,
           sender_name: m.sender.name,
           file: m.file,
         }));
-      result = { items: items.slice(0, 60), more: items.length > 60 };
+      const before = params.get('before');
+      const start = before ? items.findIndex((item) => item.cursor === before) + 1 : 0;
+      result = { items: items.slice(start, start + 60), more: items.length > start + 60 };
     } else if (parts[2] === 'files') {
       const form = body as FormData;
       const f = form.get('file') as File;
@@ -664,6 +687,7 @@ export async function demoRequest(url: string, method: string, body: unknown): P
         id,
         name: f.name,
         size: f.size,
+        as_file: params.get('asFile') === '1',
         mime: f.type.split(';')[0] || 'application/octet-stream',
         width: Number(form.get('width')) || null,
         height: Number(form.get('height')) || null,
@@ -830,6 +854,7 @@ export async function demoRequest(url: string, method: string, body: unknown): P
                 body: quoted.body,
                 sender: { id: quoted.sender.id, name: quoted.sender.name },
                 file_name: quoted.file?.name || null,
+                as_file: quoted.file?.as_file,
               }
             : null,
         };

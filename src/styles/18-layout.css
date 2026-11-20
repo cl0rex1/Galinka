@@ -1,0 +1,302 @@
+/* ========== Wide screens: the details panel takes its place beside the conversation ==========
+   It slides in by its own width, so the conversation narrows smoothly instead of jumping. */
+@media (min-width: 1181px) {
+  .chat-info {
+    animation: panel-push 340ms var(--ease-sheet);
+  }
+  .chat-info.closing {
+    animation: panel-pull var(--dur-modal) var(--ease-move) forwards;
+  }
+}
+@keyframes panel-push {
+  from {
+    margin-right: -341px;
+  }
+}
+@keyframes panel-pull {
+  to {
+    margin-right: -341px;
+  }
+}
+
+/* ========== Medium widths: details panel floats over the conversation ========== */
+@media (max-width: 1180px) {
+  .chat-info {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 10;
+    width: min(360px, 100%);
+    box-shadow: -12px 0 40px var(--color-shadow-deep);
+  }
+}
+@media (max-width: 1000px) {
+  :root {
+    --sidebar-width: 320px;
+  }
+}
+
+/* ========== Phones: one pane at a time, pushed like a navigation stack ========== */
+@media (max-width: 800px), (max-width: 960px) and (max-height: 500px) and (pointer: coarse) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'sidebar'
+      'nav';
+  }
+  .sidebar,
+  .app-nav {
+    border-right: 0;
+  }
+  .app-nav {
+    background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  }
+  .app-nav button {
+    padding-top: 6px;
+  }
+  .app-shell .workspace {
+    display: none;
+  }
+  .app-shell.has-active,
+  .app-shell:not(.section-chats) {
+    grid-template-areas: 'main' 'nav';
+  }
+  .app-shell.has-active {
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: 'main';
+  }
+  .app-shell.has-active .workspace,
+  .app-shell:not(.section-chats) .workspace {
+    display: flex;
+  }
+  .app-shell.has-active .sidebar,
+  .app-shell.has-active .app-nav,
+  .app-shell:not(.section-chats) .sidebar {
+    display: none;
+  }
+  .app-shell[data-nav='push'].has-active .workspace {
+    animation: push-in var(--dur-push) var(--ease-sheet);
+  }
+  .app-shell[data-nav='pop'] .sidebar {
+    animation: pop-in var(--dur-push) var(--ease-sheet);
+  }
+  .sidebar-head {
+    min-height: 54px;
+    padding: 8px 6px 0 16px;
+  }
+  .sidebar-head h1 {
+    font-size: var(--text-2xl);
+  }
+  .search-field {
+    margin: 4px 16px 8px;
+  }
+  .chat-filters {
+    padding: 0 10px;
+  }
+  .chat-list {
+    padding: 4px 0 8px;
+  }
+  .chat-item,
+  .archive-link {
+    gap: 12px;
+    padding: 8px 16px;
+    border-radius: 0;
+  }
+  .avatar {
+    width: 56px;
+    height: 56px;
+    font-size: 19px;
+  }
+  .archive-link > svg {
+    width: 56px;
+  }
+  .chat-item.selected {
+    color: inherit;
+    background: transparent;
+  }
+  .mobile-back {
+    display: inline-grid;
+  }
+  .chat-header {
+    min-height: 54px;
+    padding-left: 2px;
+  }
+  .chat-heading {
+    padding-left: 0;
+  }
+  .messages {
+    padding: 8px 10px 6px;
+  }
+  .message-content {
+    max-width: 84%;
+  }
+  .composer-wrap {
+    padding: 4px 8px max(8px, env(safe-area-inset-bottom));
+  }
+  :root[data-keyboard-open='true'] .composer-wrap {
+    padding-bottom: 8px;
+  }
+  .composer {
+    gap: 6px;
+  }
+  .composer-context,
+  .pending-file {
+    margin-right: 52px;
+  }
+  .jump-to-latest {
+    right: 10px;
+  }
+  .chat-info {
+    width: 100%;
+    box-shadow: none;
+    animation-name: push-in;
+    animation-duration: var(--dur-push);
+    animation-timing-function: var(--ease-sheet);
+  }
+  .chat-info.closing {
+    animation: push-out var(--dur-modal) var(--ease-move) forwards;
+  }
+  /* A screen of its own on a phone: the same head as the chat, back on the left. */
+  .chat-info {
+    padding-top: 0;
+  }
+  .info-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    min-height: 54px;
+    margin: 0 -16px;
+    padding: max(0px, env(safe-area-inset-top)) 8px 0 2px;
+    background: var(--color-surface);
+  }
+  .info-head strong {
+    font-size: var(--text-lg);
+  }
+  .info-back {
+    display: inline-grid;
+  }
+  .info-close {
+    display: none;
+  }
+  .content-page {
+    padding: max(12px, env(safe-area-inset-top)) 16px 32px;
+  }
+  /* Phones: a panel across the screen above the field, where the keyboard would be. */
+  .emoji-picker:not(.reaction-picker) {
+    position: fixed;
+    left: max(8px, env(safe-area-inset-left));
+    right: max(8px, env(safe-area-inset-right));
+    bottom: calc(68px + env(safe-area-inset-bottom));
+    width: auto;
+    height: min(400px, 55dvh);
+    transform-origin: bottom center;
+  }
+  .modal {
+    width: 100%;
+    max-width: none;
+    margin: auto 0 0;
+    max-height: calc(var(--app-height, 100dvh) - max(24px, env(safe-area-inset-top)));
+    padding-bottom: max(22px, env(safe-area-inset-bottom));
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+  @starting-style {
+    .modal[open] {
+      opacity: 1;
+      scale: 1;
+      translate: 0 100%;
+    }
+  }
+  .modal[data-closing] {
+    opacity: 1;
+    scale: 1;
+    translate: 0 100%;
+    transition-timing-function: var(--ease-in);
+  }
+}
+@keyframes push-in {
+  from {
+    translate: 100% 0;
+    box-shadow: -20px 0 40px var(--color-shadow);
+  }
+}
+@keyframes push-out {
+  to {
+    translate: 100% 0;
+  }
+}
+@keyframes pop-in {
+  from {
+    translate: -24% 0;
+    opacity: 0.6;
+  }
+}
+
+/* ========== Phones: dragging a screen back from the left edge ==========
+   The chat follows the finger (gestures.ts) and the chat list shows through underneath, moving
+   in from a little to the left, as in iOS. */
+@media (max-width: 800px), (max-width: 960px) and (max-height: 500px) and (pointer: coarse) {
+  .app-shell[data-swipe='back'] {
+    position: relative;
+  }
+  .app-shell[data-swipe='back'] .workspace {
+    position: relative;
+    z-index: 2;
+    box-shadow: -16px 0 32px var(--color-shadow-deep);
+  }
+  .app-shell[data-swipe='back'] .sidebar,
+  .app-shell[data-swipe='back'] .app-nav {
+    display: flex;
+    position: absolute;
+    left: 0;
+    right: 0;
+    z-index: 1;
+    translate: calc((var(--back-progress, 0) - 1) * 24%) 0;
+  }
+  .app-shell[data-swipe='back'] .sidebar {
+    top: 0;
+    bottom: 0;
+  }
+  .app-shell[data-swipe='back'] .app-nav {
+    display: grid;
+    bottom: 0;
+  }
+  .app-shell[data-swiped] :is(.sidebar, .app-nav),
+  .chat-info[data-swiped] {
+    animation: none !important;
+  }
+  .chat-info,
+  .settings-subpage {
+    touch-action: pan-y pinch-zoom;
+  }
+  /* On a phone the chat's name is the way into its profile, as in Telegram; the icon only
+     repeated it. */
+  .chat-header .info-toggle {
+    display: none;
+  }
+  /* A bottom sheet is pulled down by its head; the grabber above the title shows it
+     (ui.tsx useSheetDrag). The head does not scroll the page under the finger. */
+  .modal {
+    padding-top: 8px;
+  }
+  :is(.modal-head, .attach-dialog-head, .sheet-handle) {
+    padding-top: 18px;
+    touch-action: none;
+  }
+  .modal::before {
+    content: '';
+    position: absolute;
+    z-index: 1;
+    pointer-events: none;
+    top: 8px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: var(--radius-pill);
+    background: var(--color-paper-3);
+  }
+}
+@property --back-progress {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}

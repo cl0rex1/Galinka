@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FileText, Pencil, Plus, X } from 'lucide-react';
 import { fileLabel } from './MediaAttachment';
 import { ImageEditor } from './ImageEditor';
+import { useSheetDrag } from './ui';
 
 const editable = (file: File) => /^image\/(jpeg|png|webp)$/.test(file.type);
 const count = (files: File[]) => {
@@ -28,7 +29,7 @@ const count = (files: File[]) => {
  * a caption field and Send. Closing it keeps the files in the composer.
  */
 export function AttachDialog({
-  files,
+  items,
   caption,
   onCaption,
   onRemove,
@@ -37,7 +38,7 @@ export function AttachDialog({
   onSend,
   onClose,
 }: {
-  files: File[];
+  items: { file: File; asFile?: boolean }[];
   caption: string;
   onCaption: (value: string) => void;
   onRemove: (index: number) => void;
@@ -46,26 +47,33 @@ export function AttachDialog({
   onSend: () => void;
   onClose: () => void;
 }) {
+  const files = items.map(({ file }) => file);
+  const label = items.some((item) => item.asFile) ? 'вложения' : count(files);
   const dialog = useRef<HTMLDialogElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const [editing, setEditing] = useState<number | null>(null);
+  // Pulling the sheet down folds it back into the composer, as the close button does.
+  const sheet = useSheetDrag(onClose, editing === null);
   const [urls, setUrls] = useState<string[]>([]);
   useEffect(() => {
     dialog.current?.showModal();
-    field.current?.focus();
+    if (matchMedia('(pointer:fine)').matches) field.current?.focus();
   }, []);
   useEffect(() => {
-    const next = files.map((file) => URL.createObjectURL(file));
+    const next = items.map(({ file, asFile }) => (asFile ? '' : URL.createObjectURL(file)));
     setUrls(next);
-    return () => next.forEach((url) => URL.revokeObjectURL(url));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files.map((file) => `${file.name}:${file.size}:${file.lastModified}`).join('|')]);
+    return () =>
+      next.forEach((url) => {
+        if (url) URL.revokeObjectURL(url);
+      });
+  }, [items]);
 
   return (
     <dialog
       ref={dialog}
       className="modal attach-dialog"
-      aria-label={`Отправить ${count(files)}`}
+      aria-label={`Отправить ${label}`}
+      {...sheet}
       onCancel={(event) => {
         event.preventDefault();
         if (editing === null) onClose();
@@ -79,26 +87,26 @@ export function AttachDialog({
         }}
       >
         <div className="attach-dialog-head">
-          <strong>Отправить {count(files)}</strong>
+          <strong>Отправить {label}</strong>
           <button type="button" className="icon-button" aria-label="Свернуть" onClick={onClose}>
             <X size={20} />
           </button>
         </div>
         <ul className={`attach-dialog-grid n${Math.min(files.length, 4)}`}>
-          {files.map((file, index) => (
+          {items.map(({ file, asFile }, index) => (
             <li key={`${index}:${file.name}:${file.size}:${file.lastModified}`}>
-              {file.type.startsWith('image/') && urls[index] ? (
+              {!asFile && file.type.startsWith('image/') && urls[index] ? (
                 <img src={urls[index]} alt={file.name} />
-              ) : file.type.startsWith('video/') && urls[index] ? (
+              ) : !asFile && file.type.startsWith('video/') && urls[index] ? (
                 <video src={`${urls[index]}#t=0.1`} muted playsInline preload="metadata" />
               ) : (
                 <span className="pending-strip-file" title={file.name}>
                   <FileText size={26} />
-                  <small>{fileLabel(file.name)}</small>
+                  <small>{fileLabel(file.name, asFile)}</small>
                 </span>
               )}
               <span className="attach-dialog-actions">
-                {editable(file) && (
+                {!asFile && editable(file) && (
                   <button
                     type="button"
                     className="icon-button"

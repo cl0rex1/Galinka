@@ -1,0 +1,66 @@
+/* ========== Changelog ========== */
+.changelog-page {
+  min-height: 100dvh;
+}
+.changelog-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) 20px 16px;
+}
+.changelog-nav .brand {
+  margin-right: auto;
+}
+.changelog-page main {
+  display: grid;
+  gap: var(--space-xl);
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: var(--space-lg) 20px var(--space-3xl);
+}
+.changelog-page h1 {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+}
+.changelog-page article {
+  display: grid;
+  gap: var(--space-md);
+  padding-top: var(--space-xl);
+  border-top: 1px solid var(--color-rule);
+}
+.changelog-page h2 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-md);
+  font-size: var(--text-xl);
+}
+.changelog-page h2 time {
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--color-muted);
+}
+.changelog-page h3 {
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.changelog-page ul {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+.changelog-page li::marker {
+  color: var(--color-accent);
+}
+.changelog-page code {
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--color-paper-2);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+.settings-section > p.muted {
+  font-size: var(--text-sm);
+}

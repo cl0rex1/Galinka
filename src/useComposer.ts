@@ -9,7 +9,8 @@ import {
   type MutableRefObject,
   type SetStateAction,
 } from 'react';
-import { api, ApiError, originalAudioQuery, upload, uploadInParts } from './api';
+import { api, ApiError, uploadQuery, upload, uploadInParts } from './api';
+import { fileLabel } from './MediaAttachment';
 import { compressImage, measureMedia } from './image';
 import type { Transfer } from './AttachmentPreview';
 import type { Attachment, Chat, LinkPreview, Message, Person } from './types';
@@ -39,7 +40,13 @@ function isTikTokLink(rawUrl: string): boolean {
  * A file waiting to be sent; `source` is the uncompressed original of a shrunk photo, `resume`
  * the server's id of a big upload in progress, so a retry continues it.
  */
-type PendingFile = { file: File; source?: File; uploaded?: Attachment; resume?: { id?: string } };
+type PendingFile = {
+  file: File;
+  asFile?: boolean;
+  source?: File;
+  uploaded?: Attachment;
+  resume?: { id?: string };
+};
 function discardUpload(item?: PendingFile) {
   if (item?.resume?.id && !item.uploaded)
     void api(`/uploads/${item.resume.id}`, 'DELETE').catch(() => {});
@@ -49,8 +56,8 @@ const MAX_BYTES = 100 * 1024 * 1024;
 /** Bigger files go in resumable parts. */
 const SMALL_FILE = 4 * 1024 * 1024;
 /** Photos and videos sent together are drawn as one album. */
-const albumable = (file: { name: string; mime?: string }) =>
-  /^(image|video)\//.test(file.mime || '') && !file.name.startsWith('Кружок');
+const albumable = (file: { name: string; mime?: string; as_file?: boolean }) =>
+  !file.as_file && /^(image|video)\//.test(file.mime || '') && !file.name.startsWith('Кружок');
 
 type ComposerOptions = {
   me: Person | null;
@@ -398,14 +405,19 @@ export function useComposer({
   }
 
   /** Prepare the entire selection before it can be sent. A mixed batch becomes separate messages. */
-  async function attachFiles(sources: File[], original = false, sendNow = false) {
+  async function attachFiles(
+    sources: File[],
+    { original, sendNow, asFile }: { original?: boolean; sendNow?: boolean; asFile?: boolean } = {},
+  ) {
     const id = activeId;
     if (!id || !sources.length || edit || sendingChats.current.has(id)) return;
     const existing = attachments[id] ?? [];
     // Choosing one new audio take replaces the single take already in the player.
     const replace =
       original ||
-      (existing.length === 1 &&
+      (!asFile &&
+        !existing[0]?.asFile &&
+        existing.length === 1 &&
         sources.length === 1 &&
         existing[0].file.type.startsWith('audio/') &&
         sources[0].type.startsWith('audio/'));
@@ -419,13 +431,13 @@ export function useComposer({
     try {
       const items: PendingFile[] = [];
       for (const source of sources) {
-        const file = original ? source : await compressImage(source);
+        const file = original || asFile ? source : await compressImage(source);
         if (file.size > MAX_BYTES) {
           setReviewing(null);
           onError(`Файл «${source.name}» больше 100 МБ.`);
           return;
         }
-        items.push({ file, source: file === source ? undefined : source });
+        items.push({ file, asFile, source: file === source ? undefined : source });
       }
       if (replace) discardUpload(existing[0]);
       setAttachments((previous) => ({
@@ -438,7 +450,11 @@ export function useComposer({
         return next;
       });
       if (sendNow) autoSend.current = id;
-      else if (!original && sources.some((file) => albumable({ name: file.name, mime: file.type })))
+      else if (
+        !original &&
+        !asFile &&
+        sources.some((file) => albumable({ name: file.name, mime: file.type }))
+      )
         setReviewing(id);
       delete nonces.current[id];
     } catch (error) {
@@ -534,6 +550,7 @@ export function useComposer({
             body: replyTo.body,
             sender: { id: replyTo.sender.id, name: replyTo.sender.name },
             file_name: replyTo.file?.name,
+            as_file: replyTo.file?.as_file,
           }
         : null,
       pending: true,
@@ -626,17 +643,24 @@ export function useComposer({
             }));
           report(0);
           // Size and a blurred preview let the feed hold the picture's place while it loads.
-          const meta = (await measureMedia(item.file)) ?? {};
+          const meta = item.asFile ? {} : ((await measureMedia(item.file)) ?? {});
           if (item.file.size > SMALL_FILE && !demo) {
             item.resume ??= {};
-            file = await uploadInParts<Attachment>(id, item.file, meta, report, item.resume);
+            file = await uploadInParts<Attachment>(
+              id,
+              item.file,
+              meta,
+              report,
+              item.resume,
+              item.asFile,
+            );
           } else {
             const form = new FormData();
             for (const [key, value] of Object.entries(meta))
               if (value !== undefined) form.append(key, String(value));
             form.append('file', item.file);
             file = await upload<Attachment>(
-              `/chats/${id}/files${originalAudioQuery(item.file)}`,
+              `/chats/${id}/files${uploadQuery(item.file, item.asFile)}`,
               form,
               report,
             );
@@ -831,7 +855,9 @@ export function useComposer({
     attachmentNames: Object.fromEntries(
       Object.entries(attachments).map(([id, items]) => [
         id,
-        items.length > 1 ? `Вложений: ${items.length}` : items[0].file.name,
+        items.length > 1
+          ? `Вложений: ${items.length}`
+          : fileLabel(items[0].file.name, items[0].asFile),
       ]),
     ),
     layoutKey: `${reply?.id ?? ''}:${edit?.message.id ?? ''}:${pendingFiles.length}:${linkPreview ? '1' : '0'}:${tiktokUrl ? '1' : '0'}`,

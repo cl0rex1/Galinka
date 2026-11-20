@@ -1,0 +1,56 @@
+/* ========== Chat info ========== */
+.chat-info {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  padding: 6px 16px 24px;
+  border-left: 1px solid var(--color-rule);
+  background: var(--color-surface);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  animation: panel-in var(--dur-enter) var(--ease-out);
+}
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    translate: 24px 0;
+  }
+}
+.info-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 44px;
+  margin-right: -8px;
+}
+.info-head strong {
+  flex: 1;
+}
+.info-back {
+  display: none;
+  color: var(--color-accent);
+}
+.info-section {
+  display: grid;
+  gap: 2px;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--color-rule);
+}
+.info-section h4 {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-muted);
+}
+.owner-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--color-muted);
+}

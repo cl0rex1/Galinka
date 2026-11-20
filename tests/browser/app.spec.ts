@@ -27,7 +27,7 @@ test('demo conversation and Nelya work; chat details and keyboard modal are usab
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
-  await page.getByRole('tab', { name: 'Приложение', exact: true }).click();
+  await page.getByRole('button', { name: 'Приложение', exact: true }).click();
   await page.getByRole('button', { name: 'Установить Galinka', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.keyboard.press('Escape');
@@ -80,7 +80,7 @@ test('web update check reports the installed release', async ({ page }) => {
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
-  await page.getByRole('tab', { name: 'Приложение', exact: true }).click();
+  await page.getByRole('button', { name: 'Приложение', exact: true }).click();
   await page.getByRole('button', { name: 'Проверить обновления', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Последняя версия');
 });
@@ -95,9 +95,12 @@ test('themes persist and system mode follows the device; demo never asks for pus
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
+  await page.getByRole('button', { name: 'Уведомления и звуки', exact: true }).click();
   await expect(page.getByRole('switch', { name: 'Пуш-уведомления' })).toHaveCount(0);
   await expect(page.getByText('Недоступны в демоверсии.')).toBeVisible();
-  await page.getByRole('tab', { name: 'Оформление', exact: true }).click();
+  // Back to the list of sections, then the next one.
+  await page.getByRole('button', { name: 'Назад к настройкам', exact: true }).click();
+  await page.getByRole('button', { name: 'Оформление', exact: true }).click();
   await page.getByRole('button', { name: 'Тёмная', exact: false }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.reload();
@@ -106,7 +109,7 @@ test('themes persist and system mode follows the device; demo never asks for pus
     .getByRole('button', { name: 'Настройки', exact: true })
     .filter({ visible: true })
     .click();
-  await page.getByRole('tab', { name: 'Оформление', exact: true }).click();
+  await page.getByRole('button', { name: 'Оформление', exact: true }).click();
   await page.getByRole('button', { name: 'Системная', exact: false }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.emulateMedia({ colorScheme: 'dark' });

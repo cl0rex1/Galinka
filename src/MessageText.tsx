@@ -44,6 +44,24 @@ export const SelfContext = createContext('');
 export const mentionsUser = (text: string, username: string) =>
   !!username && new RegExp(`(^|[^a-z0-9_@])@${username}($|[^a-z0-9_])`, 'i').test(text);
 
+export function messageAddress(raw: string) {
+  let address = raw.replace(/[.,!?;:»”]+$/, '');
+  for (const [open, close] of [
+    ['(', ')'],
+    ['[', ']'],
+    ['{', '}'],
+  ]) {
+    while (address.endsWith(close) && address.split(close).length > address.split(open).length)
+      address = address.slice(0, -1);
+  }
+  try {
+    const url = new URL(address);
+    return ['http:', 'https:'].includes(url.protocol) ? address : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Render addresses and @usernames without interpreting message text as HTML.
 function linkify(
   text: string,
@@ -97,30 +115,17 @@ function linkify(
       position = start + match[0].length;
       continue;
     }
-    let address = match[0].replace(/[.,!?;:»”]+$/, '');
-    for (const [open, close] of [
-      ['(', ')'],
-      ['[', ']'],
-      ['{', '}'],
-    ]) {
-      while (address.endsWith(close) && address.split(close).length > address.split(open).length)
-        address = address.slice(0, -1);
-    }
-    try {
-      const url = new URL(address);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
-      parts.push(
-        <Fragment key={`${key}t${position}`}>
-          {marked(text.slice(position, start), highlight)}
-        </Fragment>,
-        <a key={`${key}a${start}`} href={url.href} target="_blank" rel="noopener noreferrer">
-          {address}
-        </a>,
-      );
-      position = start + address.length;
-    } catch {
-      // Invalid addresses stay part of the next text segment.
-    }
+    const address = messageAddress(match[0]);
+    if (!address) continue;
+    parts.push(
+      <Fragment key={`${key}t${position}`}>
+        {marked(text.slice(position, start), highlight)}
+      </Fragment>,
+      <a key={`${key}a${start}`} href={address} target="_blank" rel="noopener noreferrer">
+        {address}
+      </a>,
+    );
+    position = start + address.length;
   }
   parts.push(<Fragment key={`${key}end`}>{marked(text.slice(position), highlight)}</Fragment>);
   return parts;

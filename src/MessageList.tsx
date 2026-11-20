@@ -28,6 +28,7 @@ import {
 import { Avatar } from './Avatar';
 import { MessageMenuBody } from './MessageMenu';
 import { fileLabel, isVideoNote, MediaAttachment, GalleryViewer } from './MediaAttachment';
+import { useAnimateOnChange } from './motion';
 import { bareKind, mentionsUser, MessageText, plainText, SelfContext } from './MessageText';
 import { LinkPreviewCard } from './LinkPreview';
 import { GalleryContext } from './gallery';
@@ -57,7 +58,11 @@ const grouped = (left: Message | undefined, right: Message | undefined) =>
 /** A photo or video that belongs to an album (several sent at once). */
 const inAlbum = (m: Message | undefined) =>
   Boolean(
-    m?.album_id && m.file && /^(image|video)\//.test(m.file.mime || '') && !isVideoNote(m.file),
+    m?.album_id &&
+    m.file &&
+    !m.file.as_file &&
+    /^(image|video)\//.test(m.file.mime || '') &&
+    !isVideoNote(m.file),
   );
 const sameAlbum = (left: Message | undefined, right: Message | undefined) =>
   inAlbum(left) && inAlbum(right) && left!.album_id === right!.album_id;
@@ -141,6 +146,9 @@ const MessageRow = memo(function MessageRow({
 }: RowProps) {
   const menu = useRef<HTMLDetailsElement>(null);
   const self = useContext(SelfContext);
+  const receipt = useAnimateOnChange<HTMLSpanElement>(
+    m.failed ? 'failed' : m.pending ? 'pending' : (m.read_by || 0) > 0 ? 'read' : 'sent',
+  );
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const held = useRef(false);
   const bot = !m.sender_id;
@@ -295,7 +303,7 @@ const MessageRow = memo(function MessageRow({
                   <strong>{reply.sender.name}</strong>
                   <span>
                     {plainText(reply.body) ||
-                      (reply.file_name && fileLabel(reply.file_name)) ||
+                      (reply.file_name && fileLabel(reply.file_name, reply.as_file)) ||
                       'Сообщение'}
                   </span>
                 </div>
@@ -412,22 +420,26 @@ const MessageRow = memo(function MessageRow({
                 </button>
               )}
               <time dateTime={m.created_at}>{time(m.created_at)}</time>
-              {own &&
-                (m.failed ? (
-                  <AlertCircle size={14} className="failed-mark" aria-label="Не отправлено" />
-                ) : m.pending ? (
-                  <Clock3 size={13} className="pending-mark" aria-label="Отправляется" />
-                ) : (m.read_by || 0) > 0 ? (
-                  <span
-                    className="read-receipt"
-                    title={kind === 'direct' ? 'Прочитано' : `Прочитали: ${m.read_by}`}
-                    aria-label={kind === 'direct' ? 'Прочитано' : `Прочитали: ${m.read_by}`}
-                  >
-                    <CheckCheck size={15} />
-                  </span>
-                ) : (
-                  <Check size={14} aria-label="Отправлено" />
-                ))}
+              {own && (
+                // The mark changes in place (sending, sent, read) with a short cross-fade.
+                <span className="receipt-slot" ref={receipt}>
+                  {m.failed ? (
+                    <AlertCircle size={14} className="failed-mark" aria-label="Не отправлено" />
+                  ) : m.pending ? (
+                    <Clock3 size={13} className="pending-mark" aria-label="Отправляется" />
+                  ) : (m.read_by || 0) > 0 ? (
+                    <span
+                      className="read-receipt"
+                      title={kind === 'direct' ? 'Прочитано' : `Прочитали: ${m.read_by}`}
+                      aria-label={kind === 'direct' ? 'Прочитано' : `Прочитали: ${m.read_by}`}
+                    >
+                      <CheckCheck size={15} />
+                    </span>
+                  ) : (
+                    <Check size={14} aria-label="Отправлено" />
+                  )}
+                </span>
+              )}
             </span>
           </div>
           {m.reactions.length > 0 && (
@@ -631,6 +643,7 @@ export const MessageList = memo(function MessageList({
         (m) =>
           !m.pending &&
           m.file &&
+          !m.file.as_file &&
           !isVideoNote(m.file) &&
           /^(image\/(png|jpeg|gif|webp)|video\/(mp4|webm|quicktime))$/.test(m.file.mime || ''),
       )

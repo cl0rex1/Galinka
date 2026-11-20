@@ -25,6 +25,7 @@ export type Attachment = {
   name: string;
   size: number;
   mime?: string;
+  as_file?: boolean;
   /** Photos and videos: size and a tiny blurred preview, so the feed does not jump. */
   width?: number | null;
   height?: number | null;
@@ -99,6 +100,7 @@ export type Message = {
     body: string;
     sender: { id: string; name: string };
     file_name?: string | null;
+    as_file?: boolean | null;
   } | null;
   read_by?: number;
   /** Name of the original author when the message was forwarded. */
@@ -135,8 +137,15 @@ export type Chat = {
   /** Unread messages in this group that name you with @. */
   unread_mentions?: number;
   created_at: string;
-  pinned_message?: { id: string; body: string; file_name?: string | null } | null;
+  pinned_message?: {
+    id: string;
+    body: string;
+    file_name?: string | null;
+    as_file?: boolean | null;
+  } | null;
   last_message: {
+    /** Missing from servers older than 0.16. */
+    id?: string;
     body: string;
     created_at: string;
     sender_id: string | null;

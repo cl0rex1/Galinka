@@ -29,7 +29,9 @@ import {
   Timer,
   Undo2,
 } from 'lucide-react';
-import { useConversationGestures } from './gestures';
+import { slideBack, useConversationGestures } from './gestures';
+import { PHONE_LAYOUT } from './layout';
+import { AnimatedText } from './motion';
 import { Avatar, seenText } from './Avatar';
 import { MessageList, type MessageActions } from './MessageList';
 import { MiniPlayer } from './MiniPlayer';
@@ -80,6 +82,7 @@ import {
   IconButton,
   Modal,
   plural,
+  runBackHandler,
   toggleMenu,
   usePresence,
   useTabIndicator,
@@ -113,9 +116,7 @@ const skeletonBubbles: [boolean, string][] = [
   [false, '40%'],
 ];
 type Section = 'chats' | 'announcements' | 'settings';
-// Keep in sync with the one-pane breakpoint in styles.css.
-const narrowLayout =
-  '(max-width: 800px), (max-width: 960px) and (max-height: 500px) and (pointer: coarse)';
+const narrowLayout = PHONE_LAYOUT;
 export default function App() {
   const updates = useUpdates();
   const [me, setMe] = useState<Person | null>(null),
@@ -325,7 +326,9 @@ export default function App() {
   useEffect(() => {
     if (!isNative) return;
     const back = NativeApp.addListener('backButton', () => {
-      if (modal) setModal(null);
+      const viewer = document.querySelector('.chat-media dialog:modal');
+      if (viewer) viewer.dispatchEvent(new Event('cancel', { cancelable: true }));
+      else if (modal) setModal(null);
       else if (selection) setSelection(null);
       else if (composer.emojiOpen) composer.setEmojiOpen(false);
       else if (composer.edit) composer.setEditing(null);
@@ -337,8 +340,9 @@ export default function App() {
       else if (searchOpen) {
         setSearchOpen(false);
         setMessageQuery('');
-      } else if (section !== 'chats') setSection('chats');
-      else if (activeId) setActiveId(null);
+      } else if (runBackHandler()) return;
+      else if (section !== 'chats') setSection('chats');
+      else if (activeId) slideBack(document.querySelector('.workspace'), () => setActiveId(null));
       else void NativeApp.minimizeApp();
     });
     return () => {
@@ -466,6 +470,8 @@ export default function App() {
         menus.forEach((menu) => closeMenu(menu));
         return;
       }
+      // A screen opened over another (a settings page) closes first.
+      if (runBackHandler()) return;
       if (!composer.editRequest.current) composer.setEditing(null);
       composer.setEmojiOpen(false);
       setInfoOpen(false);
@@ -659,7 +665,8 @@ export default function App() {
     const summary = details.querySelector('summary');
     if (!menu || !summary) return;
     const viewport = window.visualViewport;
-    const width = Math.min(240, window.innerWidth - 24);
+    // The menu's real width (its CSS decides it), so it never spills past the screen edge.
+    const width = Math.min(menu.offsetWidth || 272, window.innerWidth - 24);
     const height = Math.min(menu.scrollHeight, (viewport?.height ?? window.innerHeight) - 24);
     const origin = viewport?.offsetTop ?? 0;
     const bottom = origin + (viewport?.height ?? window.innerHeight);
@@ -1084,6 +1091,24 @@ export default function App() {
             loaded={initialized.current}
             onSelect={select}
             onNew={() => setModal('new')}
+            onAction={(chat, action) => {
+              if (action === 'read') {
+                void api(`/chats/${chat.id}/read`, 'POST', {
+                  lastMessageId: chat.last_message?.id,
+                })
+                  .then(refreshChats)
+                  .catch(report);
+                return;
+              }
+              void setChatPreference(
+                chat,
+                action === 'pin'
+                  ? { pinned: !chat.pinned }
+                  : action === 'mute'
+                    ? { muted: !chat.muted }
+                    : { archived: !chat.archived },
+              );
+            }}
           />
         )}
       </aside>
@@ -1175,7 +1200,9 @@ export default function App() {
               <IconButton
                 label="Назад к чатам"
                 className="mobile-back"
-                onClick={() => setActiveId(null)}
+                onClick={() =>
+                  slideBack(document.querySelector('.workspace'), () => setActiveId(null))
+                }
               >
                 <ArrowLeft size={22} />
               </IconButton>
@@ -1183,7 +1210,9 @@ export default function App() {
                 <Avatar person={active.peer} chat={active} size="small" />
                 <span>
                   <h2>{active.title}</h2>
-                  <p
+                  <AnimatedText
+                    text={subtitle(active)}
+                    scope={active.id}
                     className={
                       typingIn(active)
                         ? 'is-typing'
@@ -1191,9 +1220,7 @@ export default function App() {
                           ? 'is-online'
                           : ''
                     }
-                  >
-                    {subtitle(active)}
-                  </p>
+                  />
                 </span>
               </button>
               <div className="header-actions">
@@ -1371,7 +1398,10 @@ export default function App() {
                     <span>
                       {plainText(active.pinned_message.body) ||
                         (active.pinned_message.file_name &&
-                          fileLabel(active.pinned_message.file_name)) ||
+                          fileLabel(
+                            active.pinned_message.file_name,
+                            active.pinned_message.as_file,
+                          )) ||
                         'Сообщение'}
                     </span>
                   </span>
@@ -1508,6 +1538,7 @@ export default function App() {
                     if (window.innerWidth <= 1180) setInfoOpen(false);
                     setSearchOpen(true);
                   }}
+                  onDownload={messageActions.download}
                   onOpenMessage={(id) => {
                     if (window.innerWidth <= 1180) setInfoOpen(false);
                     void conversation.showMessage(id);
@@ -1542,7 +1573,6 @@ export default function App() {
               setModal('profile');
             }}
             onInstall={installedApp() ? undefined : () => setModal('install')}
-            onScan={touchDevice() ? () => setScanning(true) : undefined}
             onMe={(person) => setMe((current) => (current ? { ...current, ...person } : person))}
             onLogout={logout}
           />
