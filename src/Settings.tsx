@@ -15,6 +15,7 @@ import {
   Shield,
   ShieldCheck,
   Smartphone,
+  UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import { MediaSettings } from './MediaSettings';
@@ -30,6 +31,7 @@ import { PhotoPicker, photoForm } from './AvatarEditor';
 import { NotificationPreferences, PreviewSettings, PrivacySettings } from './Privacy';
 import { currentAccent, profileLink, ShareSheet, themeLink } from './Share';
 import { Updates } from './updates';
+import { draftOf, ProfileEditor, type ProfileDraft } from './ProfileEditor';
 import type { Person } from './types';
 
 /**
@@ -38,8 +40,9 @@ import type { Person } from './types';
  * same language as the chats. Back, Esc, the Android back button and a swipe from the left edge
  * all return to the list.
  */
-type Page = 'notifications' | 'privacy' | 'security' | 'look' | 'media' | 'app';
+type Page = 'profile' | 'notifications' | 'privacy' | 'security' | 'look' | 'media' | 'app';
 const pages: Record<Page, { title: string; icon: LucideIcon; tone: number }> = {
+  profile: { title: 'Профиль', icon: UserRound, tone: 2 },
   notifications: { title: 'Уведомления и звуки', icon: Bell, tone: 0 },
   privacy: { title: 'Конфиденциальность', icon: Lock, tone: 2 },
   security: { title: 'Безопасность и устройства', icon: ShieldCheck, tone: 1 },
@@ -58,7 +61,6 @@ export function Settings({
   demo,
   notifications,
   hasDraft,
-  onEditName,
   onInstall,
   onLogout,
   onMe,
@@ -67,7 +69,6 @@ export function Settings({
   demo: boolean;
   notifications: ReturnType<typeof useNotifications>;
   hasDraft: boolean;
-  onEditName: () => void;
   onInstall?: () => void;
   onLogout: () => void;
   onMe: (person: Person) => void;
@@ -82,11 +83,31 @@ export function Settings({
     setPage(next);
   };
   const back = () => setPage(null);
+  // What was typed into the profile stays here when its screen closes without saving.
+  const [draft, setDraft] = useState<ProfileDraft | null>(null);
+  const shareMe = () =>
+    setShare({
+      heading: 'Мой профиль',
+      title: me.name,
+      subtitle: `@${me.username}`,
+      link: profileLink(me.username),
+      accent: currentAccent(),
+      face: { photo: me.avatar, tone: me.color },
+    });
   const presence = usePresence(page !== null, 260);
   useBackHandler(page !== null, back);
   const swipe = usePanelSwipeBack(back);
 
   const content: Record<Page, ReactNode> = {
+    profile: (
+      <ProfileEditor
+        me={me}
+        draft={draft ?? draftOf(me)}
+        onDraft={setDraft}
+        onSaved={back}
+        onMe={onMe}
+      />
+    ),
     notifications: (
       <>
         <NotificationSettings state={notifications} demo={demo} />
@@ -157,8 +178,14 @@ export function Settings({
     <div className="settings-stack">
       <div className="content-page settings-page" inert={page !== null}>
         <h1>Настройки</h1>
-        <ProfileHero person={me} title={me.name} subtitle={`@${me.username}`}>
+        {/* The header: the person's own colour behind their photo, as a cover. */}
+        <div className={`settings-profile cover-${me.color % 6}`}>
+        <ProfileHero person={me} title={me.name} subtitle={`@${me.username}`} about={me.bio}>
           <div className="hero-tiles">
+            <button onClick={() => open('profile')} aria-label="Изменить профиль">
+              <Pencil size={20} />
+              Изменить
+            </button>
             <PhotoPicker
               hasPhoto={Boolean(me.avatar)}
               onUpload={async (blob) =>
@@ -175,26 +202,13 @@ export function Settings({
                 </button>
               )}
             />
-            <button onClick={onEditName} aria-label="Изменить имя">
-              <Pencil size={20} />
-              Имя
-            </button>
-            <button
-              onClick={() =>
-                setShare({
-                  heading: 'Мой профиль',
-                  title: me.name,
-                  subtitle: `@${me.username}`,
-                  link: profileLink(me.username),
-                  accent: currentAccent(),
-                })
-              }
-            >
+            <button onClick={shareMe}>
               <QrCode size={20} />
               QR-код
             </button>
           </div>
         </ProfileHero>
+        </div>
         {groups.map((group) => (
           <nav key={group[0]} className="settings-section settings-menu" aria-label="Настройки">
             {group.map((id) => {

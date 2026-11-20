@@ -426,55 +426,90 @@
   flex-direction: column;
   gap: 6px;
 }
+/* A choice: a round mark for one answer, a square one for several, then the text and the share.
+   The bar behind it grows to the share and the whole row presses like a button. */
 .poll-option {
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-rule);
-  background: var(--color-paper);
-  color: var(--color-ink);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  color: inherit;
   text-align: left;
   overflow: hidden;
-  transition: border-color var(--dur-fast);
+  transition:
+    background var(--dur-fast),
+    scale var(--dur-press) var(--ease-out);
 }
-.poll-option.voted {
-  border-color: var(--color-accent);
+.poll-option:not(:disabled):active {
+  scale: 0.985;
+}
+.poll-option:disabled {
+  opacity: 1;
+  cursor: default;
 }
 .poll-option-bar {
   position: absolute;
   inset: 0 auto 0 0;
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
   pointer-events: none;
-  transition: width var(--dur-medium) var(--ease-out);
+  transition: width var(--dur-long) var(--ease-out);
 }
 .poll-option-row {
   position: relative;
   z-index: 1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
 }
+.poll-mark {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid var(--color-faint);
+  border-radius: 50%;
+  color: transparent;
+  transition:
+    background var(--dur-short),
+    border-color var(--dur-short),
+    color var(--dur-short);
+}
+.poll-mark.square {
+  border-radius: var(--radius-xs);
+}
+.poll-mark.on {
+  border-color: var(--color-accent);
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+  animation: poll-pop var(--dur-menu) var(--ease-out);
+}
+@keyframes poll-pop {
+  from {
+    scale: 0.7;
+  }
+}
 .poll-option-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  flex: 1;
+  min-width: 0;
   font-size: var(--text-md);
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 .poll-option-pct {
-  font-size: var(--text-xs);
-  color: var(--color-muted);
-  white-space: nowrap;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .poll-option-voters {
   position: relative;
   z-index: 1;
+  padding-left: 30px;
   font-size: var(--text-xs);
   color: var(--color-muted);
 }

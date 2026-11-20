@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { motionAllowed } from './ui';
-import { Avatar } from './Avatar';
+import { Avatar, avatarUrl } from './Avatar';
+import { AvatarViewer } from './AvatarViewer';
 import type { Chat, Person } from './types';
 
 const PULL = 110; // px of overscroll that opens the large avatar
@@ -8,22 +9,30 @@ const PULL = 110; // px of overscroll that opens the large avatar
 /**
  * Profile header in the manner of Telegram for iOS: pulling the page down past its top
  * (touch drag or trackpad overscroll) grows the avatar into a full-width picture;
- * scrolling back down folds it. A tap on the avatar does the same for mouse and keyboard.
+ * scrolling back down folds it. A tap on a photo opens it on the whole screen, growing out of the
+ * avatar; without a photo the tap expands the header instead.
  */
 export function ProfileHero({
   person,
   chat,
   title,
   subtitle,
+  about,
   children,
 }: {
   person?: Person | null;
   chat?: Chat;
   title: string;
   subtitle: string;
+  /** A line about the person, under the name. */
+  about?: string;
   children?: ReactNode;
 }) {
   const hero = useRef<HTMLDivElement>(null);
+  const avatar = useRef<HTMLButtonElement>(null);
+  const [viewing, setViewing] = useState(false);
+  const photo =
+    chat?.kind === 'group' ? chat.avatar : chat?.kind === 'saved' ? null : person?.avatar;
   const [expanded, setOpen] = useState(false);
   const expandedRef = useRef(false);
   expandedRef.current = expanded;
@@ -129,11 +138,14 @@ export function ProfileHero({
   return (
     <div ref={hero} className={`profile-hero ${expanded ? 'expanded' : ''}`}>
       <button
+        ref={avatar}
         type="button"
         className="hero-avatar"
-        aria-expanded={expanded}
-        aria-label={expanded ? 'Свернуть аватар' : 'Развернуть аватар'}
-        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={photo ? undefined : expanded}
+        aria-label={
+          photo ? 'Открыть фото' : expanded ? 'Свернуть аватар' : 'Развернуть аватар'
+        }
+        onClick={() => (photo ? setViewing(true) : setExpanded((v) => !v))}
       >
         <Avatar person={person} chat={chat} size="large" showPresence={false} />
       </button>
@@ -141,7 +153,16 @@ export function ProfileHero({
         <h2>{title}</h2>
         <p className={subtitle === 'в сети' ? 'is-online' : undefined}>{subtitle}</p>
       </div>
+      {about && <p className="hero-about">{about}</p>}
       {children}
+      {viewing && photo && (
+        <AvatarViewer
+          src={avatarUrl(photo)}
+          name={title}
+          from={avatar.current}
+          onClose={() => setViewing(false)}
+        />
+      )}
     </div>
   );
 }

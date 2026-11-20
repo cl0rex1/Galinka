@@ -2,6 +2,7 @@ import { ArrowLeft, Bell, BellOff, Pencil, QrCode, Search, X } from 'lucide-reac
 import { Avatar, seenText } from './Avatar';
 import { ChatMedia } from './ChatMedia';
 import { usePanelSwipeBack } from './gestures';
+import { ProfileDetails } from './ProfileDetails';
 import { ProfileHero } from './ProfileHero';
 import { CHAT_SOUNDS, playTone } from './sounds';
 import { IconButton } from './ui';
@@ -94,6 +95,7 @@ export function ChatInfo({
           </>
         )}
       </div>
+      {chat.kind === 'direct' && chat.peer && <ProfileDetails person={chat.peer} />}
       <ChatMedia key={chat.id} chatId={chat.id} onOpen={onOpenMessage} onDownload={onDownload} />
       {chat.kind !== 'saved' && (
         <div className="info-section">

@@ -6,6 +6,8 @@ export type Person = {
   role?: 'admin' | 'user';
   /** Profile photo id, served from /avatars/:id. */
   avatar?: string | null;
+  /** A line about themselves, up to 140 characters. */
+  bio?: string;
   /** 'online', 'recently', an ISO time of the last visit, or null when unknown. */
   seen?: string | null;
 };

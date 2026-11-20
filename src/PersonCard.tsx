@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Crown, LoaderCircle, MessageCircle, QrCode, UserMinus } from 'lucide-react';
 import { currentAccent, profileLink, ShareSheet } from './Share';
 import { api } from './api';
+import { ProfileDetails } from './ProfileDetails';
 import { ProfileHero } from './ProfileHero';
 import { seenText } from './Avatar';
 import { Confirm, Modal } from './ui';
@@ -50,10 +51,11 @@ export function PersonCard({
           </span>
         )}
       </ProfileHero>
-      <div className="person-actions">
+      {/* Quick actions under the photo, the same tiles as in a chat's profile. */}
+      <div className="hero-tiles person-tiles">
         {!self && (
           <button
-            className="primary wide"
+            type="button"
             disabled={busy}
             onClick={async () => {
               setBusy(true);
@@ -66,16 +68,17 @@ export function PersonCard({
               }
             }}
           >
-            {busy ? <LoaderCircle className="spin" size={18} /> : <MessageCircle size={18} />}
+            {busy ? <LoaderCircle className="spin" size={20} /> : <MessageCircle size={20} />}
             Написать
           </button>
         )}
-        <div className="action-list">
-          <button type="button" onClick={() => setSharing(true)}>
-            <QrCode size={18} />
-            Поделиться контактом
-          </button>
-        </div>
+        <button type="button" onClick={() => setSharing(true)} aria-label="Поделиться контактом">
+          <QrCode size={20} />
+          Поделиться
+        </button>
+      </div>
+      <ProfileDetails person={person} />
+      <div className="person-actions">
         {manage && (
           <div className="action-list">
             <button type="button" onClick={() => setConfirm('transfer')}>
@@ -96,6 +99,7 @@ export function PersonCard({
           subtitle={`@${person.username}`}
           link={profileLink(person.username)}
           accent={currentAccent()}
+          face={{ photo: person.avatar, tone: person.color }}
           onClose={() => setSharing(false)}
         />
       )}

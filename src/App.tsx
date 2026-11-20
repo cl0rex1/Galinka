@@ -97,7 +97,6 @@ type InstallEvent = Event & {
 type ModalKind =
   | 'new'
   | 'install'
-  | 'profile'
   | 'invite'
   | 'delete'
   | 'group'
@@ -141,7 +140,6 @@ export default function App() {
     /** Selected message ids while selecting several, otherwise null. */
     [selection, setSelection] = useState<Set<string> | null>(null),
     [forwarding, setForwarding] = useState<string[] | null>(null),
-    [name, setName] = useState(''),
     [person, setPerson] = useState<Person | null>(null),
     [dropping, setDropping] = useState(false),
     [hits, setHits] = useState<string[] | null>(null),
@@ -756,12 +754,36 @@ export default function App() {
     }
   }
 
+  // The reaction shows at once, as in Telegram; the server hears about it after. If it refuses,
+  // the list is read again and the real state replaces the guess.
   async function react(message: Message, emoji: string) {
+    conversation.setMessages((previous) =>
+      previous.map((item) => {
+        if (item.id !== message.id) return item;
+        const existing = item.reactions.find((reaction) => reaction.emoji === emoji);
+        const reactions = !existing
+          ? [...item.reactions, { emoji, count: 1, mine: true }]
+          : existing.mine
+            ? item.reactions
+                .map((reaction) =>
+                  reaction.emoji === emoji
+                    ? { ...reaction, count: reaction.count - 1, mine: false }
+                    : reaction,
+                )
+                .filter((reaction) => reaction.count > 0)
+            : item.reactions.map((reaction) =>
+                reaction.emoji === emoji
+                  ? { ...reaction, count: reaction.count + 1, mine: true }
+                  : reaction,
+              );
+        return { ...item, reactions };
+      }),
+    );
     try {
       await api(`/chats/${message.chat_id}/messages/${message.id}/reactions`, 'POST', { emoji });
-      await conversation.loadMessages(message.chat_id);
     } catch (e) {
       report(e);
+      await conversation.loadMessages(message.chat_id).catch(() => {});
     }
   }
 
@@ -1568,10 +1590,6 @@ export default function App() {
             demo={demo}
             notifications={notifications}
             hasDraft={composer.hasPendingWork}
-            onEditName={() => {
-              setName(me.name);
-              setModal('profile');
-            }}
             onInstall={installedApp() ? undefined : () => setModal('install')}
             onMe={(person) => setMe((current) => (current ? { ...current, ...person } : person))}
             onLogout={logout}
@@ -1669,39 +1687,6 @@ export default function App() {
           </a>
         </Modal>
       )}
-      {modal === 'profile' && (
-        <Modal error={error} title="Изменить имя" onClose={() => setModal(null)}>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setWorking(true);
-              try {
-                setMe(await api<Person>('/me', 'PATCH', { name }));
-                setModal(null);
-                await refreshChats();
-              } catch (e) {
-                report(e);
-              } finally {
-                setWorking(false);
-              }
-            }}
-          >
-            <label>
-              Имя
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                maxLength={40}
-                required
-                autoFocus
-              />
-            </label>
-            <button className="primary wide" disabled={working}>
-              {working ? 'Сохранение…' : 'Сохранить'}
-            </button>
-          </form>
-        </Modal>
-      )}
       {modal === 'invite' && inviteUrl && (
         <ShareSheet
           heading="Пригласить в группу"
@@ -1709,6 +1694,7 @@ export default function App() {
           subtitle="Ссылка-приглашение действует 7 дней"
           link={inviteUrl}
           accent={currentAccent()}
+          face={{ photo: active?.avatar, tone: 2 }}
           onClose={() => setModal(null)}
         />
       )}

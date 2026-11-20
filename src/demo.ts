@@ -11,12 +11,20 @@ import type {
 const self: Person = { id: 'demo-me', name: 'Саша', username: 'sasha', color: 0 };
 const people: Person[] = [
   self,
-  { id: 'anya', name: 'Аня', username: 'anya', color: 1, seen: 'online' },
+  {
+    id: 'anya',
+    name: 'Аня',
+    username: 'anya',
+    color: 1,
+    seen: 'online',
+    bio: 'Люблю горы, плёночные фото и долгие прогулки',
+  },
   {
     id: 'max',
     name: 'Макс',
     username: 'max',
     color: 2,
+    bio: 'Собираю маршруты выходного дня',
     seen: new Date(Date.now() - 2 * 3600_000).toISOString(),
   },
   { id: 'dasha', name: 'Даша', username: 'dasha', color: 3, seen: 'recently' },
@@ -347,10 +355,28 @@ export async function demoRequest(url: string, method: string, body: unknown): P
   }
   if (pathname === '/me') {
     if (method === 'PATCH') {
-      Object.assign(self, { name: data.name });
-      Object.assign(state.people[0], { name: data.name });
+      if (
+        data.username &&
+        state.people.some((person) => person.id !== self.id && person.username === data.username)
+      )
+        throw Error('Этот логин уже занят.');
+      const changes = Object.fromEntries(
+        (['name', 'username', 'bio'] as const)
+          .filter((key) => typeof data[key] === 'string')
+          .map((key) => [key, data[key].trim()]),
+      );
+      Object.assign(self, changes);
+      Object.assign(state.people[0], changes);
     }
     result = self;
+  } else if (pathname.startsWith('/usernames/')) {
+    const name = decodeURIComponent(pathname.slice('/usernames/'.length));
+    const valid = /^[a-z0-9_]{3,24}$/.test(name);
+    result = {
+      valid,
+      available:
+        valid && !state.people.some((person) => person.id !== self.id && person.username === name),
+    };
   } else if (pathname === '/users')
     result = state.people.filter(
       (p) =>

@@ -102,3 +102,71 @@ test.describe('chat row menu', () => {
     await context.close();
   });
 });
+
+test.describe('profile', () => {
+  test('editing the profile: name, about, login with a live check, and the draft survives', async ({
+    page,
+  }) => {
+    await page.goto('/?demo=1');
+    await settings(page);
+    await page.getByRole('button', { name: 'Изменить профиль', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Профиль', level: 2 })).toBeVisible();
+    const about = page.getByRole('textbox', { name: /О себе/ });
+    await about.fill('Пишу код и пеку хлеб');
+    // Leaving without saving keeps what was typed.
+    await page.getByRole('button', { name: 'Назад к настройкам', exact: true }).click();
+    await page.getByRole('button', { name: 'Изменить профиль', exact: true }).click();
+    await expect(about).toHaveValue('Пишу код и пеку хлеб');
+
+    const login = page.getByRole('textbox', { name: 'Логин' });
+    await login.fill('max');
+    await expect(page.getByText('Этот логин уже занят')).toBeVisible();
+    await expect(login).toHaveAttribute('aria-invalid', 'true');
+    await login.fill('a');
+    await expect(page.getByText('От 3 до 24 знаков: латинские буквы, цифры и _')).toBeVisible();
+    await login.fill('@Sasha_New');
+    await expect(login).toHaveValue('sasha_new');
+    await expect(page.getByText('Логин свободен')).toBeVisible();
+    await page.getByRole('button', { name: 'Сохранить', exact: true }).click();
+
+    await expect(page.locator('.settings-subpage')).toHaveCount(0);
+    const header = page.locator('.settings-profile');
+    await expect(header).toContainText('@sasha_new');
+    await expect(header).toContainText('Пишу код и пеку хлеб');
+  });
+
+  test('the QR card is one picture with the name and login, shown and saved alike', async ({
+    page,
+  }) => {
+    await page.goto('/?demo=1');
+    await settings(page);
+    await page.getByRole('button', { name: 'QR-код', exact: true }).click();
+    const sheet = page.getByRole('dialog', { name: 'Мой профиль' });
+    const card = sheet.getByRole('img', { name: 'QR-код' });
+    await expect(card).toBeVisible();
+    expect(await card.getAttribute('title')).toBe('Саша, @sasha');
+    const size = await card.evaluate((image: HTMLImageElement) => [
+      image.naturalWidth,
+      image.naturalHeight,
+    ]);
+    expect(size).toEqual([1080, 1350]);
+    const download = page.waitForEvent('download');
+    await sheet.getByRole('button', { name: 'Сохранить QR', exact: true }).click();
+    expect((await download).suggestedFilename()).toBe('galinka-Саша.png');
+  });
+
+  test('someone’s profile shows what they wrote about themselves and copies their login', async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.goto('/?demo=1');
+    await page.getByRole('button', { name: /Аня/ }).first().click();
+    await page.getByRole('button', { name: 'О чате', exact: true }).click();
+    const info = page.getByRole('complementary', { name: 'О чате' });
+    await expect(info.getByText('Люблю горы, плёночные фото и долгие прогулки')).toBeVisible();
+    await info.getByRole('button', { name: 'Скопировать логин @anya' }).click();
+    await expect(info.getByText('Скопировано')).toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('@anya');
+  });
+});

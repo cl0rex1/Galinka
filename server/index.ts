@@ -209,7 +209,7 @@ const credentials = z.object({
     .regex(/^[a-z0-9_]{3,24}$/),
   password: z.string().min(10).max(128),
 });
-const personSQL = `id, username, name, color, role, avatar`;
+const personSQL = `id, username, name, color, role, avatar, bio`;
 class HttpError extends Error {
   constructor(
     public status: number,
@@ -228,6 +228,7 @@ type User = {
   color: number;
   role: 'admin' | 'user';
   avatar: string | null;
+  bio: string;
   show_last_seen: boolean;
   group_invites: 'all' | 'nobody';
   notify_preview: 'full' | 'sender' | 'none';
@@ -245,7 +246,7 @@ async function auth(req: Request, res: Response, next: NextFunction) {
     const raw = readCookie(req.headers.cookie);
     const token = digest(raw);
     const { rows } = await pool.query(
-      `SELECT u.id,u.username,u.name,u.color,u.role,u.avatar,u.show_last_seen,u.group_invites,u.notify_preview,
+      `SELECT u.id,u.username,u.name,u.color,u.role,u.avatar,u.bio,u.show_last_seen,u.group_invites,u.notify_preview,
        u.notify_direct,u.notify_groups,u.mention_policy,u.quiet_from,u.quiet_to,u.time_zone,(s.expires_at<now()+interval '15 days' OR s.last_seen_at<now()-interval '1 hour') AS stale
        FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1 AND s.expires_at>now() AND NOT u.blocked`,
       [token],
@@ -607,13 +608,38 @@ app.post('/api/auth/logout', auth, async (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/me', auth, (req, res) => res.json(user(req)));
+// The profile: name, login and a line about yourself. Each field is optional; a taken login
+// answers 409 (see the unique-violation handler).
 app.patch('/api/me', auth, async (req, res) => {
-  const { name } = z.object({ name: z.string().trim().min(1).max(40) }).parse(req.body);
-  const { rows } = await pool.query(`UPDATE users SET name=$1 WHERE id=$2 RETURNING ${personSQL}`, [
-    name,
+  const data = z
+    .object({
+      name: z.string().trim().min(1).max(40).optional(),
+      username: credentials.shape.username.optional(),
+      bio: z
+        .string()
+        .trim()
+        .max(140)
+        .transform((text) => text.replace(/\s*\n\s*/g, ' '))
+        .optional(),
+    })
+    .strict()
+    .parse(req.body);
+  const { rows } = await pool.query(
+    `UPDATE users SET name=COALESCE($1,name),username=COALESCE($2,username),bio=COALESCE($3,bio)
+     WHERE id=$4 RETURNING ${personSQL}`,
+    [data.name ?? null, data.username ?? null, data.bio ?? null, user(req).id],
+  );
+  res.json(rows[0]);
+});
+// While typing a new login: is it free? Free for yourself means your own login.
+app.get('/api/usernames/:username', auth, async (req, res) => {
+  const parsed = credentials.shape.username.safeParse(req.params.username);
+  if (!parsed.success) return res.json({ available: false, valid: false });
+  const { rowCount } = await pool.query('SELECT 1 FROM users WHERE username=$1 AND id<>$2', [
+    parsed.data,
     user(req).id,
   ]);
-  res.json(rows[0]);
+  res.json({ available: !rowCount, valid: true });
 });
 const endStreams = (userId: string, keep?: string) => {
   for (const [response, info] of streams)
@@ -916,14 +942,14 @@ app.get('/api/chats', auth, async (req, res) => {
  CASE WHEN c.kind='direct' THEN peer.name ELSE c.title END AS title,
  (SELECT count(*)::int FROM members WHERE chat_id=c.id) AS member_count,
  (SELECT count(*)::int FROM scheduled_messages sm WHERE sm.chat_id=c.id AND sm.sender_id=$1) AS scheduled_count,
- CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color,'avatar',peer.avatar,'last_seen_at',peer.last_seen_at,'show_last_seen',peer.show_last_seen) END AS peer,
+ CASE WHEN peer.id IS NULL THEN NULL ELSE json_build_object('id',peer.id,'name',peer.name,'username',peer.username,'color',peer.color,'avatar',peer.avatar,'bio',peer.bio,'last_seen_at',peer.last_seen_at,'show_last_seen',peer.show_last_seen) END AS peer,
  CASE WHEN last.created_at IS NULL THEN NULL ELSE json_build_object('id',last.id,'body',last.body,'created_at',last.created_at,'sender_id',last.sender_id,'file_id',last.file_id,'file',last.file) END AS last_message,
  (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=messages.id AND hm.user_id=$1) AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1) AS unread,
  CASE WHEN c.kind='group' THEN (SELECT count(*)::int FROM messages WHERE chat_id=c.id AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=messages.id AND hm.user_id=$1) AND created_at>m.read_at AND sender_id IS DISTINCT FROM $1 AND ${mentionsSQL('messages', '$1')}) ELSE 0 END AS unread_mentions,
  (SELECT json_build_object('id',pm.id,'body',pm.body,'file_name',pf.name,'as_file',pf.as_file) FROM messages pm LEFT JOIN files pf ON pf.id=pm.file_id
    WHERE pm.id=c.pinned_message_id AND pm.deleted_at IS NULL AND (pm.expires_at IS NULL OR pm.expires_at>now()) AND NOT EXISTS(SELECT 1 FROM hidden_messages hm WHERE hm.message_id=pm.id AND hm.user_id=$1)) AS pinned_message
  FROM chats c JOIN members m ON m.chat_id=c.id
- LEFT JOIN LATERAL (SELECT u.id,u.name,u.username,u.color,u.avatar,u.last_seen_at,u.show_last_seen FROM members mm JOIN users u ON u.id=mm.user_id
+ LEFT JOIN LATERAL (SELECT u.id,u.name,u.username,u.color,u.avatar,u.bio,u.last_seen_at,u.show_last_seen FROM members mm JOIN users u ON u.id=mm.user_id
    WHERE c.kind='direct' AND mm.chat_id=c.id AND mm.user_id<>$1 LIMIT 1) peer ON true
  LEFT JOIN LATERAL (SELECT lm.id,lm.body,lm.created_at,lm.sender_id,lm.file_id,
    CASE WHEN f.id IS NULL THEN NULL ELSE json_build_object('id',f.id,'name',f.name,'size',f.size,'mime',f.mime,'as_file',f.as_file,'width',f.width,'height',f.height,'thumb',f.thumb,'waveform',f.waveform) END AS file
@@ -976,7 +1002,7 @@ app.get('/api/chats/:id/members', auth, async (req, res) => {
   await member(String(req.params.id), user(req).id);
   // Recheck access in the data snapshot in case membership changed after the 404 check.
   const { rows } = await pool.query(
-    `SELECT u.id,u.name,u.username,u.color,u.avatar,u.last_seen_at,u.show_last_seen FROM members m JOIN users u ON u.id=m.user_id
+    `SELECT u.id,u.name,u.username,u.color,u.avatar,u.bio,u.last_seen_at,u.show_last_seen FROM members m JOIN users u ON u.id=m.user_id
      WHERE m.chat_id=$1 AND EXISTS(SELECT 1 FROM members viewer WHERE viewer.chat_id=m.chat_id AND viewer.user_id=$2) ORDER BY u.name`,
     [req.params.id, user(req).id],
   );

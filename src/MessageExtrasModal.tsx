@@ -300,22 +300,28 @@ export function PollCreatorModal({
             </button>
           )}
         </div>
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={multiple}
-            onChange={(e) => setMultiple(e.target.checked)}
-          />
-          <span>Несколько вариантов ответа</span>
-        </label>
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={anonymous}
-            onChange={(e) => setAnonymous(e.target.checked)}
-          />
-          <span>Анонимное голосование</span>
-        </label>
+        {(
+          [
+            ['Несколько вариантов ответа', multiple, setMultiple],
+            ['Анонимное голосование', anonymous, setAnonymous],
+          ] as const
+        ).map(([label, value, set]) => (
+          <div className="settings-row" key={label}>
+            <div>
+              <h3>{label}</h3>
+            </div>
+            <button
+              type="button"
+              className={`switch ${value ? 'on' : ''}`}
+              role="switch"
+              aria-checked={value}
+              aria-label={label}
+              onClick={() => set(!value)}
+            >
+              <span />
+            </button>
+          </div>
+        ))}
         <div className="modal-actions">
           <CloseButton>Отмена</CloseButton>
           <button

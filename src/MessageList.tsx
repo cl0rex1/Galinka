@@ -369,12 +369,15 @@ const MessageRow = memo(function MessageRow({
                       >
                         <span className="poll-option-bar" style={{ width: `${pct}%` }} />
                         <span className="poll-option-row">
-                          <span className="poll-option-text">
-                            {opt.voted && <Check size={14} />}
-                            {opt.text}
+                          <span
+                            className={`poll-mark ${m.poll!.multiple ? 'square' : ''} ${opt.voted ? 'on' : ''}`}
+                            aria-hidden="true"
+                          >
+                            <Check size={12} strokeWidth={3} />
                           </span>
+                          <span className="poll-option-text">{opt.text}</span>
                           <span className="poll-option-pct">
-                            {m.poll!.total_votes > 0 ? `${pct}% (${opt.votes})` : ''}
+                            {m.poll!.total_votes > 0 && opt.votes > 0 ? `${pct}%` : ''}
                           </span>
                         </span>
                         {!m.poll!.anonymous && opt.voters && opt.voters.length > 0 && (

@@ -4,6 +4,7 @@ import { Check, Copy, Download, Share2 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { encodeTheme, type CustomTheme } from './theme';
 import { Modal } from './ui';
+import { renderShareCard, type CardFace } from './shareCard';
 
 // The app inside Android has no public address of its own; links point to the website.
 const origin = () =>
@@ -78,6 +79,7 @@ export function ShareSheet({
   subtitle,
   link,
   accent,
+  face,
   heading = 'Поделиться',
   onClose,
 }: {
@@ -85,6 +87,8 @@ export function ShareSheet({
   subtitle: string;
   link: string;
   accent: string;
+  /** Whose card it is: their photo or initials sit on the card's top edge. */
+  face?: CardFace;
   heading?: string;
   onClose: () => void;
 }) {
@@ -97,21 +101,23 @@ export function ShareSheet({
   useEffect(() => {
     let current = true;
     async function prepare() {
-      const svg = card.current?.querySelector('svg');
-      if (!svg) return;
-      const image = new Image();
-      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
-      await image.decode();
-      const canvas = document.createElement('canvas');
-      canvas.width = canvas.height = 1024;
-      const context = canvas.getContext('2d');
-      if (!context) throw Error('QR canvas unavailable');
-      context.drawImage(image, 0, 0, 1024, 1024);
-      const data = canvas.toDataURL('image/png');
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
-      if (!blob) throw Error('QR encoding failed');
+      const qr = card.current?.querySelector('svg');
+      if (!qr) return;
+      // A photo from another server cannot go into a picture we export (the canvas would be
+      // tainted); the card then shows the initials instead.
+      let picture;
+      try {
+        picture = await renderShareCard({ qr, title, subtitle, accent, face });
+      } catch {
+        picture = await renderShareCard({ qr, title, subtitle, accent, face, withPhoto: false });
+      }
       const name = `galinka-${title.replace(/[^\p{L}\p{N}]+/gu, '-').slice(0, 80)}.png`;
-      if (current) setQr({ link, file: new File([blob], name, { type: 'image/png' }), data });
+      if (current)
+        setQr({
+          link,
+          file: new File([picture.blob], name, { type: 'image/png' }),
+          data: picture.data,
+        });
     }
     void prepare().catch(() => {
       if (current) setError('Не удалось подготовить изображение QR.');
@@ -119,7 +125,7 @@ export function ShareSheet({
     return () => {
       current = false;
     };
-  }, [accent, link, title]);
+  }, [accent, link, title, subtitle, face?.photo, face?.tone]);
   async function copy() {
     try {
       await navigator.clipboard.writeText(link);
@@ -166,10 +172,16 @@ export function ShareSheet({
   }
   return (
     <Modal title={heading} onClose={onClose} error={error}>
-      <div className="share-card" ref={card} style={{ '--share-accent': accent } as never}>
+      {/* The code is drawn here once, then painted into the card picture shown below. */}
+      <div className="share-source" ref={card} aria-hidden="true">
         <BrandQR value={link} accent={accent} />
-        <strong>{title}</strong>
-        <span>{subtitle}</span>
+      </div>
+      <div className="share-card">
+        {ready ? (
+          <img src={ready.data} alt="QR-код" title={`${title}, ${subtitle}`} />
+        ) : (
+          <span className="share-card-loading" role="status" aria-label="Готовим карточку" />
+        )}
       </div>
       <div className="share-link">
         <input aria-label="Ссылка" readOnly value={link} onFocus={(e) => e.target.select()} />
