@@ -16,7 +16,7 @@ test(
     const directory = await mkdtemp(path.join(tmpdir(), 'galinka-profile-test-'));
     const db = new Pool({ connectionString: database });
     const invite = 'test-profile-invite-code';
-    const port = 3017;
+    const port = 3048;
     const base = `http://localhost:${port}`;
     const accounts: string[] = [];
     let logs = '';

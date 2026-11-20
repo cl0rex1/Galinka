@@ -28,7 +28,7 @@ const fs = require('node:fs/promises');
       .getByRole('button', { name: 'Настройки', exact: true })
       .filter({ visible: true })
       .click();
-    await page.getByRole('tab', { name: 'Оформление', exact: true }).click();
+    await page.getByRole('button', { name: 'Оформление', exact: true }).click();
     await page.getByRole('button', { name: 'Тёмная', exact: true }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     const status = await page.evaluate(() => window.galinkaDesktop.status());
