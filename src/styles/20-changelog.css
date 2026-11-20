@@ -1,14 +1,21 @@
 /* ========== Changelog ========== */
 .changelog-page {
   min-height: 100dvh;
+  background: var(--color-paper);
 }
 .changelog-nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: var(--space-lg);
-  width: min(720px, 100%);
+  width: min(740px, 100%);
   margin: 0 auto;
-  padding: max(16px, env(safe-area-inset-top)) 20px 16px;
+  padding: max(14px, env(safe-area-inset-top)) 20px 14px;
+  background: color-mix(in srgb, var(--color-paper) 82%, transparent);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
 }
 .changelog-nav .brand {
   margin-right: auto;
@@ -16,13 +23,14 @@
 .changelog-page main {
   display: grid;
   gap: var(--space-xl);
-  width: min(720px, 100%);
+  width: min(740px, 100%);
   margin: 0 auto;
-  padding: var(--space-lg) 20px var(--space-3xl);
+  padding: var(--space-xl) 20px var(--space-3xl);
 }
 .changelog-page h1 {
-  font-size: var(--text-2xl);
+  font-size: clamp(28px, 4vw, 38px);
   font-weight: 700;
+  letter-spacing: -0.03em;
 }
 .changelog-page article {
   display: grid;
@@ -35,6 +43,8 @@
   align-items: baseline;
   gap: var(--space-md);
   font-size: var(--text-xl);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
 }
 .changelog-page h2 time {
   font-size: var(--text-sm);
@@ -42,24 +52,29 @@
   color: var(--color-muted);
 }
 .changelog-page h3 {
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--color-muted);
 }
 .changelog-page ul {
   display: grid;
-  gap: 6px;
-  margin: 6px 0 0;
+  gap: 8px;
+  margin: 8px 0 0;
   padding-left: 20px;
+  line-height: 1.55;
 }
 .changelog-page li::marker {
   color: var(--color-accent);
 }
 .changelog-page code {
-  padding: 1px 5px;
+  padding: 2px 6px;
+  border: 1px solid var(--color-rule);
   border-radius: var(--radius-xs);
-  background: var(--color-paper-2);
+  background: var(--color-surface);
   font-family: var(--font-mono);
-  font-size: 0.9em;
+  font-size: 0.88em;
 }
 .settings-section > p.muted {
   font-size: var(--text-sm);
