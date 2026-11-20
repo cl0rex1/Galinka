@@ -61,8 +61,9 @@ test.describe('chat row menu', () => {
     await row.click({ button: 'right' });
     const menu = page.getByRole('menu', { name: 'Чат «Аня»' });
     await expect(menu).toBeVisible();
-    // The menu stays on screen and takes the keyboard.
+    // Auto-scrolling the open conversation must not dismiss the menu in the chat list.
     await expect(menu.getByRole('menuitem').first()).toBeFocused();
+    await page.locator('.messages').dispatchEvent('scroll');
     await menu.getByRole('menuitem', { name: 'Отметить прочитанным' }).click();
     await expect(menu).toHaveCount(0);
     await expect(row.locator('.unread')).toHaveCount(0);

@@ -93,7 +93,11 @@ export function ChatList({
   onNew: () => void;
   onAction: (chat: Chat, action: ChatAction) => void;
 }) {
-  const [menu, setMenu] = useState<{ chat: Chat; point: { x: number; y: number } } | null>(null);
+  const [menu, setMenu] = useState<{
+    chat: Chat;
+    point: { x: number; y: number };
+    anchor: HTMLButtonElement;
+  } | null>(null);
   // A long press on a phone opens the row's menu; the tap that ends it must not open the chat.
   const press = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> } | null>(
     null,
@@ -207,6 +211,7 @@ export function ChatList({
               held.current = false;
               if (event.pointerType === 'mouse' || !event.isPrimary) return;
               const point = { x: event.clientX, y: event.clientY };
+              const anchor = event.currentTarget;
               release();
               press.current = {
                 ...point,
@@ -214,7 +219,7 @@ export function ChatList({
                   press.current = null;
                   held.current = true;
                   haptic('press');
-                  setMenu({ chat: c, point });
+                  setMenu({ chat: c, point, anchor });
                 }, 420),
               };
             }}
@@ -229,7 +234,11 @@ export function ChatList({
               event.preventDefault();
               release();
               if (held.current) return;
-              setMenu({ chat: c, point: { x: event.clientX, y: event.clientY } });
+              setMenu({
+                chat: c,
+                point: { x: event.clientX, y: event.clientY },
+                anchor: event.currentTarget,
+              });
             }}
           >
             <Avatar chat={c} person={c.peer} />
@@ -290,6 +299,7 @@ export function ChatList({
       {menu && (
         <ContextMenu
           point={menu.point}
+          anchor={menu.anchor}
           label={`Чат «${menu.chat.title}»`}
           items={chatActions(menu.chat, (action) => onAction(menu.chat, action))}
           onClose={() => setMenu(null)}

@@ -12,16 +12,18 @@ export type MenuItem = {
 
 /**
  * A menu at a point: right click, or a long press on a phone. It grows out of the point, stays
- * inside the screen, takes keyboard focus and closes on Esc, a press outside, scrolling or a
- * choice. Rendered into <body>, so no transformed ancestor can clip or shift it.
+ * inside the screen, takes keyboard focus and closes on Esc, a press outside, scrolling the
+ * anchor out of place or a choice. Rendered into <body> to avoid clipping.
  */
 export function ContextMenu({
   point,
+  anchor,
   items,
   label,
   onClose,
 }: {
   point: { x: number; y: number };
+  anchor: HTMLElement;
   items: MenuItem[];
   label: string;
   onClose: () => void;
@@ -63,19 +65,22 @@ export function ContextMenu({
       }
     };
     const away = () => latestClose.current();
+    const scroll = (event: Event) => {
+      if (event.target instanceof Node && event.target.contains(anchor)) away();
+    };
     document.addEventListener('pointerdown', outside, true);
     document.addEventListener('keydown', key, true);
     window.addEventListener('resize', away);
     window.addEventListener('blur', away);
-    document.addEventListener('scroll', away, true);
+    document.addEventListener('scroll', scroll, true);
     return () => {
       document.removeEventListener('pointerdown', outside, true);
       document.removeEventListener('keydown', key, true);
       window.removeEventListener('resize', away);
       window.removeEventListener('blur', away);
-      document.removeEventListener('scroll', away, true);
+      document.removeEventListener('scroll', scroll, true);
     };
-  }, []);
+  }, [anchor]);
 
   return createPortal(
     <div
